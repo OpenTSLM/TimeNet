@@ -35,6 +35,18 @@ jobs:
           if [ "$BASE" != "$DEFAULT_BRANCH" ] || [ "$children" -gt 0 ]; then stacked=true; fi
         fi
         echo "stacked=$stacked" >> "$GITHUB_OUTPUT"
+    # The instructions come from the default branch, so a PR cannot rewrite its own reviewer.
+    - name: Checkout review instructions
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        sparse-checkout: .github/pr-review-instructions.md
+        path: trusted
+    - name: Load review instructions
+      run: |
+        file=trusted/.github/pr-review-instructions.md
+        if [ ! -f "$file" ]; then echo "::warning::$file is missing on the default branch"; exit 0; fi
+        { echo "REVIEW_INSTRUCTIONS<<EOF_INSTRUCTIONS"; cat "$file"; echo "EOF_INSTRUCTIONS"; } >> "$GITHUB_ENV"
     - name: Run PR-Agent
       uses: The-PR-Agent/pr-agent@v0.50.0
       env:
@@ -69,8 +81,6 @@ jobs:
         PR_CODE_SUGGESTIONS.PERSISTENT_COMMENT: "false"
         # No "no suggestions" comment.
         PR_CODE_SUGGESTIONS.PUBLISH_OUTPUT_NO_SUGGESTIONS: "false"
-        # Pull TimeNet's AGENTS.md rules into the review.
-        PR_REVIEWER.EXTRA_INSTRUCTIONS: >-
-          Follow AGENTS.md. Check TimeF invariants, explicit TimeNet exceptions on data issues
-          (no silent repair of data), data types, missing values, lazy loading and bounded memory.
-          For stacked PRs, report defects only when they are material.
+        # Review prompt from .github/pr-review-instructions.md.
+        PR_REVIEWER.EXTRA_INSTRUCTIONS: ${{ env.REVIEW_INSTRUCTIONS }}
+        PR_CODE_SUGGESTIONS.EXTRA_INSTRUCTIONS: ${{ env.REVIEW_INSTRUCTIONS }}
