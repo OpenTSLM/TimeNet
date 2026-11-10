@@ -1,0 +1,57 @@
+name: PR-Agent stack review
+
+# Reviews a PR together with every PR below and above it in its stack, as one combined diff.
+# The per-PR workflow (pr-agent.yaml) still posts the inline suggestions.
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request to review together with its stack
+        required: true
+
+permissions:
+  contents: read
+
+# One review per PR at a time. A newer run replaces an older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  stack_review:
+    # Same-repo branches only: fork PRs get no secrets. Drafts wait for ready_for_review.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.sender.type != 'Bot' &&
+       github.event.pull_request.draft != true &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+    # The script and its config come from the default branch, never from the PR under review.
+    - name: Checkout trusted script
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        path: trusted
+    - name: Checkout full history
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        path: repo
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        enable-cache: false
+    - name: Review the stack
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      run: uv run --no-project trusted/.github/scripts/stack_review.py repo "$PR_NUMBER"
