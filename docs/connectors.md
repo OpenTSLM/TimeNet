@@ -409,13 +409,14 @@ class SourceRow(DataRow):
     count: int = Field(alias="Count")
 
 for ref in raw_refs:
-    for row in ParquetDataReader(ref.path, SourceRow, strict_parsing=True).iter_rows():
+    for row in ParquetDataReader(ref.path, SourceRow).iter_rows():
         # Convert row.question and row.count into TimeNet objects.
         ...
 ```
 
-`strict_parsing=True` rejects coercions for decoded JSON and Parquet values; when omitted, the row schema
-controls strictness. CSV cells are strings and are parsed as such. The schema forbids unexpected
+The row schema controls strictness for decoded JSON and Parquet values; for example, set
+`model_config = ConfigDict(strict=True)` to reject coercion. CSV cells are strings and are parsed as
+such. The schema forbids unexpected
 fields by default; configure it explicitly when the source contains fields the connector does not
 use. JSON object keys and Parquet column names must be distinct.
 
