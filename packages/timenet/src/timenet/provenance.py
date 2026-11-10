@@ -182,6 +182,10 @@ class Snapshot(BaseModel, ABC):
     def to_source_map(self) -> GitSourceMap:
         """Return the commits in the form that a manifest records."""
 
+    @abstractmethod
+    def require_no_local_changes(self) -> None:
+        """Raise ``TimeNetBuildError`` if the code has local changes."""
+
 
 class PackageSnapshot(Snapshot):
     """The commit of one package that pip installed, such as ``timenet`` or ``timenet-connectors``.
@@ -215,6 +219,13 @@ class PackageSnapshot(Snapshot):
     def to_source_map(self) -> GitSourceMap:
         """Return this package's commit in the form that a manifest records."""
         return {self.package_name: self.source}
+
+    def require_no_local_changes(self) -> None:
+        """Raise ``TimeNetBuildError`` if this package has local changes."""
+        if self.source.contains_local_changes:
+            raise TimeNetBuildError(
+                f"{self.package_name} contains changes that are not in commit {self.source.sha[:12]}"
+            )
 
 
 class TimeNetSnapshot(Snapshot):
@@ -263,6 +274,11 @@ class TimeNetSnapshot(Snapshot):
         for package in self._installed():
             sources.update(package.to_source_map())
         return sources
+
+    def require_no_local_changes(self) -> None:
+        """Raise ``TimeNetBuildError`` if a TimeNet package has local changes."""
+        for package in self._installed():
+            package.require_no_local_changes()
 
     def _installed(self) -> list[PackageSnapshot]:
         """Return the snapshot of each installed TimeNet package."""

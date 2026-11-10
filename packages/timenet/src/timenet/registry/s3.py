@@ -171,6 +171,7 @@ class S3Registry(LazyReadRegistry):
             TimeNetRegistryError: If this registry is read-only.
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
+            TimeNetBuildError: If the manifest records TimeNet code with local changes.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
         self.check_writable("put_release()")
         manifest = self._read_release(from_directory)

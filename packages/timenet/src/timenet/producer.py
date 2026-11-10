@@ -105,6 +105,7 @@ def publish(
         TimeNetRegistryError: If ``dest`` or ``source`` fails to open as a registry, or ``dest`` is read-only.
         TimeNetDatasetNotFoundError: If ``source`` lacks the release.
         TimeNetAccessError: If a registry withholds files or requires open access that a copied release lacks.
+        TimeNetBuildError: If ``dest`` is not local and a copied release records TimeNet code with local changes.
         TimeNetVersionConflictError: If ``dest`` holds different files for the release or a required payload source.
         TimeNetMissingParentError: If a required payload source is missing from ``source`` and incomplete in ``dest``.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry and copy_release
@@ -142,6 +143,7 @@ def _publish_from(
     Raises:
         TimeNetDatasetNotFoundError: If ``origin`` lacks the release.
         TimeNetAccessError: If a registry withholds files or requires open access that a copied release lacks.
+        TimeNetBuildError: If ``dest`` is not local and a copied release records TimeNet code with local changes.
         TimeNetVersionConflictError: If ``dest`` holds different files for the release or a required payload source.
         TimeNetMissingParentError: If a required payload source is missing from ``origin`` and incomplete in ``dest``.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by copy_release

@@ -50,6 +50,7 @@ def copy_release(  # ruff: ignore[too-many-arguments]
         TimeFValidationError: If ``force`` is set and ``dest`` is not local.
         TimeNetVersionConflictError: If ``dest`` holds the same release with other files or another card.
         TimeNetAccessError: If a release lacks open access and either registry requires it.
+        TimeNetBuildError: If ``dest`` is not local and a copied release records TimeNet code with local changes.
         TimeNetDatasetNotFoundError: If ``source`` lacks the release.
         TimeNetMissingParentError: If neither registry holds a complete payload source.
         TimeFFormatError: If a manifest names the wrong release or a pin fails.
@@ -67,6 +68,8 @@ def copy_release(  # ruff: ignore[too-many-arguments]
         if _needs_copy(reference, ref, manifest, source, dest) or (force and ref == reference)
     ]
     _check_access(manifests, set(pending), source, dest)
+    for ref in pending:
+        dest.require_committed_code(manifests[ref])
     if not pending:
         return ()
     # Only a copy from a non-local source to a non-local dest downloads into this directory, each

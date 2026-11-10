@@ -70,6 +70,15 @@ class LocalRegistry(WritableRegistry):
         return self._root
 
     @property
+    def requires_committed_code(self) -> bool:
+        """Whether local releases must record committed code.
+
+        Returns:
+            ``False``, since a local registry accepts a build with local changes.
+        """
+        return False
+
+    @property
     def requires_open_access(self) -> bool:
         """Whether local releases must declare open access.
 
