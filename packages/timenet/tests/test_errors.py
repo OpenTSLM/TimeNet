@@ -15,6 +15,7 @@ from timenet.errors import (
     TimeNetFileError,
     TimeNetMissingParentError,
     TimeNetRegistryError,
+    TimeNetVersionConflictError,
 )
 from timenet.types import Access
 from timenet.types.access import AccessRequirement
@@ -66,12 +67,12 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
     ("error", "facts", "message"),
     [
         (
-            TimeNetMissingParentError(_A, _B, True, "here"),
+            TimeNetMissingParentError(_A, _B, "here", payload_source=True),
             {"missing": _A, "needed_by": _B, "payload_source": True},
             "payload source org/a@1.0.0 of org/b@2.0.0 is not in here.",
         ),
         (
-            TimeNetMissingParentError(_A, _B, False, "here"),
+            TimeNetMissingParentError(_A, _B, "here", payload_source=False),
             {"payload_source": False},
             "parent release org/a@1.0.0 of org/b@2.0.0 is not in here.",
         ),
@@ -112,6 +113,24 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
             TimeNetAccessError(_A, Access.CREDENTIALED, ()),
             {"requirements": ()},
             "org/a@1.0.0 is credentialed.",
+        ),
+        (
+            TimeNetVersionConflictError(_A, "registry here", "registry there"),
+            {
+                "release": _A,
+                "registry": "registry here",
+                "source": "registry there",
+                "needed_by": None,
+                "difference": "files",
+            },
+            "registry here already holds org/a@1.0.0 with other files than registry there. "
+            "A published version cannot change, so a changed release needs a new version.",
+        ),
+        (
+            TimeNetVersionConflictError(_A, "registry here", "registry there", _B, "card"),
+            {"release": _A, "needed_by": _B, "difference": "card"},
+            "registry here already holds org/a@1.0.0, a payload source of org/b@2.0.0, with another card than "
+            "registry there. A published version cannot change, so a changed release needs a new version.",
         ),
     ],
 )

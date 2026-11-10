@@ -1,5 +1,7 @@
 """Replace a directory with a complete staging directory."""
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import uuid
@@ -37,3 +39,28 @@ def publish_directory(staging: Path, final: Path) -> None:
     if old is not None:
         # The new directory is published, so failing to delete the old one must not fail the publish.
         shutil.rmtree(old, ignore_errors=True)
+
+
+@contextmanager
+def staged_directory(final: Path) -> Generator[Path]:
+    """Yield an empty staging directory beside ``final``, and publish it as ``final`` if the block succeeds.
+
+    The old ``final`` stays in place until the new directory is complete. The staging directory is
+    removed in every case.
+
+    Args:
+        final: The destination directory.
+
+    Yields:
+        The staging directory.
+    """
+    final.parent.mkdir(parents=True, exist_ok=True)
+    # A hard kill can leave a staging directory behind. Do not sweep other <name>.tmp-* directories:
+    # a concurrent write of the same release may still use one.
+    staging = final.with_name(f"{final.name}.tmp-{uuid.uuid4().hex}")
+    staging.mkdir()
+    try:
+        yield staging
+        publish_directory(staging, final)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
