@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the commands are fixed argument vectors
 import sys
 
@@ -99,5 +100,15 @@ def _holds(path: Path, text: str) -> bool:
         return False
 
 
+def _exit_on_signal(signum: int, _frame: object) -> None:
+    """Raise ``SystemExit``, so that the ``finally`` in ``main`` removes the commit records."""
+    raise SystemExit(128 + signum)
+
+
 if __name__ == "__main__":
+    # Ctrl-C already raises KeyboardInterrupt. Without a handler, a kill or a closed terminal ends the
+    # process before the finally runs, and a later plain uv build would pack the stale records.
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _exit_on_signal)
     sys.exit(main(sys.argv[1:]))
