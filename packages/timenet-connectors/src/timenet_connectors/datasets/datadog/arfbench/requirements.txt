@@ -1,4 +1,2 @@
-# huggingface_hub downloads the release from the HuggingFace Hub.
-huggingface_hub>=0.24
-# pyarrow reads the series files.
-pyarrow>=21
+# huggingface_hub downloads the release from the HuggingFace Hub; 1.1 adds tqdm_class.
+huggingface_hub>=1.1

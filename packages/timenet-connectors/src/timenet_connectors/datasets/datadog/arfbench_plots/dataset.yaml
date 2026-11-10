@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card.schema.json
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 #
 # ARFBench asks 750 multiple-choice questions about 142 metrics from 63 Datadog incidents. A metric
 # is one monitored quantity, such as the request count of a service. Datadog splits a metric by
