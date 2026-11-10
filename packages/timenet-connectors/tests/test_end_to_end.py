@@ -6,8 +6,7 @@ from typer.testing import CliRunner
 
 from timenet.client import TimeNet
 from timenet.config import settings
-from timenet.engine import run_pipeline
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetRegistryError
 from timenet.provenance import build_env
 from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.sources import InstalledConnectors
@@ -78,31 +77,19 @@ def test_load_rejects_version_mismatch():
 # ---- where a bare `build` writes -----------------------------------------------------------------
 
 
-@pytest.fixture
-def clean_env(monkeypatch, tmp_path):
-    """Isolate the TIMENET_* vars so a bare build's output root is fully determined by the test."""
-    for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-
-
-def test_build_defaults_to_home_registry(clean_env, tmp_path):
-    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
-    assert (tmp_path / "home" / "registry" / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
-
-
-def test_build_honors_timenet_registry(clean_env, monkeypatch, tmp_path):
+def test_build_honors_timenet_local_registry(monkeypatch, tmp_path):
     registry = tmp_path / "elsewhere"
-    monkeypatch.setenv("TIMENET_REGISTRY", str(registry))
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(registry))
 
     assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
-    # The SDK resolves $TIMENET_REGISTRY the same way, so it reads back what the build just wrote.
-    assert TimeNet().list()[0].dataset_id == "timenet/hello-world"
+    # The store of the SDK is the same directory, so it reads back what the build just wrote. An exact
+    # version resolves at the store, without asking the remote registry.
+    assert TimeNet().load("timenet/hello-world@1.0.0").metadata.dataset_id == "timenet/hello-world"
 
 
-def test_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp_path):
-    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "elsewhere"))
+def test_build_out_overrides_timenet_local_registry(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "elsewhere"))
     out = tmp_path / "out"
 
     result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(out), "--no-isolation"])
@@ -111,7 +98,7 @@ def test_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp_path):
     assert not (tmp_path / "elsewhere").exists()
 
 
-def test_resolve_target_routes_remote_url_to_registry(clean_env, tmp_path):
+def test_resolve_target_routes_remote_url_to_registry(tmp_path):
     # A remote --out publishes through a writable registry (constructed offline, no network).
     assert isinstance(_resolve_target("timenet://"), RemoteRegistry)
     assert isinstance(_resolve_target("https://registry.timenet.ai"), RemoteRegistry)
@@ -119,29 +106,14 @@ def test_resolve_target_routes_remote_url_to_registry(clean_env, tmp_path):
     assert _resolve_target(str(tmp_path / "reg")) == tmp_path / "reg"
 
 
-def test_resolve_target_publishes_to_remote_timenet_registry(clean_env, monkeypatch):
-    # A bare build with a remote $TIMENET_REGISTRY now publishes to it instead of failing.
-    monkeypatch.setenv("TIMENET_REGISTRY", "timenet://")
-    assert isinstance(_resolve_target(None), RemoteRegistry)
-
-
-def test_run_pipeline_cleans_cache_when_requested(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    version_dir = run_pipeline(HelloWorldConnector(), tmp_path / "registry", keep_cache=False)
-    assert (version_dir / "manifest.json").exists()  # build succeeded
-    assert not (settings().cache_dir / "timenet" / "hello-world").exists()  # raw cache removed
-
-
-def test_run_pipeline_keeps_cache_when_asked(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    run_pipeline(HelloWorldConnector(), tmp_path / "registry", keep_cache=True)
-    assert (settings().cache_dir / "timenet" / "hello-world").exists()
+def test_resolve_target_rejects_an_empty_out_instead_of_the_current_directory():
+    with pytest.raises(TimeNetRegistryError, match=r"^--out is blank"):
+        _resolve_target("")
 
 
 def test_sdk_build_cleans_cache_but_keep_cache_retains(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_ISOLATION", "off")  # the in-process path, the one that kept the cache
-    cache = settings().cache_dir / "timenet" / "hello-world"
+    cache = settings().downloads_dir / "timenet" / "hello-world"
 
     build("timenet/hello-world", out=tmp_path / "r1")
     assert not cache.exists()
@@ -150,9 +122,8 @@ def test_sdk_build_cleans_cache_but_keep_cache_retains(tmp_path, monkeypatch):
     assert cache.exists()
 
 
-def test_build_cleans_cache_but_keep_flag_retains(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    cache = settings().cache_dir / "timenet" / "hello-world"
+def test_build_cleans_cache_but_keep_flag_retains(tmp_path):
+    cache = settings().downloads_dir / "timenet" / "hello-world"
 
     built = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r1"), "--no-isolation"])
     assert built.exit_code == 0
@@ -166,8 +137,7 @@ def test_build_cleans_cache_but_keep_flag_retains(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow
-def test_load_builds_a_missing_dataset_in_an_isolated_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+def test_load_builds_a_missing_dataset_in_an_isolated_environment(tmp_path):
     client = TimeNet(sources=[LocalRegistry(tmp_path / "registry"), InstalledConnectors()])
 
     dataset = client.load("timenet/hello-world")
@@ -177,8 +147,7 @@ def test_load_builds_a_missing_dataset_in_an_isolated_environment(tmp_path, monk
 
 
 @pytest.mark.slow
-def test_an_isolated_build_records_its_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+def test_an_isolated_build_records_its_environment(tmp_path):
     TimeNet(sources=[LocalRegistry(tmp_path / "registry"), InstalledConnectors()]).load("timenet/hello-world")
 
     manifest = json.loads((tmp_path / "registry/timenet/hello-world/1.0.0/manifest.json").read_text())

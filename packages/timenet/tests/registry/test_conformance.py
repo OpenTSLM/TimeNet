@@ -101,7 +101,7 @@ def _s3_registry(request, tmp_path, monkeypatch) -> S3Registry:
     # server instances, so a fixed name would leak these datasets into test_s3.py's own tn-test bucket.
     bucket = f"tn-conformance-{uuid.uuid4().hex[:12]}"
     boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket=bucket)
-    return S3Registry(f"s3://{bucket}/registry", cache_dir=tmp_path / "cache")
+    return S3Registry(f"s3://{bucket}/registry")
 
 
 @pytest.fixture(params=["local", "s3", "remote"])
@@ -119,7 +119,7 @@ def backend(request, tmp_path, monkeypatch) -> Backend:
         service_root = tmp_path / "service"
         service_root.mkdir()
         transport, _ = build_service_fake(service_root, token="tok_rw")
-        registry = RemoteRegistry("http://svc.local", token="tok_rw", cache_dir=tmp_path / "cache", transport=transport)
+        registry = RemoteRegistry("http://svc.local", token="tok_rw", transport=transport)
         supports_listing = True
     else:
         registry = _s3_registry(request, tmp_path, monkeypatch)

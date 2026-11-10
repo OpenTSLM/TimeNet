@@ -11,7 +11,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest, PayloadSource
 from timenet.registry._paths import release_dir
-from timenet.registry.dependencies import open_cached_or_remote_release
+from timenet.registry.dependencies import validate_manifest_reference
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types.references import DatasetRef
@@ -19,7 +19,7 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LazyReadRegistry(WritableRegistry, ABC):
-    """A registry that reads remote files on demand and reuses complete cached releases.
+    """A registry that reads remote files on demand.
 
     Backends differ only in how one remote release is bound to a filesystem, so
     :meth:`_open_remote_version` is the one method they implement for reading.
@@ -84,18 +84,22 @@ class LazyReadRegistry(WritableRegistry, ABC):
             shutil.rmtree(staging, ignore_errors=True)
 
     def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
-        """Open a cached or remote release without attaching its payload sources.
+        """Open a remote release without attaching its payload sources.
 
         Args:
             reference: The dataset ID and exact version to open.
             manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle to a complete copy in :attr:`local_root`, or to remote files read on demand.
-        """
-        return open_cached_or_remote_release(
-            self.local_root, reference, lambda ref: self._open_remote_version(ref, manifest=manifest)
-        )
+            A handle to the remote files of the release.
+
+        Raises:
+            TimeFFormatError: If the manifest declares a different release.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
+        if manifest is None:
+            manifest = self.get_manifest(reference.dataset_id, str(reference.version))
+        validate_manifest_reference(manifest, reference)
+        return self._open_remote_version(reference, manifest=manifest)
 
     @abstractmethod
     def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:

@@ -1,5 +1,6 @@
 import shutil
 
+from _fake_registry import build_service_fake
 import pytest
 
 from timenet import builders
@@ -10,7 +11,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetRegistryError, TimeNetVersionUnavailableError
 from timenet.progress import BytesMoved, StepFinished, StepStarted
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry, open_local_version
+from timenet.registry import LocalRegistry, RemoteRegistry, open_local_version
 from timenet.registry._paths import release_dir
 from timenet.sources import InstalledConnectors
 from timenet.testing import install_backends, make_dataset
@@ -209,6 +210,22 @@ def test_a_forced_build_forces_only_the_requested_release(store, fake_parent, fa
     assert plan.steps == (_build(PARENT_REF), _build(CHILD_REF, depends_on=(PARENT_REF,), force=True))
     assert fake_parent.calls == [(PARENT_REF, False, {})]
     assert fake_child.calls == [(CHILD_REF, True, {})]
+
+
+def test_a_build_takes_a_parent_that_the_store_holds_and_asks_a_later_registry_nothing(
+    tmp_path, store, fake_parent, fake_child
+):
+    store.put_dataset(make_dataset())
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.put_dataset(make_dataset())
+    transport, requests = build_service_fake(origin.root)
+    remote = RemoteRegistry("http://api.local", transport=transport)
+
+    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[store, remote])
+    run_plan(plan, store)
+
+    assert plan.steps == (_build(CHILD_REF),)
+    assert requests == []
 
 
 def test_a_build_skips_a_release_the_store_holds(store, fake):

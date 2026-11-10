@@ -66,11 +66,6 @@ class BaseRegistry(ABC):
             )
 
     @property
-    @abstractmethod
-    def local_root(self) -> Path:
-        """The local registry or cache directory that holds prepared releases."""
-
-    @property
     def requires_open_access(self) -> bool:
         """Whether stored or served releases must declare open access."""
         return True

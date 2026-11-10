@@ -2,13 +2,20 @@ from pathlib import Path
 
 import pytest
 
-from timenet._fs import publish_directory, same_directory
+from timenet._fs import lies_in, publish_directory, same_directory
 
 
 def test_a_symlink_and_its_target_are_the_same_directory(tmp_path):
     (tmp_path / "store").mkdir()
     (tmp_path / "link").symlink_to(tmp_path / "store", target_is_directory=True)
     assert same_directory(tmp_path / "link", tmp_path / "store")
+
+
+def test_a_path_lies_in_the_folder_that_a_symlink_names(tmp_path):
+    (tmp_path / "store" / "acme").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(tmp_path / "store" / "acme", target_is_directory=True)
+    assert lies_in(tmp_path / "link" / "downloads", tmp_path / "store")
+    assert not lies_in(tmp_path / "store", tmp_path / "link")
 
 
 def test_two_missing_paths_that_differ_only_in_case_are_different_directories(tmp_path):

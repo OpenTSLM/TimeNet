@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.client import TimeNet
+from timenet.config import settings
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError, TimeNetFileError
@@ -898,8 +899,6 @@ def test_other_duckdb_errors_propagate_unchanged(tmp_path, monkeypatch):
 
 
 def test_a_reader_verifies_a_remote_catalog_once_and_again_after_its_copy_is_gone(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("TIMENET_CACHE", raising=False)
     version_dir = _write(tmp_path)
     local = open_local_version(version_dir)
     # A filesystem other than the local one makes the reader fetch the catalog into its cache.
@@ -923,6 +922,6 @@ def test_a_reader_verifies_a_remote_catalog_once_and_again_after_its_copy_is_gon
         assert len(checks) == 1
         # The cached copy disappears while the reader is closed; the reopen fetches and checks it again.
         reader.close()
-        shutil.rmtree(tmp_path / "home" / "cache" / "control")
+        shutil.rmtree(settings().control_cache_dir)
         assert reader.record_ids() == expected
     assert len(checks) == 2

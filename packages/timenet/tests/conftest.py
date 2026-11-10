@@ -2,6 +2,7 @@
 
 Registers Hypothesis profiles so the example count can be tuned per environment via the
 ``HYPOTHESIS_PROFILE`` environment variable (``dev`` for a fast edit loop, ``ci`` for the full run).
+Also gives the tests a fake home folder, and a way to skip on a volume that tells case apart.
 """
 
 import os
@@ -27,6 +28,17 @@ settings.register_profile(
     suppress_health_check=[HealthCheck.too_slow],
 )
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
+
+
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    """Point ``HOME`` and ``Path.home()`` at an empty folder, so that no test looks at the real home."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    assert Path("~").expanduser() == Path.home() == home
+    return home
 
 
 @pytest.fixture(autouse=True)

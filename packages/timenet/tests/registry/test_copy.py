@@ -144,9 +144,7 @@ def _remote(tmp_path: Path, name: str, *, token: str | None = None) -> tuple[Rem
     root = tmp_path / name
     root.mkdir(exist_ok=True)
     transport, _ = build_service_fake(root, token=token)
-    registry = RemoteRegistry(
-        f"http://{name}.local", token=token, cache_dir=tmp_path / f"{name}-cache", transport=transport
-    )
+    registry = RemoteRegistry(f"http://{name}.local", token=token, transport=transport)
     return registry, root
 
 

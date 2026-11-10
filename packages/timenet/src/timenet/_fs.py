@@ -1,7 +1,8 @@
-"""Compare directory paths and replace directories from staging."""
+"""Compare directory paths, delete directory trees, and replace directories from staging."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
+import os
 from pathlib import Path
 import shutil
 import uuid
@@ -10,8 +11,8 @@ import uuid
 def same_directory(a: Path, b: Path) -> bool:
     """Check whether two paths name the same directory, as the file system sees them.
 
-    Existing paths match when they identify the same directory on disk, and never match a missing path.
-    Missing paths match when their nearest existing parents match and the names below them are equal as written.
+    The paths compare by :func:`path_identity`, so a symlink or a case variant on a volume that ignores case
+    matches, and names that do not exist compare as written.
 
     Args:
         a: The first path, whether or not it exists.
@@ -20,28 +21,74 @@ def same_directory(a: Path, b: Path) -> bool:
     Returns:
         ``True`` if the paths match.
     """
-    if a.exists() or b.exists():
-        # On a volume that ignores case, a case variant of an existing path exists too.
-        return a.exists() and b.exists() and a.samefile(b)
-    return _below_existing_parent(a.resolve()) == _below_existing_parent(b.resolve())
+    return path_identity(a.resolve()) == path_identity(b.resolve())
 
 
-def _below_existing_parent(path: Path) -> tuple[int, int, tuple[str, ...]]:
-    """Identify a missing path by its nearest existing parent and the names below that parent.
+def path_identity(path: Path) -> tuple[int, int, tuple[str, ...]]:
+    """Identify a path using its nearest existing ancestor.
 
     Args:
-        path: A missing absolute path without symlinks.
+        path: An absolute path without symlinks.
 
     Returns:
-        The parent's device and inode numbers, followed by the names below it as written.
+        The ancestor's device and inode numbers, followed by the remaining names as written.
     """
-    for depth, parent in enumerate(path.parents, start=1):
+    for depth, candidate in enumerate((path, *path.parents)):
         try:
-            info = parent.stat()
+            info = candidate.stat()
         except OSError:
             continue
-        return info.st_dev, info.st_ino, path.parts[len(path.parts) - depth :]
+        missing = path.parts[len(path.parts) - depth :]
+        return info.st_dev, info.st_ino, missing
     return 0, 0, path.parts  # nothing exists, not even the root
+
+
+def lies_in(path: Path, folder: Path) -> bool:
+    """Check whether ``path`` is ``folder`` or lies inside it.
+
+    The check follows symlinks and respects the filesystem's case rules for existing paths.
+    It compares path parts that do not exist as written.
+
+    Args:
+        path: The path to check, whether or not it exists.
+        folder: The folder to check against, whether or not it exists.
+
+    Returns:
+        ``True`` if ``path`` is ``folder`` or lies inside it.
+    """
+    target = path_identity(folder.expanduser().resolve())
+    path = path.expanduser().resolve()
+    return any(path_identity(candidate) == target for candidate in (path, *path.parents))
+
+
+def delete_and_measure(path: Path) -> int:
+    """Delete a directory tree and return the bytes it held. It stats each file only once.
+
+    One file pass both measures and unlinks each file. Then :func:`shutil.rmtree` removes the empty
+    directory skeleton. This avoids a second walk over every file.
+
+    An unreadable directory or a failed removal raises an ``OSError``.
+
+    Args:
+        path: The directory to delete.
+
+    Returns:
+        The total size in bytes of the files removed.
+    """
+
+    def fail(error: OSError) -> None:
+        raise error  # os.walk otherwise skips a directory it cannot read, silently leaving it behind
+
+    freed = 0
+    for parent, _dirs, files in os.walk(path, topdown=False, onerror=fail):  # os.walk: Path.walk is 3.12+
+        parent_dir = Path(parent)
+        for name in files:
+            entry = parent_dir / name
+            # lstat: a symlink counts as itself, not as its (possibly huge, possibly external) target.
+            freed += entry.lstat().st_size
+            entry.unlink(missing_ok=True)  # a concurrent build may have removed it between walk and unlink
+    shutil.rmtree(path)
+    return freed
 
 
 def publish_directory(staging: Path, final: Path) -> None:
