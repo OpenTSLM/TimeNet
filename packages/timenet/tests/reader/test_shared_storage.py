@@ -13,6 +13,7 @@ from timenet.format.stored_values import PackedLocation, PackedValueKind, Packed
 from timenet.manifest import Manifest
 from timenet.reader import LoadPlan, TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
+from timenet.registry.dependencies import prepare_local_copy
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
@@ -599,7 +600,7 @@ def test_a_download_fetches_only_the_direct_payload_sources(tmp_path):
         b = reader.read()
         store(registry_root, _derive(b, "test/c", [record for record in b.records if _name(record) == "b"]))
     cache = tmp_path / "cache"
-    LocalRegistry(registry_root).download_version("test/c", "1.0.0", cache / "test/c/1.0.0")
+    prepare_local_copy(cache, DatasetRef.parse("test/c@1.0.0"), fetch_from=LocalRegistry(registry_root))
     assert sorted(path.parent.relative_to(cache).as_posix() for path in cache.rglob("manifest.json")) == [
         "test/b/1.0.0",
         "test/c/1.0.0",
