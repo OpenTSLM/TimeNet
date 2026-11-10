@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from timenet.builders import installed_builder
 from timenet.config import settings
+from timenet.coordinator.build import build_release
 from timenet.dataset import TimeFDataset
 from timenet.errors import (
     TimeFValidationError,
@@ -68,7 +69,7 @@ def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]
 
 
 class TimeNet:
-    """Browse a registry and fetch datasets to local storage."""
+    """Browse, download, and read datasets from a registry."""
 
     def __init__(
         self, registry: str | Path | BaseRegistry | None = None, *, storage_path: str | Path | None = None
@@ -234,8 +235,9 @@ class TimeNet:
             TimeNetAccessError: If the dataset is not open access and the registry is not local.
                 Also if the call must copy a release without access declared ``open`` from a
                 registry that is not local.
-            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
-                declares a different version than the one asked for.
+            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it.
+            TimeNetVersionUnavailableError: If the version is absent and the connector declares another
+                version. The build does not start then.
             TimeNetInvalidCardError: If the card of the connector cannot be read.
             TimeNetMissingParentError: If a release that the version or its build needs is absent and
                 the call cannot obtain it. The message names the keyword that can obtain it.
@@ -293,8 +295,9 @@ class TimeNet:
             TimeNetAccessError: If the dataset is not open access and the registry is not local.
                 Also if the call must copy a release without access declared ``open`` from a
                 registry that is not local.
-            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
-                declares a different version than the one asked for.
+            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it.
+            TimeNetVersionUnavailableError: If the version is absent and the connector declares another
+                version. The build does not start then.
             TimeNetInvalidCardError: If the card of the connector cannot be read.
             TimeNetMissingParentError: If a release that the version or its build needs is absent and
                 the call cannot obtain it.
@@ -390,18 +393,19 @@ def _missing_hint(*, auto_build: bool, fetch_from: BaseRegistry | None) -> str |
 def _prepare(
     registry: LocalRegistry, dataset_id: str, version: str | None, *, auto_build: bool, fetch_from: BaseRegistry | None
 ) -> DatasetVersion:
-    """Prepare a local release and its payload sources.
+    """Prepare a local dataset version and its payload sources.
 
-    Try local copies, then ``fetch_from``, then a build if ``auto_build`` is true.
-    A built payload source must match the files that the release pins.
+    This function reuses local releases, tries ``fetch_from``, then builds missing releases if
+    ``auto_build`` is true. Each rebuilt payload source must match the version and file pins the
+    dataset requires.
 
     Returns:
         The release with each payload source attached.
 
     Raises:
-        TimeNetMissingParentError: If a payload source is missing and cannot be copied or built.
-        TimeNetInvalidCardError: If a connector's dataset card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain and installed_builder
+        TimeNetMissingParentError: If copying and building cannot provide a missing payload source.
+        TimeNetInvalidCardError: If reading a connector's card fails.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain, claim and build_release
     try:
         manifest = registry.get_manifest(dataset_id, version)
     except TimeNetDatasetNotFoundError as miss:
@@ -420,14 +424,11 @@ def _prepare(
             found = installed_builder(source.dataset_id) if auto_build and source not in built else None
             if found is None or found.release != source:
                 raise
-            builder = found.backend
             pins = next(pinned for pinned in manifest.payload_sources.values() if pinned.release == source)
-            builder.build(
-                source.dataset_id,
-                registry.root,
-                build_parents=True,
-                fetch_from=fetch_from,
-                pinned_by={reference: pins},
+            # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto the
+            # coordinator until the client takes a list of sources.
+            build_release(
+                str(source), store=registry, fetch_from=fetch_from, build_parents=True, pinned_by={reference: pins}
             )
             built.add(source)
 
@@ -441,37 +442,36 @@ def _obtain(  # ruff: ignore[too-many-arguments]
     auto_build: bool,
     fetch_from: BaseRegistry | None,
 ) -> Manifest:
-    """Find a version that the local registry lacks in ``fetch_from``, or build it.
+    """Get a missing version's manifest from another registry or a local build.
+
+    Try ``fetch_from`` first, then build if ``auto_build`` is true.
 
     Returns:
-        The manifest from ``fetch_from`` or the local build.
+        The manifest from ``fetch_from`` without copying its files, or the local manifest after a build.
 
     Raises:
-        TimeNetDatasetNotFoundError: If neither source provides the release or the connector declares another version.
-        TimeNetInvalidCardError: If the connector's card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by declared_version
+        TimeNetDatasetNotFoundError: If neither ``fetch_from`` nor a connector provides the version.
+        TimeNetVersionUnavailableError: If the connector declares a different version.
+        TimeNetInvalidCardError: If reading the connector's card fails.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by build_release
     if fetch_from is not None:
         try:
             return fetch_from.get_manifest(dataset_id, version)
         except TimeNetDatasetNotFoundError:
             pass
-    found = installed_builder(dataset_id) if auto_build else None
-    if found is None:
+    if not auto_build or installed_builder(dataset_id) is None:
         hint = _missing_hint(auto_build=auto_build, fetch_from=fetch_from)
         if hint is None:
             raise miss
         raise TimeNetDatasetNotFoundError(f"{miss}. {hint}") from miss
-    builder = found.backend
-    # A connector produces one declared version. Reject a pin it cannot satisfy before the
-    # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
-    # not pins, so a fresh build satisfies them.
-    if not is_latest(version):
-        declared = builder.declared_version(dataset_id)
-        if declared is not None and version != declared:
-            raise TimeNetDatasetNotFoundError(
-                f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
-            ) from miss
-    # The build prepares the declared parents of the version in the same order: reuse, copy, then
-    # build.
-    builder.build(dataset_id, registry.root, build_parents=True, fetch_from=fetch_from)
+    # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto the coordinator
+    # until the client takes a list of sources. The build prepares the declared parents of the
+    # version in the same order: reuse, copy, then build. Sentinels such as "latest" are not pins,
+    # so a fresh build satisfies them.
+    build_release(
+        dataset_id if is_latest(version) else f"{dataset_id}@{version}",
+        store=registry,
+        fetch_from=fetch_from,
+        build_parents=True,
+    )
     return registry.get_manifest(dataset_id, version)

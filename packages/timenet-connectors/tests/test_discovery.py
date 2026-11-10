@@ -4,7 +4,7 @@ import sys
 import pytest
 
 from timenet_connectors import discovery
-from timenet_connectors.discovery import connector_dir, has_connector, requirements_for
+from timenet_connectors.discovery import connector_dir, requirements_for
 
 
 def test_connector_dir_points_at_the_connector_package():
@@ -55,33 +55,6 @@ def test_requirements_for_returns_the_declared_file(tmp_path, monkeypatch):
     monkeypatch.setattr(discovery, "connector_dir", lambda _: tmp_path)
 
     assert requirements_for("any/id") == tmp_path / "requirements.txt"
-
-
-def test_has_connector_accepts_a_known_id():
-    assert has_connector("physionet/ecg-qa-cot")
-
-
-def test_has_connector_rejects_an_unknown_id():
-    assert not has_connector("nope/nothing")
-
-
-def test_has_connector_rejects_a_bare_org():
-    # An org namespace package resolves to a spec with submodule_search_locations, but it holds no
-    # dataset.yaml, so it is not a connector.
-    assert not has_connector("physionet")
-    assert not has_connector("timenet")
-    assert not has_connector("chengsenwang")
-
-
-def test_has_connector_does_not_import_any_connector_on_a_miss():
-    # A miss must not import any connector: their dependencies are absent from this environment
-    # by design, so importing one raises ModuleNotFoundError instead of answering the question.
-    leaf = "timenet_connectors.datasets.physionet.ecg_qa_cot"
-    sys.modules.pop(leaf, None)
-
-    assert not has_connector("nope/nothing")
-
-    assert leaf not in sys.modules
 
 
 # A requirement line starts with the distribution name; a version specifier, an extra, a marker, an

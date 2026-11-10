@@ -17,7 +17,7 @@ class _Backend:
     def card(self, dataset_id):
         return self._card
 
-    def build_prepared(self, release, store, *, force, pinned_by, options):
+    def build(self, release, store, *, force, pinned_by, options):
         raise AssertionError(f"the lookup does not build {release}")
 
 

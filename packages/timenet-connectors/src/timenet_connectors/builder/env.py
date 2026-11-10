@@ -18,7 +18,6 @@ import shlex
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the command is a fixed argument vector
 import sys
 import tempfile
-import threading
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
@@ -99,49 +98,6 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
     return [*command, *argv]
 
 
-def run_isolated(  # ruff: ignore[too-many-arguments]
-    dataset_id: str,
-    out: str | Path,
-    *,
-    force: bool = False,
-    keep_cache: bool = False,
-    quiet: bool = False,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-) -> str:
-    """Build a dataset in a separate environment.
-
-    The build forwards stderr as it runs and includes its last lines in build errors.
-
-    Args:
-        dataset_id: The dataset ID.
-        out: A local directory or a ``timenet://``, ``http(s)://``, or ``s3://`` URL.
-        force: Rebuild an existing version.
-        keep_cache: Keep the raw download cache after building.
-        quiet: Hide the build's status output.
-        pinned_by: File pins to preserve, grouped by dependent releases, or ``None``.
-
-    Returns:
-        The local version directory or the published version for a remote target.
-
-    Raises:
-        TimeNetBuildError: If the build fails or prints no result.
-        LookupError: If no connector exists for the dataset ID.
-    """  # ruff: ignore[docstring-extraneous-exception] (raised by _run_in_env, not directly here)
-    stdout = _run_in_env(
-        dataset_id,
-        ["build", dataset_id, "--out", str(out)],
-        force=force,
-        keep_cache=keep_cache,
-        quiet=quiet,
-        pinned_by=pinned_by,
-        subject=repr(dataset_id),
-    )
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if not lines:
-        raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
-    return lines[-1]
-
-
 def run_isolated_build(  # ruff: ignore[too-many-arguments]
     release: DatasetRef,
     store_root: Path,
@@ -151,80 +107,40 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
     quiet: bool,
     pinned_by: Mapping[DatasetRef, PayloadSource],
 ) -> None:
-    """Build a specific release into a local registry in its connector's environment.
+    """Build one release in its connector's environment.
 
-    The registry must already contain all parent releases and their payload sources.
+    The local registry must already contain the release's parents and their payload sources.
     Build errors include the last lines of stderr.
 
     Args:
         release: The exact dataset ID and version to build.
         store_root: The local registry directory to build into.
-        force: Rebuild even if the registry already contains the release.
+        force: Rebuild the release even if the registry already holds it.
         keep_cache: Keep the raw download cache after building.
-        quiet: Hide the build's status output.
-        pinned_by: Releases that depend on this release, with file pins that the build must preserve.
+        quiet: Hide build status messages.
+        pinned_by: File records the build must match, grouped by the release that pins them.
 
     Raises:
         TimeNetBuildError: If the build fails.
         LookupError: If no connector exists for the dataset ID.
-    """  # ruff: ignore[docstring-extraneous-exception] (raised by _run_in_env, not directly here)
-    _run_in_env(
-        release.dataset_id,
-        ["build-prepared-release", str(release), "--store", str(store_root)],
-        force=force,
-        keep_cache=keep_cache,
-        quiet=quiet,
-        pinned_by=pinned_by,
-        subject=str(release),
-    )
-
-
-def _run_in_env(  # ruff: ignore[too-many-arguments]
-    dataset_id: str,
-    subcommand: Sequence[str],
-    *,
-    force: bool,
-    keep_cache: bool,
-    quiet: bool,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None,
-    subject: str,
-) -> str:
-    """Run a ``timenet-build`` subcommand in a connector's environment.
-
-    Args:
-        dataset_id: The dataset ID that selects the connector's environment.
-        subcommand: The subcommand and its arguments, before the build flags.
-        force: Add ``--force``.
-        keep_cache: Add ``--keep-cache``.
-        quiet: Add ``--quiet``.
-        pinned_by: The file pins to pass to the build, or ``None``.
-        subject: The name to include in build errors.
-
-    Returns:
-        The command's stdout.
-
-    Raises:
-        TimeNetBuildError: If the command fails.
-        LookupError: If no connector exists for the dataset ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
-    # --quiet belongs to timenet-build, not to the subcommand, so it goes first.
-    argv = ["timenet-build", *(["--quiet"] if quiet else []), *subcommand]
-    argv += [*(["--force"] if force else []), *(["--keep-cache"] if keep_cache else [])]
-    spec = env_spec(dataset_id)
+    # --quiet belongs to timenet-build, not to build-prepared-release, so it goes before the subcommand.
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build-prepared-release", str(release)]
+    argv += ["--store", str(store_root), *(["--force"] if force else []), *(["--keep-cache"] if keep_cache else [])]
+    spec = env_spec(release.dataset_id)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
     with _pins_file(pinned_by) as pins:
         if pins is not None:
             argv += ["--pinned-by", str(pins)]
         command = uv_command(spec, argv)
-        stdout, stderr, returncode = _run_build(command, child_env)
+        stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()
         detail = f"\n{tail}" if tail else " The child produced no error output."
         raise TimeNetBuildError(
-            f"building {subject} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
+            f"building {release} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
         )
-    return stdout
 
 
 @contextmanager
@@ -244,37 +160,29 @@ def _pins_file(pinned_by: Mapping[DatasetRef, PayloadSource] | None) -> Generato
         yield path
 
 
-def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
+def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, int]:
     """Run the build child, streaming its stderr live while also capturing it.
 
-    stdout is captured whole, because its last line is the version directory. stderr is echoed to
-    this process's stderr line by line, so a long download still shows progress, and captured too, so
-    a failure carries the child's own error.
+    stderr is echoed to this process's stderr line by line, so a long download still shows progress,
+    and captured too, so a failure carries the child's own error.
 
     Args:
         command: The full argument vector to run.
         env: The child's environment.
 
     Returns:
-        The child's captured stdout, its captured stderr, and its exit code.
+        The child's captured stderr and its exit code.
     """
     process = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true]
-        command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
     )
     captured: list[str] = []
-
-    def tee_stderr() -> None:
-        for line in process.stderr or []:
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            captured.append(line)
-
-    pump = threading.Thread(target=tee_stderr)
-    pump.start()
-    stdout = process.stdout.read() if process.stdout is not None else ""
+    for line in process.stderr or []:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+        captured.append(line)
     process.wait()
-    pump.join()
-    return stdout, "".join(captured), process.returncode
+    return "".join(captured), process.returncode
 
 
 def _base_interpreter() -> str:

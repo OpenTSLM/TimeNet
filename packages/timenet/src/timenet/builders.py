@@ -9,7 +9,6 @@ package plug in the same way the first-party one does.
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import entry_points
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
@@ -20,7 +19,7 @@ from timenet.types.references import DatasetRef
 
 if TYPE_CHECKING:
     from timenet.manifest import PayloadSource
-    from timenet.registry import BaseRegistry, LocalRegistry
+    from timenet.registry import LocalRegistry
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
@@ -44,7 +43,7 @@ class BuildOptions:
 
 
 class BuilderBackend(Protocol):
-    """An interface for building dataset releases from connectors."""
+    """Define the interface for reading connector cards and building dataset releases."""
 
     def dataset_ids(self) -> Iterable[str]:
         """List the datasets this backend can build.
@@ -59,43 +58,11 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def knows(self, dataset_id: str) -> bool:
-        """Report whether this backend has a connector for the id.
-
-        Implementations must answer without importing the connector: this runs before any
-        connector environment exists.
-
-        Args:
-            dataset_id: The dataset id.
-
-        Returns:
-            Whether the backend can build it.
-        """
-        ...
-
-    def declared_version(self, dataset_id: str) -> str | None:
-        """Return the version the connector declares, without importing or building it.
-
-        A caller checks a version pin against this before the build runs, so a pin the connector
-        cannot satisfy fails fast instead of after a full build. Answer without importing the
-        connector, like :meth:`knows`.
-
-        Args:
-            dataset_id: The dataset id.
-
-        Returns:
-            The declared version string, or ``None`` if the backend has no connector for the id.
-
-        Raises:
-            TimeNetInvalidCardError: If the card of the connector cannot be read.
-        """
-        ...
-
     def card(self, dataset_id: str) -> DatasetMetadata | None:
         """Return the card the connector declares, without importing or building it.
 
         A build planner reads the card for a parent's exact version, its own parents, and its access
-        requirement before anything runs. Answer without importing the connector, like :meth:`knows`.
+        requirement before anything runs. Answer without importing the connector, like :meth:`dataset_ids`.
 
         Args:
             dataset_id: The dataset id.
@@ -108,37 +75,7 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(  # ruff: ignore[too-many-arguments]
-        self,
-        dataset_id: str,
-        root: Path,
-        *,
-        force: bool = False,
-        build_parents: bool = False,
-        fetch_from: "str | BaseRegistry | None" = None,
-        pinned_by: "Mapping[DatasetRef, PayloadSource] | None" = None,
-    ) -> Path:
-        """Build the dataset into a registry directory.
-
-        Missing parent releases are prepared before the build starts, or the build fails before
-        any download. Each one is reused, copied from ``fetch_from``, or built when
-        ``build_parents`` is set. A build with ``pinned_by`` publishes the release only if it
-        reproduces each pinned file.
-
-        Args:
-            dataset_id: The dataset id.
-            root: The output registry directory.
-            force: Rebuild even if the version is already built.
-            build_parents: Build missing parent releases from their installed connectors.
-            fetch_from: The registry, or its URI, to copy missing parent releases from.
-            pinned_by: The releases that already read files of this release, with their pins.
-
-        Returns:
-            The committed version directory.
-        """
-        ...
-
-    def build_prepared(
+    def build(
         self,
         release: DatasetRef,
         store: "LocalRegistry",
