@@ -104,7 +104,7 @@ def test_build_without_sources_copies_a_parent_from_the_remote_registry(tmp_path
     assert [release for release, _ in cards] == [CHILD]
 
 
-def test_build_lands_in_the_store_that_the_environment_names(tmp_path, monkeypatch, cards):
+def test_build_lands_in_the_local_registry_that_the_environment_names(tmp_path, monkeypatch, cards):
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "env-store"))
     assert timenet.build(PARENT.dataset_id) == tmp_path / "env-store/test/parent/1.0.0"
     assert LocalRegistry(tmp_path / "env-store").exists(PARENT.dataset_id, "1.0.0")
@@ -180,7 +180,7 @@ def store(tmp_path, monkeypatch):
     return LocalRegistry(tmp_path / "store")
 
 
-def test_publish_copies_the_latest_release_of_the_store(tmp_path, store):
+def test_publish_copies_the_latest_release_of_the_local_registry(tmp_path, store):
     store.put_dataset(_demo(_card(DatasetRef.parse("timenet/hello-world@0.9.0"))))
     store.put_dataset(make_dataset())
     dest = tmp_path / "dest"

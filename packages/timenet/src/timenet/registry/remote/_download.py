@@ -21,7 +21,7 @@ from timenet.errors import TimeNetFileError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
-from timenet.registry.base import ProgressCallback
+from timenet.registry.base import ByteCountCallback
 from timenet.registry.remote._http import (
     RegistryHttpClient,
     _download_path,
@@ -45,7 +45,7 @@ def download_version_files(  # ruff: ignore[too-many-arguments]
     *,
     force: bool = False,
     max_concurrency: int = 8,
-    progress_cb: ProgressCallback | None = None,
+    progress_cb: ByteCountCallback | None = None,
 ) -> Path:
     """Download every file of a version into ``dest_dir`` atomically.
 
@@ -79,7 +79,7 @@ async def _download_all(  # ruff: ignore[too-many-arguments, too-many-positional
     files: list[FilePart],
     staging: Path,
     max_concurrency: int,
-    progress_cb: ProgressCallback | None,
+    progress_cb: ByteCountCallback | None,
 ) -> None:
     """Download all files concurrently into the staging directory.
 
@@ -143,7 +143,7 @@ async def _stream_one(  # ruff: ignore[too-many-arguments]
     *,
     release: DatasetRef,
     record: FilePart,
-    progress_cb: ProgressCallback | None = None,
+    progress_cb: ByteCountCallback | None = None,
 ) -> None:
     """Stream one presigned URL to ``dest`` via a ``.part`` temp file, renamed on success.
 

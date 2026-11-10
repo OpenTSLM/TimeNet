@@ -11,10 +11,11 @@ from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
 from timenet.manifest.payload_source import PayloadSource
 from timenet.types import DatasetMetadata, DatasetSchema
-from timenet.types._model import TimeFModel
+from timenet.types._model import TimeFModel, _first_problem
 from timenet.types.metadata_fields import DatasetId
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias, SourceKeyField
+from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
@@ -85,6 +86,20 @@ class Manifest(TimeFModel):
                 )
         return self
 
+    def required_releases(self, *, with_parents: bool) -> list[DatasetRef]:
+        """List the releases that this release needs: its payload sources, and its parents if asked.
+
+        Args:
+            with_parents: Also list the declared parents.
+
+        Returns:
+            The releases of the payload sources, then the parents.
+        """
+        releases = [source.release for source in self.payload_sources.values()]
+        if with_parents:
+            releases.extend(self.metadata.parents.values())
+        return releases
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize the manifest to a validated JSON-compatible dict with all keys present.
 
@@ -135,11 +150,7 @@ def parse_manifest(text: str | bytes, where: str) -> Manifest:
     try:
         return Manifest.model_validate_json(text)
     except ValidationError as error:
-        first = error.errors()[0]
-        location = ".".join(str(part) for part in first["loc"])
-        message = first["msg"].removeprefix("Value error, ")
-        detail = f"{location}: {message}" if location else message
-        raise TimeFFormatError(f"{where} is not a valid manifest: {detail}") from error
+        raise TimeFFormatError(f"{where} is not a valid manifest: {_first_problem(error)}") from error
 
 
 def read_manifest(path: Path) -> Manifest:

@@ -1,7 +1,7 @@
 """A fake set of installed builder backends."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from timenet import builders
@@ -12,11 +12,19 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class _FakeDistribution:
+    """The distribution that declares each fake entry point."""
+
+    name: str = "timenet-testing"
+    version: str = "0"
+
+
+@dataclass(frozen=True)
 class _FakeEntryPoint:
-    """An entry point that no installed distribution declares."""
+    """An entry point of the fake distribution ``timenet-testing 0``."""
 
     backend: object
-    dist: None = None
+    dist: _FakeDistribution = field(default_factory=_FakeDistribution)
 
     def load(self) -> Callable[[], object]:
         """Return the factory of the backend."""

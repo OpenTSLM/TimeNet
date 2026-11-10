@@ -113,7 +113,7 @@ def build(
     sources = default_sources(local_registry=local_registry, remote_registry=remote_registry, auto_build=auto_build)
     # The default list starts with the local registry, which the build writes into. The planner leaves it out of
     # the sources of the copies and builds.
-    store = cast("LocalRegistry", sources[0])
+    local = cast("LocalRegistry", sources[0])
     dest = None if publish_to is None else open_registry(publish_to, label="--publish-to")
     has_connectors = any(isinstance(source, InstalledConnectors) for source in sources)
     try:
@@ -126,7 +126,7 @@ def build(
         # plan refuses another release before any download.
         plan = plan_release_build(
             str(wanted),
-            store=store,
+            target_registry=local,
             parents_from=sources,
             force=force,
             open_access_only=dest is not None and dest.requires_open_access,
@@ -136,7 +136,7 @@ def build(
             if dest is not None:
                 lines.append(f"then publish {wanted} to {dest}")
             elif not plan.steps:
-                console.success(f"Nothing to do: '{wanted.dataset_id}' {wanted.version} is already in {store}")
+                console.success(f"Nothing to do: '{wanted.dataset_id}' {wanted.version} is already in {local}")
             if lines:
                 typer.echo("\n".join(lines))
             return
@@ -149,9 +149,9 @@ def build(
                 quiet=console.quiet,
                 isolation=None if isolation is None else ("on" if isolation else "off"),
             )
-            run_plan(plan, store, options=options)
+            run_plan(plan, local, options=options)
             if dest is not None:
-                publish(wanted, dest=dest, source=store, progress=progress)
+                publish(wanted, dest=dest, source=local, progress=progress)
     except TimeNetMissingParentError as error:
         error.hint = _missing_hint(has_connectors=has_connectors)
         raise
@@ -167,9 +167,9 @@ def build(
         error.hint = _access_hint(dest, has_connectors=has_connectors)
         raise
     if dest is None and not plan.steps:
-        console.success(f"Nothing to do: '{wanted.dataset_id}' {wanted.version} is already in {store}")
+        console.success(f"Nothing to do: '{wanted.dataset_id}' {wanted.version} is already in {local}")
     # A publish prints the version, and a local build prints the release directory.
-    typer.echo(str(wanted.version) if dest is not None else str(release_dir(store.root, wanted)))
+    typer.echo(str(wanted.version) if dest is not None else str(release_dir(local.root, wanted)))
 
 
 def _missing_hint(*, has_connectors: bool) -> str:

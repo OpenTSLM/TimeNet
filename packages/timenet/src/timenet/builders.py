@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.errors import TimeNetBuildError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.progress import ProgressCallback
 from timenet.types import DatasetMetadata, Version
 from timenet.types.references import DatasetRef
@@ -112,10 +112,12 @@ class InstalledBuilder:
     Attributes:
         backend: The installed backend that builds the dataset.
         card: The dataset's connector card.
+        package: ``"<distribution> <version>"`` of the package that registers the backend.
     """
 
     backend: BuilderBackend
     card: DatasetMetadata
+    package: str
 
     @property
     def release(self) -> DatasetRef:
@@ -166,12 +168,13 @@ def installed_builder(dataset_id: str) -> InstalledBuilder | None:
 
     Raises:
         TimeNetInvalidCardError: If the dataset's card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
+        TimeNetBuildError: If no installed distribution declares the entry point of the backend.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend and _package
     claim = next((claim for claim in claims() if claim.dataset_id == dataset_id), None)
     if claim is None:
         return None
     card = claim.backend.card(dataset_id)
-    return None if card is None else InstalledBuilder(claim.backend, card)
+    return None if card is None else InstalledBuilder(claim.backend, card, _package(claim))
 
 
 def declared(dataset_id: str, version: Version | str | None = None) -> InstalledBuilder:
@@ -213,3 +216,16 @@ def find_card(dataset_id: str) -> DatasetMetadata | None:
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
     found = installed_builder(dataset_id)
     return None if found is None else found.card
+
+
+def _package(claim: ConnectorClaim) -> str:
+    """Return ``"<distribution> <version>"`` of the package whose entry point registers the backend of a claim.
+
+    Raises:
+        TimeNetBuildError: If no installed distribution declares the entry point.
+    """
+    dist = claim.entry.dist
+    if dist is None:
+        kind = type(claim.backend)
+        raise TimeNetBuildError(f"the entry point of {kind.__module__}.{kind.__qualname__} names no installed package")
+    return f"{dist.name} {dist.version}"

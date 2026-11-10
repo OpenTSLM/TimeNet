@@ -28,25 +28,28 @@ def copy_release(  # ruff: ignore[too-many-arguments]
     with_payload_sources: bool = True,
     force: bool = False,
     progress: ProgressCallback | None = None,
-) -> None:
-    """Copy a release and its required payload sources to a registry.
+) -> tuple[DatasetRef, ...]:
+    """Copy a release and its payload sources to another registry.
 
-    Payload sources go first, a complete copy in ``dest`` is reused, and a damaged local copy is fetched again.
-    All checks run before the first copy, so a failed check copies nothing.
+    Copy payload sources first, reuse complete copies, and repair damaged local copies.
+    Check all releases before copying any files.
 
     Args:
         reference: The exact release to copy.
         source: The registry to copy from.
         dest: The registry to copy to.
         with_payload_sources: Also copy the payload sources that the manifest of the release lists.
-        force: Fetch ``reference`` again, even if ``dest`` has a complete local copy.
-        progress: Receives step events for each copied release and byte counts when ``dest`` is local.
+        force: Fetch ``reference`` again even if the local destination has a complete copy.
+        progress: Receives step events for each copy and byte counts for local destinations.
+
+    Returns:
+        The copied or repaired releases, in copy order.
 
     Raises:
         TimeNetRegistryError: If ``dest`` is read-only.
         TimeFValidationError: If ``force`` is set and ``dest`` is not local.
-        TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
-        TimeNetAccessError: If a release is not open and ``dest`` or ``source`` requires open access.
+        TimeNetVersionConflictError: If ``dest`` holds the same release with other files or another card.
+        TimeNetAccessError: If a release lacks open access and either registry requires it.
         TimeNetDatasetNotFoundError: If ``source`` lacks the release.
         TimeNetMissingParentError: If neither registry holds a complete payload source.
         TimeFFormatError: If a manifest names the wrong release or a pin fails.
@@ -65,7 +68,7 @@ def copy_release(  # ruff: ignore[too-many-arguments]
     ]
     _check_access(manifests, set(pending), source, dest)
     if not pending:
-        return
+        return ()
     # Only a copy from a non-local source to a non-local dest downloads into this directory, each
     # pending release on its own.
     with tempfile.TemporaryDirectory(prefix="timenet-copy-", ignore_cleanup_errors=True) as staging:
@@ -76,6 +79,7 @@ def copy_release(  # ruff: ignore[too-many-arguments]
             _copy_one(ref, manifests[ref], source, dest, Path(staging), force=again, progress=progress)
             if progress is not None:
                 progress(StepFinished(ref, "copy"))
+    return tuple(pending)
 
 
 def _copy_one(  # ruff: ignore[too-many-arguments]

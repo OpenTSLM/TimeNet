@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from _demo_child import _child_of_the_demo
 from _fake_registry import build_service_fake
+from _origin_record import origin_file
 import httpx
 from pydantic import ValidationError
 import pytest
@@ -33,6 +34,7 @@ from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
+from timenet.registry.origin import OriginKind
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal, install_backends, make_dataset
 from timenet.types import Access, Annotation, AnswerTask, DatasetMetadata, Domain, License, Version
@@ -144,7 +146,7 @@ def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_p
         assert reader.read().records[0].signals[0].to_arrow().equals(expected)
 
 
-def test_a_damaged_release_outside_the_store_names_no_download(tmp_path):
+def test_a_damaged_release_outside_the_local_registry_names_no_download(tmp_path):
     origin, _ = _child_of_the_demo(tmp_path / "origin")
     mirror = LocalRegistry(tmp_path / "mirror")
     shutil.copytree(origin.root, mirror.root)
@@ -157,7 +159,7 @@ def test_a_damaged_release_outside_the_store_names_no_download(tmp_path):
     assert (caught.value.release, caught.value.hint) == (DatasetRef.parse("test/child@1.0.0"), None)
 
 
-def test_a_damaged_build_in_the_store_names_the_build_that_replaces_it(tmp_path, monkeypatch):
+def test_a_damaged_build_in_the_local_registry_names_the_build_that_replaces_it(tmp_path, monkeypatch):
     calls = []
     install_backends(monkeypatch, _Builder(calls))
     store = LocalRegistry(tmp_path / "store")
@@ -200,16 +202,16 @@ def test_the_default_list_follows_the_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
     monkeypatch.setenv("TIMENET_REMOTE_REGISTRY", str(tmp_path / "remote"))
     monkeypatch.setenv("TIMENET_AUTO_BUILD", "false")
-    store, remote = default_sources()
-    assert isinstance(store, LocalRegistry) and isinstance(remote, LocalRegistry)
-    assert (store.root, remote.root) == (tmp_path / "store", tmp_path / "remote")
+    local_registry, remote = default_sources()
+    assert isinstance(local_registry, LocalRegistry) and isinstance(remote, LocalRegistry)
+    assert (local_registry.root, remote.root) == (tmp_path / "store", tmp_path / "remote")
     # TimeNet() uses the same list.
     client = TimeNet()
     assert [_entry(source) for source in client._sources] == [
         ("local", tmp_path / "store"),
         ("local", tmp_path / "remote"),
     ]
-    assert client._store is client._sources[0]
+    assert client._local_registry is client._sources[0]
 
 
 @pytest.mark.usefixtures("home")
@@ -554,6 +556,25 @@ def test_get_manifest_names_every_source_when_none_provides_the_release(tmp_path
     )
 
 
+def test_download_records_each_copied_release(tmp_path):
+    origin, parent = _child_of_the_demo(tmp_path / "origin")
+    child = DatasetRef.parse("test/child@1.0.0")
+    store = LocalRegistry(tmp_path / "store")
+    client = TimeNet(sources=[store, origin.root])
+    client.download("test/child")
+    for release in (parent, child):
+        record = store.read_origin(release)
+        assert record is not None
+        assert (record.kind, record.source) == (OriginKind.DOWNLOAD, str(origin.root.resolve()))
+
+    # With force, the call copies only the requested release again, so only that release gets a record.
+    for release in (parent, child):
+        origin_file(store, release).unlink()
+    client.download("test/child", force=True)
+    assert store.read_origin(parent) is None
+    assert store.read_origin(child) is not None
+
+
 def test_download_needs_a_local_registry_that_is_not_read_only(registry_root):
     with pytest.raises(TimeFValidationError) as caught:
         TimeNet(sources=[LocalRegistry(registry_root, read_only=True)]).download("timenet/hello-world")
@@ -624,10 +645,16 @@ def test_download_copies_each_release_from_the_first_registry_that_provides_it(t
     assert path == store.root / "test/child/1.0.0"
     with TimeNet(sources=[store]).open("test/child") as reader:
         reader.verify()
+    # Each provenance record names the registry that the release came from.
+    records = {release: store.read_origin(release) for release in (DatasetRef.parse("test/child@1.0.0"), reference)}
+    assert {release: (record.kind, record.source) for release, record in records.items() if record} == {
+        DatasetRef.parse("test/child@1.0.0"): (OriginKind.DOWNLOAD, str((tmp_path / "first").resolve())),
+        reference: (OriginKind.DOWNLOAD, str((tmp_path / "second").resolve())),
+    }
 
 
 @pytest.mark.parametrize("case", ["force", "damaged"])
-def test_download_refuses_a_store_copy_with_other_files(registry_root, tmp_path, case):
+def test_download_refuses_a_local_registry_copy_with_other_files(registry_root, tmp_path, case):
     store = LocalRegistry(tmp_path / "store")
     other = make_dataset()
     other.records[0].annotate(Annotation(key="build", value="another"))
@@ -647,7 +674,7 @@ def test_download_refuses_a_store_copy_with_other_files(registry_root, tmp_path,
     assert (directory / "manifest.json").read_text() == before
 
 
-def test_download_names_the_store_when_no_other_registry_provides_its_copy(tmp_path, monkeypatch):
+def test_download_names_the_local_registry_when_no_other_registry_provides_its_copy(tmp_path, monkeypatch):
     calls = []
     install_backends(monkeypatch, _Builder(calls))
     store = LocalRegistry(tmp_path / "store")
@@ -664,7 +691,9 @@ def test_download_names_the_store_when_no_other_registry_provides_its_copy(tmp_p
 
 
 @pytest.mark.parametrize("case", ["force", "damaged"])
-def test_download_counts_a_registry_over_the_directory_of_the_store_as_the_store(tmp_path, monkeypatch, case):
+def test_download_counts_a_registry_over_the_directory_of_the_local_registry_as_the_local_registry(
+    tmp_path, monkeypatch, case
+):
     root = tmp_path / "reg"
     LocalRegistry(root).put_dataset(make_dataset())
     directory = root / "timenet/hello-world/1.0.0"
@@ -693,7 +722,7 @@ def test_download_counts_a_registry_over_the_directory_of_the_store_as_the_store
     assert {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()} == before
 
 
-def test_download_counts_a_symlink_to_the_store_directory_as_the_store(tmp_path):
+def test_download_counts_a_symlink_to_the_local_registry_directory_as_the_local_registry(tmp_path):
     store = LocalRegistry(tmp_path / "store")
     store.put_dataset(make_dataset())
     (tmp_path / "link").symlink_to(store.root, target_is_directory=True)
@@ -704,7 +733,7 @@ def test_download_counts_a_symlink_to_the_store_directory_as_the_store(tmp_path)
         client.download("timenet/hello-world", force=True)
 
 
-def test_download_completes_the_payload_sources_of_a_complete_store_copy(tmp_path):
+def test_download_completes_the_payload_sources_of_a_complete_local_registry_copy(tmp_path):
     origin, reference = _child_of_the_demo(tmp_path / "origin")
     store = LocalRegistry(tmp_path / "store")
     client = TimeNet(sources=[store, origin])
@@ -753,7 +782,7 @@ def test_download_copies_a_payload_source_without_the_payload_sources_of_that_so
     assert not store.exists(demo.dataset_id, str(demo.version))
 
 
-def test_download_repairs_a_damaged_store_copy(tmp_path):
+def test_download_repairs_a_damaged_local_registry_copy(tmp_path):
     origin, reference = _child_of_the_demo(tmp_path / "origin")
     store = LocalRegistry(tmp_path / "store")
     client = TimeNet(sources=[store, origin.root])
@@ -770,7 +799,7 @@ def test_download_repairs_a_damaged_store_copy(tmp_path):
         reader.verify()
 
 
-def test_download_returns_a_complete_store_copy_at_once(registry_root, tmp_path):
+def test_download_returns_a_complete_local_registry_copy_at_once(registry_root, tmp_path):
     transport, requests = build_service_fake(registry_root)
     remote = RemoteRegistry("http://api.local", transport=transport)
     client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), remote])
