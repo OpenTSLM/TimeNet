@@ -94,9 +94,8 @@ def test_each_question_is_a_classification_task_over_its_options(release):
     assert [task.metadata["question_index"] for task in tasks] == [0, 1]
     assert [read_value(task.prompt) for task in tasks] == [row["question"] for row in ROWS]
     assert [read_values(task.targets) for task in tasks] == [("Yes",), ("No",)]
-    # The options are the task's label set, named after the question's row.
+    # The options are the task's label set.
     assert isinstance(presence, ClassificationTask) and isinstance(correlation, ClassificationTask)
-    assert [presence.label_set.name, correlation.label_set.name] == ["question_0", "question_1"]
     assert [label.name for label in correlation.label_set.labels] == ["Yes", "No"]
     assert not correlation.label_set.multi_label
     # The task reads the cited metrics in citation order.
@@ -113,6 +112,18 @@ def test_each_question_is_a_classification_task_over_its_options(release):
         "interpolate_1": True,
         "interpolate_2": False,
     }
+
+
+def test_questions_with_equal_options_share_a_label_set(release):
+    up_down = {**PRESENCE_ROW, "Unnamed: 0": "2", "options_str": '["Up", "Down"]', "correct_answer": "Up"}
+    write_qa_csv(_path(release, "questions").parent, [*ROWS, up_down])
+    presence, correlation, up_down_task = ARFBenchConnector().convert(release).get_all()
+
+    assert isinstance(presence, ClassificationTask) and isinstance(correlation, ClassificationTask)
+    assert isinstance(up_down_task, ClassificationTask)
+    assert presence.label_set == correlation.label_set
+    assert presence.label_set.name.startswith("options_")
+    assert up_down_task.label_set.name != presence.label_set.name
 
 
 def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(release, tmp_path):
