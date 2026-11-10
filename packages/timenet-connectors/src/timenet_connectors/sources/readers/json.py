@@ -32,7 +32,7 @@ class JsonArrayDataReader(DataReader[RowT]):
         try:
             with self.path.open(encoding="utf-8") as handle:
                 values = json.load(handle, object_pairs_hook=_reject_duplicate_keys)
-        except (OSError, UnicodeError, ValueError) as exc:
+        except (OSError, UnicodeError, ValueError, RecursionError) as exc:
             raise TimeNetConnectorError(f"{self.path}: {exc}") from exc
         if not isinstance(values, list):
             raise TimeNetConnectorError(f"{self.path}: expected a JSON array")
@@ -57,7 +57,7 @@ class JsonlDataReader(DataReader[RowT]):
                 for number, line in enumerate(handle, start=1):
                     try:
                         value = json.loads(line, object_pairs_hook=_reject_duplicate_keys)
-                    except ValueError as exc:
+                    except (ValueError, RecursionError) as exc:
                         raise TimeNetConnectorError(f"{self.path}: line {number}: {exc}") from exc
                     yield self._validate(value, f"line {number}")
         except (OSError, UnicodeError) as exc:

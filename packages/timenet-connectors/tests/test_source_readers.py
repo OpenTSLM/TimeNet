@@ -222,6 +222,20 @@ def test_json_requires_array_and_jsonl_rejects_invalid_line(tmp_path):
         list(JsonlDataReader(path, DataRow).iter_rows())
 
 
+@pytest.mark.parametrize("reader_type", [JsonArrayDataReader, JsonlDataReader])
+def test_deeply_nested_json_has_source_context(tmp_path, reader_type):
+    path = tmp_path / "source.json"
+    depth = 100_000
+    nested = "[" * depth + "0" + "]" * depth
+    path.write_text(nested if reader_type is JsonArrayDataReader else "{}\n" + nested + "\n")
+    with pytest.raises(TimeNetConnectorError) as exc:
+        list(reader_type(path, DataRow).iter_rows())
+    assert str(path) in str(exc.value)
+    if reader_type is JsonlDataReader:
+        assert "line 2" in str(exc.value)
+    assert isinstance(exc.value.__cause__, RecursionError)
+
+
 @pytest.mark.parametrize(
     ("reader_type", "content", "location"),
     [
