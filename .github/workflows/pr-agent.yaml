@@ -19,6 +19,22 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+    # A PR in a stack gets its overview from the stack review (pr-agent-stack.yaml), so the
+    # per-PR run only posts inline suggestions for it.
+    - name: Detect stack
+      id: stack
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        BASE: ${{ github.event.pull_request.base.ref }}
+        HEAD: ${{ github.event.pull_request.head.ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        stacked=false
+        if [ -n "$BASE" ]; then
+          children=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base "$HEAD" --json number --jq length)
+          if [ "$BASE" != "$DEFAULT_BRANCH" ] || [ "$children" -gt 0 ]; then stacked=true; fi
+        fi
+        echo "stacked=$stacked" >> "$GITHUB_OUTPUT"
     - name: Run PR-Agent
       uses: The-PR-Agent/pr-agent@v0.50.0
       env:
@@ -35,8 +51,13 @@ jobs:
         # Split reviews that do not fit one call into chunks.
         PR_REVIEWER.ENABLE_LARGE_PR_CHUNKING: "true"
         PR_REVIEWER.MAX_NUMBER_OF_CALLS: 6
+        # Kimi reasons before answering. Cap the reasoning and the answer, and allow slow calls,
+        # so /improve and its self-reflection step do not fail silently.
+        CONFIG.REASONING_EFFORT: low
+        CONFIG.AI_TIMEOUT: 900
+        OPENROUTER.MAX_TOKENS: 16000
         # Review summary plus inline code suggestions. Run /describe in a PR comment when wanted.
-        github_action_config.auto_review: "true"
+        github_action_config.auto_review: ${{ steps.stack.outputs.stacked == 'true' && 'false' || 'true' }}
         github_action_config.auto_describe: "false"
         github_action_config.auto_improve: "true"
         # Never set labels on the PR.
@@ -46,6 +67,8 @@ jobs:
         # Post each suggestion as an inline comment with an "Apply suggestion" button.
         PR_CODE_SUGGESTIONS.COMMITTABLE_CODE_SUGGESTIONS: "true"
         PR_CODE_SUGGESTIONS.PERSISTENT_COMMENT: "false"
+        # No "no suggestions" comment.
+        PR_CODE_SUGGESTIONS.PUBLISH_OUTPUT_NO_SUGGESTIONS: "false"
         # Pull TimeNet's AGENTS.md rules into the review.
         PR_REVIEWER.EXTRA_INSTRUCTIONS: >-
           Follow AGENTS.md. Check TimeF invariants, explicit TimeNet exceptions on data issues
