@@ -401,7 +401,7 @@ def test_put_dataset_refuses_a_payload_source_the_service_does_not_hold_before_p
     local.put_dataset(make_dataset())
     transport, state = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path / "cache")
-    with TimeFReader(local.open_version(make_dataset().metadata.dataset_id)) as reader:
+    with TimeFReader(open_local_version(local.root / "timenet/hello-world/1.0.0")) as reader:
         parent = reader.read()
         child = TimeFDataset.from_parts(
             metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}),
@@ -508,7 +508,7 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
     parent._import_state.parent_cards[ParentAlias("build-only")] = ParentDatasetCard(metadata=build_only)
     local.put_dataset(parent, values_backend=backend)
     parent_id = parent.metadata.dataset_id
-    with TimeFReader(local.open_version(parent_id, "1.0.0")) as reader:
+    with TimeFReader(open_local_version(local.root / parent_id / "1.0.0")) as reader:
         reference = DatasetRef(dataset_id=parent_id, version=parent.metadata.dataset_version)
         child = TimeFDataset(
             metadata=parent.metadata.model_copy(

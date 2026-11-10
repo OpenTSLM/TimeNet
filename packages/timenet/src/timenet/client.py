@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar
 from timenet.builders import installed_builder
 from timenet.config import settings
 from timenet.coordinator.build import plan_release_build, run_plan
+from timenet.coordinator.read import read_release
 from timenet.dataset import TimeFDataset
 from timenet.errors import (
     TimeFValidationError,
@@ -256,7 +257,7 @@ class TimeNet:
                     "fetch_from copies releases into a local registry; a remote client reads from its own registry"
                 )
             self._reject_unhosted_access(dataset_id, version)
-            return TimeFReader(registry.open_version(dataset_id, version))
+            return TimeFReader(read_release(dataset_id, version, sources=[registry], store=None))
         source = open_registry(fetch_from) if isinstance(fetch_from, str) else fetch_from
         try:
             return TimeFReader(_prepare(registry, dataset_id, version, auto_build=auto_build, fetch_from=source))

@@ -11,7 +11,8 @@ from timenet.engine import open_parents, run_pipeline, store_dataset
 from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry
+from timenet.registry import LocalRegistry, open_local_version
+from timenet.registry._paths import release_dir
 from timenet.testing import make_dataset
 from timenet.types import Access, Version
 from timenet.types.access import effective_access
@@ -396,8 +397,8 @@ def test_a_build_context_made_directly_closes_its_parent_readers(tmp_path, monke
     for dataset in (make_dataset(), second):
         registry.put_dataset(dataset)
     readers = {
-        ParentAlias("parent"): TimeFReader(registry.open_version(_PARENT.dataset_id, str(_PARENT.version))),
-        ParentAlias("second"): TimeFReader(registry.open_version("test/second", "1.0.0")),
+        ParentAlias("parent"): TimeFReader(open_local_version(release_dir(registry.root, _PARENT))),
+        ParentAlias("second"): TimeFReader(open_local_version(registry.root / "test/second/1.0.0")),
     }
     closed = []
     close = TimeFReader.close

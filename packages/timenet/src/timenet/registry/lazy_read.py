@@ -9,12 +9,12 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
-from timenet.manifest import PayloadSource
+from timenet.manifest import Manifest, PayloadSource
 from timenet.registry._paths import release_dir
-from timenet.registry.dependencies import open_cached_or_remote
+from timenet.registry.dependencies import open_cached_or_remote_release
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
-from timenet.types.references import DatasetRef, is_latest
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -81,29 +81,28 @@ class LazyReadRegistry(WritableRegistry, ABC):
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
-        """Open a release and its payload sources, then read remote files on demand.
-
-        Opening reads only manifests. Each payload source must be in this registry and match the
-        files the release pins.
+    def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
+        """Open a cached or remote release without attaching its payload sources.
 
         Args:
-            dataset_id: The dataset ID.
-            version: The release version, or ``None`` for the latest.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle that prefers complete cached releases and otherwise uses remote range reads.
+            A handle to a complete copy in :attr:`local_root`, or to remote files read on demand.
         """
-        if is_latest(version):
-            version = str(self.get_manifest(dataset_id, version).metadata.dataset_version)
-        return open_cached_or_remote(
-            self.local_root, DatasetRef.parse(f"{dataset_id}@{version}"), self._open_remote_version, searched=str(self)
+        return open_cached_or_remote_release(
+            self.local_root, reference, lambda ref: self._open_remote_version(ref, manifest=manifest)
         )
 
     @abstractmethod
-    def _open_remote_version(self, reference: DatasetRef) -> DatasetVersion:
-        """Bind one remote release to a range-capable filesystem, without its payload sources.
+    def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
+        """Open a remote release on a filesystem that serves range reads.
+
+        Args:
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle whose payload sources :meth:`open_version` attaches.
+            A handle to the remote release without attached payload sources.
         """
