@@ -13,6 +13,7 @@ from timenet.manifest import GitSource
 from timenet.provenance import InstalledDistribution, PackageSnapshot, TimeNetSnapshot
 from timenet.registry import LocalRegistry
 from timenet.testing import make_dataset
+from timenet.writer import TimeFWriter
 
 
 _CLEAN = GitSource(sha="a" * 40, contains_local_changes=False)
@@ -190,6 +191,25 @@ def test_a_local_build_fails_if_a_commit_is_unknown(installed, tmp_path):
     installed()
     with pytest.raises(TimeNetBuildError, match="cannot find the git commit of timenet"):
         LocalRegistry(tmp_path / "local").put_dataset(make_dataset())
+    # The writer reads the commit before it writes any data.
+    assert not (tmp_path / "local" / make_dataset().metadata.dataset_id).exists()
+
+
+def test_the_manifest_records_the_commit_from_when_the_write_started(tmp_path, monkeypatch):
+    original_write = TimeFWriter.write
+
+    def write_then_commit(writer: TimeFWriter) -> None:
+        original_write(writer)
+        later = GitSource(sha="b" * 40, contains_local_changes=False)
+        monkeypatch.setattr(InstalledDistribution, "read_git_source", lambda _self: later)
+
+    monkeypatch.setattr(TimeFWriter, "write", write_then_commit)
+    dataset = make_dataset()
+    registry = LocalRegistry(tmp_path / "local")
+    registry.put_dataset(dataset)
+
+    manifest = registry.get_manifest(dataset.metadata.dataset_id)
+    assert manifest.build_env.git["timenet"].sha == "0" * 40
 
 
 def test_a_snapshot_reads_back_from_the_commits_that_a_manifest_records():
