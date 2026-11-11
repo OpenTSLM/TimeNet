@@ -16,6 +16,7 @@ from timenet._fs import same_directory
 from timenet.config import settings
 from timenet.errors import (
     TimeFFormatError,
+    TimeFFormatVersionError,
     TimeNetAccessError,
     TimeNetDatasetNotFoundError,
     TimeNetError,
@@ -548,6 +549,11 @@ def _bad_manifest(error: TimeNetManifestError, facts: Facts) -> str | None:
     return f"{again}, then clear again." if facts.request is Operation.CLEAR else f"{again}."
 
 
+def _format_version(error: TimeFFormatVersionError) -> str | None:
+    """Return a hint that names the upgrade that reads a newer format, or None for an older one."""
+    return "Upgrade the timenet package to read it." if error.found > error.supported else None
+
+
 def _bad_origin(release: DatasetRef, facts: Facts, wording: HintWording) -> str:
     """Return a hint that names the forced download and the forced build that replace a release and its record."""
     download = wording.download(release, facts, force=True)
@@ -612,6 +618,7 @@ _REMEDIES: dict[type[TimeNetError], Remedy] = {
     TimeNetFileError: lambda error, facts, wording: _damaged(error.release, facts, wording),
     TimeNetVersionConflictError: lambda error, facts, _: _conflict(error, facts),
     TimeNetManifestError: lambda error, facts, _: _bad_manifest(error, facts),
+    TimeFFormatVersionError: lambda error, _, __: _format_version(error),
     TimeNetOriginError: lambda error, facts, wording: _bad_origin(error.release, facts, wording),
     TimeNetIsolationError: lambda _, __, wording: (
         f"Build in this interpreter with {wording.run_in_this_interpreter()}."

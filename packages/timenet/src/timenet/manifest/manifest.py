@@ -1,13 +1,20 @@
 """The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec."""
 
 from importlib.metadata import distributions
+import json
 from pathlib import Path
 import platform
 from typing import Annotated, Any, Self
 
 from pydantic import Field, StrictBool, StrictStr, StringConstraints, ValidationError, model_validator
 
-from timenet.errors import ReleaseDifference, TimeFFormatError, TimeNetManifestError
+from timenet.errors import (
+    FormatVersionSubject,
+    ReleaseDifference,
+    TimeFFormatError,
+    TimeFFormatVersionError,
+    TimeNetManifestError,
+)
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
 from timenet.manifest.payload_source import PayloadSource
@@ -20,6 +27,13 @@ from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
+
+TIMEF_FORMAT_VERSION = 1
+"""The maximum TimeF format version this TimeNet package supports.
+
+It versions every file of a release except ``control.duckdb``, which
+:data:`~timenet.format.duckdb.CONTROL_SCHEMA_VERSION` versions.
+"""
 
 GitSHA = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$")]
 """A full SHA-1 git commit id: 40 lowercase hex digits."""
@@ -88,8 +102,8 @@ class Manifest(TimeFModel):
     reads their files too."""
     build_env: BuildEnvironment
     """The Python version, the package set, and the TimeNet commits that produced this version."""
-    timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]
-    """The TimeF manifest format version."""
+    timef_format_version: Annotated[int, Field(strict=True, ge=1, le=TIMEF_FORMAT_VERSION)]
+    """The TimeF format version of the release: every file except ``control.duckdb``, which has its own."""
 
     @model_validator(mode="after")
     def _matching_dataset_id(self) -> Self:
@@ -188,12 +202,30 @@ def parse_manifest(text: str | bytes, where: str, *, path: Path | None = None) -
         The manifest.
 
     Raises:
+        TimeFFormatVersionError: If the manifest uses a newer format than this TimeNet reads.
         TimeNetManifestError: If the text is not a valid manifest.
     """
     try:
         return Manifest.model_validate_json(text)
     except ValidationError as error:
+        # A newer format usually adds fields too. Its version explains every other error, so it comes first.
+        found = _format_version(text)
+        if found is not None and found > TIMEF_FORMAT_VERSION:
+            raise TimeFFormatVersionError(
+                FormatVersionSubject.TIMEF_FORMAT, where, found, TIMEF_FORMAT_VERSION
+            ) from error
         raise TimeNetManifestError(where, _first_problem(error), path) from error
+
+
+def _format_version(text: str | bytes) -> int | None:
+    """Return the integer ``timef_format_version`` of a JSON object, or ``None`` if it has none."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    version = data.get("timef_format_version") if isinstance(data, dict) else None
+    # A bool is an int in Python, but not a format version.
+    return version if type(version) is int else None
 
 
 def read_manifest(path: Path) -> Manifest:
@@ -207,6 +239,7 @@ def read_manifest(path: Path) -> Manifest:
 
     Raises:
         TimeFFormatError: If the file cannot be read.
+        TimeFFormatVersionError: If the manifest uses a newer format than this TimeNet reads.
         TimeNetManifestError: If the file is not a valid manifest.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_manifest
     try:

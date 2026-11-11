@@ -19,7 +19,13 @@ from timenet.client import TimeNet
 from timenet.config import settings
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError, TimeNetFileError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFFormatVersionError,
+    TimeFReaderError,
+    TimeFValidationError,
+    TimeNetFileError,
+)
 from timenet.format.checksums import file_checksum
 import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
@@ -545,7 +551,10 @@ def test_unsupported_format_version_raises(tmp_path, format_version):
     manifest = json.loads(manifest_path.read_text())
     manifest["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(TimeFFormatError, match="is not a valid manifest: timef_format_version"):
+    with pytest.raises(
+        TimeFFormatVersionError,
+        match=f"uses TimeF format version {format_version}, but the newest that this timenet reads is 1",
+    ):
         open_local_version(version_dir)
 
 

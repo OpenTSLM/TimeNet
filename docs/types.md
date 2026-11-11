@@ -304,6 +304,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
 | `TimeNetManifestError` | A stored manifest is not a valid manifest. `where` names the file or the place in a registry, and `detail` names the first problem. `path` is the file, or `None` for a manifest that a registry served. A `TimeFFormatError`. |
+| `TimeFFormatVersionError` | A stored manifest or control database has a newer format version than this TimeNet reads. `subject` is a `FormatVersionSubject` that names the version, `found` is the stored version, and `supported` is the newest version that this TimeNet reads. A `TimeFFormatError`. |
 | `TimeNetOriginError` | The provenance record of a release in the local registry is not valid. `release` names the release, `path` the file, and `detail` the first problem. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
@@ -317,7 +318,7 @@ Pydantic `ValidationError` reports field and schema errors in a dataset card. Th
 native field location and details.
 
 `Manifest.model_validate_json()` uses the same error for invalid JSON and invalid fields. A registry
-that reads a stored manifest raises `TimeNetManifestError` instead.
+that reads a stored manifest raises `TimeNetManifestError` or `TimeFFormatVersionError` instead.
 
 `TimeFValidationError` also subclasses `ValueError`. Existing input-validation handlers can catch it
 without losing the TimeNet-specific error type.
