@@ -22,7 +22,7 @@ import pyarrow.parquet as pq
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, TimeSeriesSpec
+from timenet.types import Annotation, ScalarPredictionTask, Split, TimeInterval, TimeSeriesSpec
 from timenet.types.clock import TimeOrigin, offset_us
 from timenet.types.specs import MissingReason, MissingValues
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
@@ -87,6 +87,14 @@ CFTC_COLUMNS = (
     "nonrept_long",
     "nonrept_short",
 )
+
+HORIZONS_MONTHS = (1, 3, 6, 12)
+TASK_ORIGIN_MONTHS = ("2000-01", "2025-12")
+"""First and last origin month of the production forecasting tasks."""
+SLOWEST_LAG_MONTHS = 4
+"""The stored scope is sealed at the slowest publication lag, so an unaware consumer never sees a leak."""
+SPLITS = ((Split("train"), "2018-12"), (Split("validation"), "2021-12"), (Split("test"), "2026-10"))
+"""Split by TARGET month: train through 2018-12, val through 2021-12, test through 2026-10."""
 
 NOT_RECORDED = MissingValues(
     reason=MissingReason.NOT_RECORDED, description="The source reported no value for the step."
@@ -414,11 +422,95 @@ def _steo_records(path: Path) -> list[Record]:
     return records
 
 
+def _month(year: int, month: int, delta: int = 0) -> tuple[int, int]:
+    """Return (year, month) shifted by ``delta`` months."""
+    index = year * 12 + (month - 1) + delta
+    return index // 12, index % 12 + 1
+
+
+def _month_key(year: int, month: int) -> str:
+    """Return the ``YYYY-MM`` key of a month."""
+    return f"{year}-{month:02d}"
+
+
+def _split_of(month_key: str) -> Split | None:
+    """Return the split a target month falls in, or ``None`` past the last test month."""
+    for split, last in SPLITS:
+        if month_key <= last:
+            return split
+    return None
+
+
+def _month_start_us(year: int, month: int) -> int:
+    """Return the offset of 00:00 UTC on the first day of a month."""
+    return offset_us(datetime(year, month, 1, tzinfo=UTC), ORIGIN.timestamp)
+
+
+def _production_tasks(dataset: TimeFDataset, panel: Record, production: pa.Table) -> int:
+    """Add the keyless task family: US crude production ``h`` months ahead, from the sealed panel.
+
+    One ``ScalarPredictionTask`` per (origin month, horizon). The scope ends, exclusive, at the first
+    day of the month after the information month minus the slowest publication lag, so a consumer
+    that honours ``scope`` and nothing else sees no value that was unpublished at the origin. The
+    split is by target month; a task whose origin and target fall in different splits is dropped.
+
+    Returns:
+        The number of tasks added.
+    """
+    offsets = _us(production["period_start"])
+    values = production["value"].cast(pa.float64()).to_numpy(zero_copy_only=False)
+    by_month: dict[str, float] = {}
+    for moment, value in zip(
+        production["period_start"].cast(pa.timestamp("us", tz="UTC")).to_pylist(), values, strict=True
+    ):
+        if np.isfinite(value):
+            by_month[_month_key(moment.year, moment.month)] = float(value)
+    del offsets
+    first_year, first_month = (int(part) for part in TASK_ORIGIN_MONTHS[0].split("-"))
+    last_key = TASK_ORIGIN_MONTHS[1]
+    source = dataset.annotate(
+        Annotation(
+            key="target_source", value="EIA MCRFPUS2, US field production of crude oil, thousand barrels per day"
+        )
+    )
+    added = 0
+    year, month = first_year, first_month
+    while _month_key(year, month) <= last_key:
+        origin_key = _month_key(year, month)
+        origin_split = _split_of(origin_key)
+        cutoff = _month_start_us(*_month(year, month, 1 - SLOWEST_LAG_MONTHS))
+        for horizon in HORIZONS_MONTHS:
+            target_key = _month_key(*_month(year, month, horizon))
+            target = by_month.get(target_key)
+            split = _split_of(target_key)
+            if target is None or split is None or split != origin_split:
+                continue
+            dataset.add_task(
+                task=ScalarPredictionTask(
+                    inputs=(panel,),
+                    scope=TimeInterval.micros(0, cutoff),
+                    targets=(target,),
+                    target_name="us_crude_production",
+                    split=split,
+                    input_annotations=(source,),
+                    metadata={
+                        "information_month": origin_key,
+                        "target_month": target_key,
+                        "horizon_months": horizon,
+                        "sealed_through": _month_key(*_month(year, month, -SLOWEST_LAG_MONTHS)),
+                    },
+                )
+            )
+            added += 1
+        year, month = _month(year, month, 1)
+    return added
+
+
 class OilFundamentalsConnector(BaseHuggingFaceConnector):
     """Connector for the ``sethlei/oil-fundamentals`` panel (Hub repo ``sethlei/oil-fundamentals``)."""
 
     HF_REPO = "sethlei/oil-fundamentals"
-    SOURCE_REVISION = "4ab90c986788045d85fdaf2a3c3b4350fe90d2f1"
+    SOURCE_REVISION = "1e2d54c92f010abdac25101aaef9ee60854aa971"
     SOURCE_FILES: ClassVar[Mapping[str, str]] = {
         "stocks": "data/eia_us_crude_stocks_weekly.parquet",
         "production": "data/eia_us_crude_production_monthly.parquet",
@@ -437,7 +529,7 @@ class OilFundamentalsConnector(BaseHuggingFaceConnector):
             raw_refs: The eight Parquet tables from :meth:`download`.
 
         Returns:
-            The populated :class:`~timenet.dataset.TimeFDataset`. It has no tasks.
+            The populated :class:`~timenet.dataset.TimeFDataset`, with the production forecasting tasks.
         """
         paths = self.ref_paths(raw_refs, *self.SOURCE_FILES)
         dataset = TimeFDataset(metadata=self.metadata())
@@ -458,6 +550,7 @@ class OilFundamentalsConnector(BaseHuggingFaceConnector):
         )
         for record in _steo_records(paths["steo"]):
             dataset.add_record(record=record)
+        _production_tasks(dataset, panel, _read(paths["production"], ["period_start", "value"]))
         dataset.annotate(
             Annotation(
                 key="price_series",

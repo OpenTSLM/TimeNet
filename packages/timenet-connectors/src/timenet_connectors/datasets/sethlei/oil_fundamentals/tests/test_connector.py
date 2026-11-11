@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset.axis import RegularAxis
+from timenet.types import Split, TimeInterval
 from timenet.types.clock import offset_us
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.sethlei.oil_fundamentals import OilFundamentalsConnector
@@ -126,7 +127,20 @@ def test_convert_builds_panel_and_vintages(refs: list[HubFileRef]) -> None:
     vintages = records[1:]
     assert [record.metadata["pub_month"] for record in vintages] == ["2020-01", "2020-02"]
     assert vintages[0].sources[0].signals[0].n_values == 2
-    assert dataset.tasks == ()
+    # The fixture holds production for 2020-01 and 2020-02, so every origin whose target lands on one
+    # of those months gets a task: origins 2019-01/02 (h=12), 2019-07/08 (h=6), 2019-10/11 (h=3),
+    # 2019-12 and 2020-01 (h=1). All origins and targets are in the validation split, so none is dropped.
+    tasks = dataset.tasks
+    assert len(tasks) == 8
+    assert {task.split for task in tasks} == {Split("validation")}
+    (task,) = [task for task in tasks if task.metadata["information_month"] == "2020-01"]
+    assert task.split == Split("validation")
+    assert task.targets == (12700.0,)
+    assert task.metadata["information_month"] == "2020-01"
+    assert task.metadata["target_month"] == "2020-02"
+    assert task.metadata["sealed_through"] == "2019-09"
+    assert isinstance(task.scope, TimeInterval)
+    assert task.scope.end_us == offset_us(datetime(2019, 10, 1, tzinfo=UTC), ORIGIN.timestamp)
 
 
 def test_every_signal_carries_provenance(refs: list[HubFileRef]) -> None:
