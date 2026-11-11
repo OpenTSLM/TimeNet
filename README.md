@@ -19,7 +19,7 @@ framework.
 >
 > [![TimeNet Online Hackathon](https://i.imgur.com/coD5x4b.png)](https://challenge.timenet.ai/)
 >
-> **TimeNet Online Hackathon.** Pick a time-series problem, onboard a dataset onto TimeNet, then train or fine-tune an ML model (e.g., a Time-Series Language Model such as [OpenTSLM](https://github.com/OpenTSLM/OpenTSLM)) on it.
+> **TimeNet Online Hackathon is live.** Pick a time-series problem, onboard a dataset in TimeNet format, then train or fine-tune a Temporal AI Model (e.g. [OpenTSLM](https://github.com/OpenTSLM/OpenTSLM)) to explore what it can do. Choose any use case, from forecasting and classification to explanation, reasoning and beyond.
 >
 > **Register here:** [challenge.timenet.ai](https://challenge.timenet.ai/)
 
