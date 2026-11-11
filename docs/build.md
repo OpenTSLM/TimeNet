@@ -135,7 +135,7 @@ A remote registry holds only releases with access declared `open`. Before
 `timenet.publish()` copies anything to such a registry, it checks the card and the lineage of each
 release.
 
-## Committed code for remote registries
+## Clean code provenance for remote registries
 
 The manifest of a release records the git commit of the TimeNet code that built it, and whether that
 code had local changes (see [`build_env.git`](manifest.md)). A remote registry holds only releases

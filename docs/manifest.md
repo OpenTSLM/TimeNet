@@ -85,7 +85,7 @@ example, git is not on `PATH`, git fails in the checkout, or a plain `uv build` 
 so the package has no `_build_info.json`.
 
 A remote registry accepts only a release whose packages all record `contains_local_changes` as
-`false`. See [Committed code for remote registries](build.md#committed-code-for-remote-registries).
+`false`. See [Clean code provenance for remote registries](build.md#clean-code-provenance-for-remote-registries).
 
 The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a

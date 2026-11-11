@@ -69,7 +69,7 @@ def copy_release(  # ruff: ignore[too-many-arguments]
     ]
     _check_access(manifests, set(pending), source, dest)
     for ref in pending:
-        dest.require_committed_code(manifests[ref])
+        dest.require_clean_code_provenance(manifests[ref])
     if not pending:
         return ()
     # Only a copy from a non-local source to a non-local dest downloads into this directory, each

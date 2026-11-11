@@ -70,11 +70,11 @@ class LocalRegistry(WritableRegistry):
         return self._root
 
     @property
-    def requires_committed_code(self) -> bool:
-        """Whether local releases must record committed code.
+    def requires_clean_code_provenance(self) -> bool:
+        """Whether this registry refuses releases built from locally modified TimeNet code.
 
         Returns:
-            ``False``, since a local registry accepts a build with local changes.
+            ``False``, since a local registry takes any release.
         """
         return False
 
