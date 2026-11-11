@@ -2,11 +2,6 @@
 
 *Find, build, and load time-series datasets through one shared format.*
 
-> [!TIP]
-> [![TimeNet Online Hackathon](https://i.imgur.com/coD5x4b.png)](https://challenge.timenet.ai/)
->
-> **TimeNet Online Hackathon (November 2026, round 1 closes Nov 22).** Pick a time-series problem, onboard a dataset in TimeNet format, then train or fine-tune a Time-Series Language Model to forecast, classify, or detect anomalies. Teams of 2-4 can register at [challenge.timenet.ai](https://challenge.timenet.ai/).
-
 > [!NOTE]
 > TimeNet is a pre-release project. Its public API and the TimeF format can change before 1.0.
 
@@ -19,6 +14,12 @@ provides one API to find, build, download, and load them.
 
 TimeNet handles the data layer. Model training, inference, and evaluation stay in your chosen
 framework.
+
+> ### TimeNet Hackathon
+>
+> [![TimeNet Online Hackathon](https://i.imgur.com/coD5x4b.png)](https://challenge.timenet.ai/)
+>
+> **TimeNet Online Hackathon (November 2026, round 1 closes Nov 22).** Pick a time-series problem, onboard a dataset in TimeNet format, then train or fine-tune a Time-Series Language Model to forecast, classify, or detect anomalies. Teams of 2-4 can register at [challenge.timenet.ai](https://challenge.timenet.ai/).
 
 ## Quick start
 
