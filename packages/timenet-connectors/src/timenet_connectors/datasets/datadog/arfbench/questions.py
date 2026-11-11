@@ -1,15 +1,16 @@
-"""The ARFBench question table: 750 multiple-choice questions, each a series task and a chart task."""
+"""The ARFBench question table: 750 multiple-choice questions, each a series task or a chart task."""
 
 from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import json
 from typing import TYPE_CHECKING, Self, TypeVar
 
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, AnswerTask, InputModality, Split
+from timenet.types import Annotation, ClassificationTask, InputModality, Label, LabelSet, Split
 
 
 if TYPE_CHECKING:
@@ -107,6 +108,15 @@ def _parse_answer_options(cell: str) -> tuple[str, ...]:
     return tuple(options)
 
 
+def _label_set_name(options: tuple[str, ...]) -> str:
+    """Name a label set by its options, so that equal option lists share one set.
+
+    Returns:
+        ``options_`` and the first 8 hex digits of the SHA-256 of the options as a JSON list.
+    """
+    return "options_" + hashlib.sha256(json.dumps(options).encode()).hexdigest()[:8]
+
+
 @dataclass(frozen=True)
 class ARFBenchQuestion:
     """One row of the question table: a multiple-choice question about one or two metrics."""
@@ -167,7 +177,7 @@ class ARFBenchQuestion:
             return self.cited_metrics
         return ("-".join(self.cited_metrics), *self.cited_metrics)
 
-    def create_series_task(self, metric_records: Mapping[str, Record]) -> AnswerTask:
+    def create_series_task(self, metric_records: Mapping[str, Record]) -> ClassificationTask:
         """Create the task that asks the question about the cited metric records.
 
         Args:
@@ -185,7 +195,7 @@ class ARFBenchQuestion:
         inputs = tuple(metric_records[metric] for metric in self.cited_metrics)
         return self._create_task(inputs, InputModality.TIME_SERIES)
 
-    def create_chart_task(self, chart_records: Mapping[str, Record]) -> AnswerTask:
+    def create_chart_task(self, chart_records: Mapping[str, Record]) -> ClassificationTask:
         """Create the task that asks the question about the released charts.
 
         Args:
@@ -203,25 +213,29 @@ class ARFBenchQuestion:
         inputs = tuple(chart_records[stem] for stem in self.chart_stems())
         return self._create_task(inputs, InputModality.IMAGE)
 
-    def _create_task(self, inputs: tuple[Record, ...], modality: InputModality) -> AnswerTask:
-        """Create a test task with the question as prompt and the correct answer as target.
+    def _create_task(self, inputs: tuple[Record, ...], modality: InputModality) -> ClassificationTask:
+        """Create a test task that asks for the correct answer from the options of the question.
 
-        Both tasks of a question carry its row index in their metadata, so a consumer can pair
-        them. The question's annotations describe it, and the interpolation flags describe what
-        an engineer saw. Nothing here interpolates.
+        The options are the label set of the task. The set is named after a hash of the options, so
+        questions with the same options share one set. The row index in the metadata pairs the
+        series task with the chart task of ``datadog/arfbench-charts``. The interpolation flags
+        describe what an engineer saw. This method does not interpolate.
 
         Returns:
             The task, not yet added to a dataset.
         """
-        task = AnswerTask(
+        task = ClassificationTask(
             inputs=inputs,
             prompt=self.question,
             targets=(self.correct_answer,),
             input_modalities=frozenset({InputModality.TEXT, modality}),
             split=Split.TEST,
             metadata={"question_index": self.index},
+            label_set=LabelSet(
+                name=_label_set_name(self.answer_options),
+                labels=tuple(Label(name=option) for option in self.answer_options),
+            ),
         )
-        task.annotate(Annotation(key="answer_options", value=list(self.answer_options)))
         task.annotate(Annotation(key="task_category", value=self.task_category.value))
         task.annotate(Annotation(key="difficulty", value=self.difficulty.value))
         task.annotate(Annotation(key="interpolate_1", value=self.interpolate_1))
