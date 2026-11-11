@@ -1,5 +1,9 @@
 name: Publish to PyPI
 
+# Uploads the wheel and the sdist that release.yml built and attached to the GitHub release of a
+# <package>-vX.Y.Z tag. It does not build. release.yml starts the TestPyPI run, and a successful
+# TestPyPI run starts the PyPI run of the same tag.
+
 on:
   workflow_dispatch:
     inputs:
@@ -21,8 +25,8 @@ on:
           - timenet
           - timenet-connectors
       ref:
-        description: Release tag to build, for example timenet-v0.12.0. Leave empty to build the branch above.
-        required: false
+        description: Release tag to publish, for example timenet-v0.12.0
+        required: true
         type: string
 
 run-name: Publish ${{ inputs.package }} ${{ inputs.ref }} to ${{ inputs.target }}
@@ -43,47 +47,41 @@ jobs:
       # tokens are stored as repo secrets.
       id-token: write
       contents: read
-      # Start the PyPI run after a TestPyPI run of a release tag.
+      # Start the PyPI run after a TestPyPI run.
       actions: write
     steps:
-      - name: Guard PyPI to main
+      - name: Guard to main
         run: |
           echo "Branch: $BRANCH_NAME"
-          if [ "${{ inputs.target }}" = "PyPI" ] && [ "$BRANCH_NAME" != "main" ]; then
-            echo "::error title=Invalid branch::PyPI releases must come from main."
+          if [ "$BRANCH_NAME" != "main" ]; then
+            echo "::error title=Invalid branch::Run publish.yml from main."
             exit 1
           fi
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          # A tag, or the exact commit the run was started on, not the branch tip at approval time.
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
       - name: Guard the release tag
-        if: inputs.ref != ''
         env:
           REF: ${{ inputs.ref }}
         run: |
           if ! [[ "$REF" =~ ^(timenet|timenet-connectors)-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git merge-base --is-ancestor HEAD origin/main; then
-            echo "::error title=Invalid ref::Build only a <package>-vX.Y.Z tag on main, not '$REF'."
+            echo "::error title=Invalid ref::Publish only a <package>-vX.Y.Z tag on main, not '$REF'."
             exit 1
           fi
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
-      - name: Guard the release versions
+      - name: Download the release files
+        # Each published package needs its own tag on this commit, and the files its GitHub
+        # release holds: one wheel and one sdist at the tagged version, nothing else.
         env:
-          REF: ${{ inputs.ref }}
-          TARGET: ${{ inputs.target }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PACKAGE: ${{ inputs.package }}
         run: |
-          if [ -z "$REF" ]; then
-            if [ "$TARGET" = PyPI ]; then
-              echo "::error title=No release tag::Publish to PyPI from a <package>-vX.Y.Z tag. Set the ref input."
-              exit 1
-            fi
-            exit 0
-          fi
           if [ "$PACKAGE" = both ]; then packages="timenet timenet-connectors"; else packages=$PACKAGE; fi
+          expected=()
           for package in $packages; do
             version=$(uv version --package "$package" --short)
             tag="$package-v$version"
@@ -91,62 +89,25 @@ jobs:
               echo "::error title=Not released::$package is at $version, but $tag does not point at this commit. Release it first."
               exit 1
             fi
+            gh release download "$tag" --dir dist
+            expected+=("${package//-/_}-$version-py3-none-any.whl" "${package//-/_}-$version.tar.gz")
           done
-      - name: Build
-        # build_dists.py records the commit inside each package, so a build can name its code.
-        run: |
-          if [ "${{ inputs.package }}" = "both" ]; then
-            uv run scripts/build_dists.py --all-packages
-          else
-            uv run scripts/build_dists.py --package "${{ inputs.package }}"
+          if [ "$(ls dist | sort)" != "$(printf '%s\n' "${expected[@]}" | sort)" ]; then
+            echo "::error title=Unexpected files::The releases hold $(ls dist | xargs), expected ${expected[*]}."
+            exit 1
           fi
-      - name: Smoke test built artifacts
-        # Import each built wheel and sdist in an isolated environment to catch missing files or
-        # broken metadata before uploading. Each artifact must also report this commit, clean, as
-        # the code it was built from. timenet-connectors depends on timenet, so hand it the
-        # wheel we just built when it is present (a `both` run); otherwise timenet resolves from the
-        # default index, which requires it to be published already.
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          timenet_whl=(dist/timenet-*.whl)
-          # The checked-out commit: the release tag's commit, or GITHUB_SHA without a ref.
-          expected_sha=$(git rev-parse HEAD)
-          smoke() {
-            local module="$1" dist="$2"; shift 2
-            local args=() artifact
-            for artifact in "$@"; do args+=(--with "$artifact"); done
-            echo "::group::import $module"
-            uv run --isolated --no-project "${args[@]}" \
-              python -c "import $module; print('smoke ok:', $module.__name__)"
-            uv run --isolated --no-project "${args[@]}" python -c "
-          from timenet.manifest import GitSource
-          from timenet.provenance import PackageSnapshot
-          commit = PackageSnapshot.read('$dist').source
-          expected = GitSource(sha='$expected_sha', contains_local_changes=False)
-          assert commit == expected, f'$dist records {commit}, expected {expected}'
-          print('commit ok:', commit)"
-            echo "::endgroup::"
-          }
-          for artifact in dist/*; do
-            case "$artifact" in
-              dist/timenet-*.whl | dist/timenet-*.tar.gz)
-                smoke timenet timenet "$artifact" ;;
-              dist/timenet_connectors-*.whl | dist/timenet_connectors-*.tar.gz)
-                smoke timenet_connectors timenet-connectors ${timenet_whl[@]+"${timenet_whl[@]}"} "$artifact" ;;
-            esac
-          done
+          ls -l dist
       - name: Publish
         run: |
           if [ "${{ inputs.target }}" = "TestPyPI" ]; then
-            uv publish --publish-url https://test.pypi.org/legacy/
+            uv publish --publish-url https://test.pypi.org/legacy/ dist/*
           else
-            uv publish
+            uv publish dist/*
           fi
       - name: Start the PyPI run
-        # A TestPyPI run of a release tag starts the PyPI run of the same tag, which waits for
-        # approval. So PyPI can only be approved after TestPyPI took the same files.
-        if: inputs.target == 'TestPyPI' && inputs.ref != ''
+        # A TestPyPI run starts the PyPI run of the same tag, which waits for approval. So PyPI
+        # can only be approved after TestPyPI took the same files.
+        if: inputs.target == 'TestPyPI'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

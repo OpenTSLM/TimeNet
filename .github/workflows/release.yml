@@ -6,10 +6,11 @@ name: Release
 # shared connector code (.github/scripts/connector_notes.py).
 #   1. Run this workflow on main and pick the package. It opens a release PR that sets the version
 #      and shows the notes.
-#   2. Merge the release PR. For every package whose version the PR changed, this tags
-#      <package>-vX.Y.Z and creates a GitHub release. It starts a TestPyPI run of publish.yml,
-#      which waits for approval in the pypi environment, and opens a PR that moves the released
-#      packages to their next development version, X.(Y+1).0.dev0.
+#   2. Merge the release PR. For every package whose version the PR changed, this builds and
+#      smoke-tests the wheel and the sdist, tags <package>-vX.Y.Z, and creates a GitHub release
+#      with the two files attached. It starts a TestPyPI run of publish.yml, which waits for
+#      approval in the pypi environment, and opens a PR that moves the released packages to their
+#      next development version, X.(Y+1).0.dev0.
 #   3. Approve the TestPyPI run. Once it has uploaded, it starts the PyPI run, which waits for
 #      approval too. Check TestPyPI, approve the PyPI run, then merge the development-version PR.
 # Releasing both raises the timenet floor of timenet-connectors to the new timenet version.
@@ -231,6 +232,50 @@ jobs:
             exit 1
           fi
           echo "released=${released[*]}" >> "$GITHUB_OUTPUT"
+      - name: Build
+        # build_dists.py records the commit inside each package, so a build can name its code.
+        env:
+          RELEASED: ${{ steps.released.outputs.released }}
+        run: |
+          for entry in $RELEASED; do
+            uv run scripts/build_dists.py --package "${entry%=*}"
+          done
+      - name: Smoke test built artifacts
+        # Import each built wheel and sdist in an isolated environment to catch missing files or
+        # broken metadata before uploading. Each artifact must also report this commit, clean, as
+        # the code it was built from. timenet-connectors depends on timenet, so hand it the
+        # wheel we just built when it is present (a `both` run); otherwise timenet resolves from the
+        # default index, which requires it to be published already.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          timenet_whl=(dist/timenet-*.whl)
+          # The merge commit that the tags point at.
+          expected_sha=$(git rev-parse HEAD)
+          smoke() {
+            local module="$1" dist="$2"; shift 2
+            local args=() artifact
+            for artifact in "$@"; do args+=(--with "$artifact"); done
+            echo "::group::import $module"
+            uv run --isolated --no-project "${args[@]}" \
+              python -c "import $module; print('smoke ok:', $module.__name__)"
+            uv run --isolated --no-project "${args[@]}" python -c "
+          from timenet.manifest import GitSource
+          from timenet.provenance import PackageSnapshot
+          commit = PackageSnapshot.read('$dist').source
+          expected = GitSource(sha='$expected_sha', contains_local_changes=False)
+          assert commit == expected, f'$dist records {commit}, expected {expected}'
+          print('commit ok:', commit)"
+            echo "::endgroup::"
+          }
+          for artifact in dist/*; do
+            case "$artifact" in
+              dist/timenet-*.whl | dist/timenet-*.tar.gz)
+                smoke timenet timenet "$artifact" ;;
+              dist/timenet_connectors-*.whl | dist/timenet_connectors-*.tar.gz)
+                smoke timenet_connectors timenet-connectors ${timenet_whl[@]+"${timenet_whl[@]}"} "$artifact" ;;
+            esac
+          done
       - name: Tag and create the GitHub releases
         env:
           GH_TOKEN: ${{ github.token }}
@@ -266,6 +311,14 @@ jobs:
               fi
               gh release create "$tag" --verify-tag --title "$package $version" --notes-file "$RUNNER_TEMP/notes.md"
             fi
+            # Attach the wheel and the sdist. A re-run uploads only the files that are missing, so
+            # the files a publish run may already have taken stay as they are.
+            attached=$(gh release view "$tag" --json assets --jq '.assets[].name')
+            for file in "dist/${package//-/_}-$version"-*.whl "dist/${package//-/_}-$version".tar.gz; do
+              if ! grep -qxF "$(basename "$file")" <<< "$attached"; then
+                gh release upload "$tag" "$file"
+              fi
+            done
           done
       - name: Start the TestPyPI publish run
         env:
