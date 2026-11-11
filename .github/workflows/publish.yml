@@ -21,7 +21,7 @@ on:
           - timenet
           - timenet-connectors
       ref:
-        description: Release tag to build, for example v0.12.0. Leave empty to build the branch above.
+        description: Release tag to build, for example timenet-v0.12.0. Leave empty to build the branch above.
         required: false
         type: string
 
@@ -62,25 +62,31 @@ jobs:
         env:
           REF: ${{ inputs.ref }}
         run: |
-          if ! [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git merge-base --is-ancestor HEAD origin/main; then
-            echo "::error title=Invalid ref::Build only a vX.Y.Z tag on main, not '$REF'."
+          if ! [[ "$REF" =~ ^(timenet|timenet-connectors)-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error title=Invalid ref::Build only a <package>-vX.Y.Z tag on main, not '$REF'."
             exit 1
           fi
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
-      - name: Guard PyPI to release versions
-        if: inputs.target == 'PyPI'
+      - name: Guard the release versions
         env:
           REF: ${{ inputs.ref }}
+          TARGET: ${{ inputs.target }}
+          PACKAGE: ${{ inputs.package }}
         run: |
           if [ -z "$REF" ]; then
-            echo "::error title=No release tag::Publish to PyPI from a vX.Y.Z tag. Set the ref input."
-            exit 1
+            if [ "$TARGET" = PyPI ]; then
+              echo "::error title=No release tag::Publish to PyPI from a <package>-vX.Y.Z tag. Set the ref input."
+              exit 1
+            fi
+            exit 0
           fi
-          for package in timenet timenet-connectors; do
+          if [ "$PACKAGE" = both ]; then packages="timenet timenet-connectors"; else packages=$PACKAGE; fi
+          for package in $packages; do
             version=$(uv version --package "$package" --short)
-            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error title=Development version::$package is at $version. Publish a release tag instead."
+            tag="$package-v$version"
+            if [ "$(git rev-parse -q --verify "refs/tags/$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
+              echo "::error title=Not released::$package is at $version, but $tag does not point at this commit. Release it first."
               exit 1
             fi
           done

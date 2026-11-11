@@ -1,12 +1,18 @@
 name: Release
 
-# Releases both packages in lockstep, in three steps:
-#   1. Run this workflow on main. It opens a release PR that sets the version and shows the notes.
-#   2. Merge the release PR. This tags vX.Y.Z, creates the GitHub release, starts a TestPyPI and
-#      a PyPI run of publish.yml for the tag (each waits for approval in the pypi environment), and
-#      opens a PR that moves main to the next development version, X.(Y+1).0.dev0.
+# Releases timenet, timenet-connectors, or both. Each package has its own version and its own tag,
+# <package>-vX.Y.Z, and its notes list the commits that touched its folder under packages/.
+#   1. Run this workflow on main and pick the package. It opens a release PR that sets the version
+#      and shows the notes.
+#   2. Merge the release PR. For every package whose version the PR changed, this tags
+#      <package>-vX.Y.Z and creates a GitHub release. It starts a TestPyPI and a PyPI run of
+#      publish.yml (each waits for approval in the pypi environment), and opens a PR that moves the
+#      released packages to their next development version, X.(Y+1).0.dev0.
 #   3. Approve the TestPyPI run and check the result, approve the PyPI run, then merge the
 #      development-version PR.
+# Releasing both raises the timenet floor of timenet-connectors to the new timenet version.
+# Releasing one package alone keeps the floor. The release PR warns when the other package has
+# changes that the release leaves out.
 # The version is fixed when the release PR opens. If main gets changes that need a bigger bump
 # before you merge it, close the release PR and run this workflow again.
 # Every job can be re-run: steps that already happened are skipped.
@@ -20,6 +26,15 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: Package to release
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - timenet
+          - timenet-connectors
       version:
         description: Version to release, for example 0.12.0. Leave empty to compute it from the commits.
         required: false
@@ -41,7 +56,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (github.event.pull_request.merged == true
           && github.event.pull_request.head.repo.full_name == github.repository
-          && startsWith(github.event.pull_request.head.ref, 'release/v'))
+          && startsWith(github.event.pull_request.head.ref, 'release/timenet'))
     runs-on: ubuntu-latest
     steps:
       - name: Allow only admins and maintainers
@@ -78,58 +93,97 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
       - uses: astral-sh/setup-uv@v8.2.0
-      - name: Choose the version
-        id: version
+      - name: Set the versions and write the notes
+        id: versions
         env:
+          PACKAGE: ${{ inputs.package }}
           REQUESTED: ${{ inputs.version }}
         run: |
-          version=${REQUESTED:-$(uvx "$GIT_CLIFF" --bumped-version)}
-          version=${version#v}
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=Invalid version::'$version' is not X.Y.Z."
-            exit 1
-          fi
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "::error title=Version exists::Tag v$version already exists."
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Set the version and write the notes
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          for package in timenet timenet-connectors; do
-            uv version --package "$package" "$VERSION" --frozen
+          # The legacy vX.Y.Z tags count as the last release of both packages.
+          cliff() {
+            local package=$1; shift
+            uvx "$GIT_CLIFF" --include-path "packages/$package/**" \
+              --tag-pattern "^($package-)?v[0-9]+\.[0-9]+\.[0-9]+$" "$@"
+          }
+          if [ "$PACKAGE" = both ]; then packages="timenet timenet-connectors"; else packages=$PACKAGE; fi
+          titles=() tags=()
+          : > "$RUNNER_TEMP/notes.md"
+          for package in $packages; do
+            version=${REQUESTED:-$(cliff "$package" --bumped-version)}
+            version=${version##*v}
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error title=Invalid version::'$version' is not X.Y.Z."
+              exit 1
+            fi
+            for tag in "$package-v$version" "v$version"; do
+              if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+                echo "::error title=Version exists::Tag $tag already exists. Is $package unchanged since then?"
+                exit 1
+              fi
+            done
+            uv version --package "$package" "$version" --frozen
+            {
+              echo "## $package $version"
+              echo
+              cliff "$package" --unreleased --tag "$package-v$version" --strip header
+              echo
+            } >> "$RUNNER_TEMP/notes.md"
+            titles+=("$package $version")
+            tags+=("$package-v$version")
           done
-          # Connectors needs the timenet release that ships with it.
-          sed -i -E "s/\"timenet\[build\]>=[^\"]*\"/\"timenet[build]>=$VERSION\"/" packages/timenet-connectors/pyproject.toml
-          grep -q "\"timenet\[build\]>=$VERSION\"" packages/timenet-connectors/pyproject.toml
+          connectors=packages/timenet-connectors/pyproject.toml
+          if [ "$PACKAGE" = both ]; then
+            # Connectors needs the timenet release that ships with it.
+            timenet=$(uv version --package timenet --short)
+            sed -i -E "s/\"timenet\[build\]>=[^\"]*\"/\"timenet[build]>=$timenet\"/" "$connectors"
+            grep -q "\"timenet\[build\]>=$timenet\"" "$connectors"
+          else
+            # Warn when the other package has changes this release leaves out. Skip the commits
+            # cliff.toml skips too: release and development-version commits.
+            if [ "$PACKAGE" = timenet ]; then other=timenet-connectors; else other=timenet; fi
+            last=$(git describe --tags --abbrev=0 --match "$other-v*" --match 'v*')
+            unreleased=$(git log --format=%s "$last..HEAD" -- "packages/$other" \
+              | grep -cvE '^chore(\(release\)|: start .* development)' || true)
+            if [ "$unreleased" -gt 0 ]; then
+              floor=$(grep -o '"timenet\[build\]>=[^"]*"' "$connectors")
+              {
+                echo "> [!WARNING]"
+                echo "> $other has $unreleased commits since $last that this release leaves out, and"
+                echo "> timenet-connectors keeps $floor. If those commits go with the $PACKAGE changes,"
+                echo "> release both instead."
+                echo
+              } >> "$RUNNER_TEMP/notes.md"
+            fi
+          fi
           uv lock
-          uvx "$GIT_CLIFF" --unreleased --tag "v$VERSION" --strip header --output "$RUNNER_TEMP/notes.md"
+          title="chore(release): $(IFS=,; echo "${titles[*]}" | sed 's/,/, /g')"
+          branch="release/$(IFS=-; echo "${tags[*]}")"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
       - name: Open the release PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TITLE: ${{ steps.versions.outputs.title }}
+          BRANCH: ${{ steps.versions.outputs.branch }}
         run: |
-          branch="release/v$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git commit -am "chore(release): $VERSION"
-          git push --force origin "$branch"
+          git switch -c "$BRANCH"
+          git commit -am "$TITLE"
+          git push --force origin "$BRANCH"
           {
-            echo "Merging this PR tags v$VERSION, creates the GitHub release with the notes below, and"
-            echo "starts the TestPyPI and PyPI publish runs for approval. To change the notes, edit"
+            echo "Merging this PR tags each package below, creates its GitHub release with these notes,"
+            echo "and starts the TestPyPI and PyPI publish runs for approval. To change the notes, edit"
             echo "them in the GitHub release after it is created."
             echo
             echo "---"
             echo
             cat "$RUNNER_TEMP/notes.md"
           } > "$RUNNER_TEMP/body.md"
-          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
-            gh pr edit "$branch" --body-file "$RUNNER_TEMP/body.md"
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
           else
-            gh pr create --base main --head "$branch" --title "chore(release): $VERSION" --body-file "$RUNNER_TEMP/body.md"
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
           fi
 
   release:
@@ -138,60 +192,88 @@ jobs:
       github.event_name == 'pull_request'
       && github.event.pull_request.merged == true
       && github.event.pull_request.head.repo.full_name == github.repository
-      && startsWith(github.event.pull_request.head.ref, 'release/v')
+      && startsWith(github.event.pull_request.head.ref, 'release/timenet')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: write
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      released: ${{ steps.released.outputs.released }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v8.2.0
-      - name: Read the version
-        id: version
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      - name: Find the packages this PR released
+        id: released
         run: |
-          version=$(uv version --package timenet --short)
-          connectors=$(uv version --package timenet-connectors --short)
-          if [ "$version" != "$connectors" ] || [ "release/v$version" != "$HEAD_REF" ]; then
-            echo "::error title=Version mismatch::timenet $version, connectors $connectors, branch $HEAD_REF."
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Tag and create the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tag="v$VERSION"
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            # A re-run: the tag is already pushed. It must point at this release.
-            if [ "$(git rev-parse "$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
-              echo "::error title=Tag mismatch::$tag exists on another commit."
+          released=()
+          for package in timenet timenet-connectors; do
+            version=$(uv version --package "$package" --short)
+            before=$(git show "HEAD^:packages/$package/pyproject.toml" | sed -n -E 's/^version = "(.*)"$/\1/p')
+            if [ "$version" = "$before" ]; then continue; fi
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error title=Invalid version::$package is at $version, not X.Y.Z."
               exit 1
             fi
-          else
-            git tag -a "$tag" -m "TimeNet $VERSION"
-            git push origin "$tag"
+            released+=("$package=$version")
+          done
+          if [ ${#released[@]} -eq 0 ]; then
+            echo "::error title=Nothing to release::This PR changed no package version."
+            exit 1
           fi
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            uvx "$GIT_CLIFF" --latest --strip header --output "$RUNNER_TEMP/notes.md"
-            gh release create "$tag" --verify-tag --title "TimeNet $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
-          fi
+          echo "released=${released[*]}" >> "$GITHUB_OUTPUT"
+      - name: Tag and create the GitHub releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASED: ${{ steps.released.outputs.released }}
+        run: |
+          cliff() {
+            local package=$1; shift
+            uvx "$GIT_CLIFF" --include-path "packages/$package/**" \
+              --tag-pattern "^($package-)?v[0-9]+\.[0-9]+\.[0-9]+$" "$@"
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for entry in $RELEASED; do
+            package=${entry%=*} version=${entry#*=}
+            tag="$package-v$version"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              # A re-run: the tag is already pushed. It must point at this release.
+              if [ "$(git rev-parse "$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
+                echo "::error title=Tag mismatch::$tag exists on another commit."
+                exit 1
+              fi
+            else
+              git tag -a "$tag" -m "$package $version"
+              git push origin "$tag"
+            fi
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              cliff "$package" --latest --strip header --output "$RUNNER_TEMP/notes.md"
+              gh release create "$tag" --verify-tag --title "$package $version" --notes-file "$RUNNER_TEMP/notes.md"
+            fi
+          done
       - name: Start the TestPyPI and PyPI publish runs
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          RELEASED: ${{ steps.released.outputs.released }}
         run: |
+          read -r -a released <<< "$RELEASED"
+          first=${released[0]}
+          package=${first%=*}
+          if [ ${#released[@]} -eq 2 ]; then package=both; fi
+          # Both tags of a release point at the same commit, so either one builds both packages.
+          ref="${first%=*}-v${first#*=}"
           for target in TestPyPI PyPI; do
-            gh workflow run publish.yml --ref main -f target="$target" -f package=both -f ref="v$VERSION"
+            # A re-run: skip a publish run this job already started. Its name comes from publish.yml's run-name.
+            name="Publish $package $ref to $target"
+            if gh run list --workflow publish.yml --event workflow_dispatch --limit 100 --json displayTitle \
+                --jq '.[].displayTitle' | grep -qxF "$name"; then
+              echo "Skipping '$name': it was already started."
+              continue
+            fi
+            gh workflow run publish.yml --ref main -f target="$target" -f package="$package" -f ref="$ref"
           done
 
   next-development-version:
@@ -213,20 +295,25 @@ jobs:
       - name: Open the development version PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASED: ${{ needs.release.outputs.version }}
+          RELEASED: ${{ needs.release.outputs.released }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          for package in timenet timenet-connectors; do
+          names=()
+          for entry in $RELEASED; do
+            package=${entry%=*}
             uv version --package "$package" --bump minor --bump dev=0 --frozen
+            next=$(uv version --package "$package" --short)
+            names+=("$package ${next%.dev0}")
           done
           uv lock
-          next=$(uv version --package timenet --short)
-          branch="chore/start-development-after-v$RELEASED"
+          title="chore: start $(IFS=,; echo "${names[*]}" | sed 's/,/ and /g') development"
+          branch="chore/start-development-after-${HEAD_REF#release/}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
-          git commit -am "chore: start ${next%.dev0} development"
+          git commit -am "$title"
           git push --force origin "$branch"
           if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
-            gh pr create --base main --head "$branch" --title "chore: start ${next%.dev0} development" \
-              --body "Moves both packages to $next, so builds from main are not mistaken for the $RELEASED release."
+            gh pr create --base main --head "$branch" --title "$title" \
+              --body "Moves the released packages to their next development version ($RELEASED released), so builds from main are not mistaken for a release."
           fi
