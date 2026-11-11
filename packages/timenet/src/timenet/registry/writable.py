@@ -88,14 +88,15 @@ class WritableRegistry(BaseRegistry, ABC):
         """
         if not self.requires_clean_code_provenance:
             return
-        try:
-            TimeNetSnapshot.from_source_map(manifest.build_env.git).require_no_local_changes()
-        except TimeNetBuildError as exc:
+        modified = TimeNetSnapshot.from_source_map(manifest.build_env.git).packages_with_local_changes()
+        if modified:
             reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
+            changes = ", ".join(f"{package.package_name} (commit {package.source.sha[:12]})" for package in modified)
             raise TimeNetBuildError(
-                f"{self} does not take releases built from locally modified TimeNet code, so it refuses {reference}: {exc}. "
-                "Commit the changes and build the release again, or keep it in a local registry."
-            ) from exc
+                f"{self} does not take releases built from locally modified TimeNet code, so it refuses {reference}: "
+                f"it records local changes in {changes}. Commit the changes and build the release again, or keep it "
+                "in a local registry."
+            )
 
     def _read_release(self, directory: Path) -> Manifest:
         """Read a release manifest, check the listed file sizes, and refuse a release that this registry does not take.

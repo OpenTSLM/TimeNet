@@ -563,7 +563,7 @@ def test_copy_release_refuses_a_build_with_local_changes_for_a_registry_that_is_
     _write_parent_and_child(root)
     _record_local_changes(root, changed)
     dest, _ = _remote(tmp_path, "dest", token="tok_rw")
-    with pytest.raises(TimeNetBuildError, match=f"refuses {changed}: timenet contains changes that are not in commit"):
+    with pytest.raises(TimeNetBuildError, match=f"refuses {changed}: it records local changes in timenet \\(commit "):
         copy_release(child_ref, LocalRegistry(root), dest)
     assert not dest.exists(*child)
     assert not dest.exists(*parent)  # every check runs before the first copy
@@ -583,6 +583,6 @@ def test_put_release_refuses_a_build_with_local_changes_for_a_registry_that_is_n
     _write_parent_and_child(root)
     _record_local_changes(root, parent_ref)
     dest, _ = _remote(tmp_path, "dest", token="tok_rw")
-    with pytest.raises(TimeNetBuildError, match=f"refuses {parent_ref}: timenet contains changes"):
+    with pytest.raises(TimeNetBuildError, match=f"refuses {parent_ref}: it records local changes in timenet"):
         dest.put_release(release_dir(root, parent_ref))
     assert not dest.exists(*parent)
