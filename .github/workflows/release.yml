@@ -2,13 +2,16 @@ name: Release
 
 # Releases both packages in lockstep, in three steps:
 #   1. Run this workflow on main. It opens a release PR that sets the version and shows the notes.
-#   2. Merge the release PR. This tags vX.Y.Z, creates the GitHub release, starts publish.yml for
-#      the tag (which waits for approval in the pypi environment), and opens a PR that moves main
-#      to the next development version, X.(Y+1).0.dev0.
-#   3. Approve the publish run, then merge the development-version PR.
+#   2. Merge the release PR. This tags vX.Y.Z, creates the GitHub release, starts a TestPyPI and
+#      a PyPI run of publish.yml for the tag (each waits for approval in the pypi environment), and
+#      opens a PR that moves main to the next development version, X.(Y+1).0.dev0.
+#   3. Approve the TestPyPI run and check the result, approve the PyPI run, then merge the
+#      development-version PR.
 # The version is fixed when the release PR opens. If main gets changes that need a bigger bump
 # before you merge it, close the release PR and run this workflow again.
 # Every job can be re-run: steps that already happened are skipped.
+# Only admins and maintainers can start a release, merge the release PR, or re-run a job. If
+# someone else merges the release PR, nothing is tagged until an admin or maintainer re-runs it.
 #
 # Needs a GitHub App with contents and pull-requests write access, installed on this repository,
 # with its id in the RELEASE_APP_ID variable and its key in the RELEASE_APP_PRIVATE_KEY secret.
@@ -32,7 +35,28 @@ env:
   GIT_CLIFF: git-cliff==2.14.2
 
 jobs:
+  authorize:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.merged == true
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && startsWith(github.event.pull_request.head.ref, 'release/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Allow only admins and maintainers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The user who started the run, merged the release PR, or re-ran a job.
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          role=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .role_name)
+          if [ "$role" != admin ] && [ "$role" != maintain ]; then
+            echo "::error title=Not allowed::$ACTOR has the $role role. Only admins and maintainers can release."
+            exit 1
+          fi
+
   prepare:
+    needs: authorize
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -108,6 +132,7 @@ jobs:
           fi
 
   release:
+    needs: authorize
     if: >-
       github.event_name == 'pull_request'
       && github.event.pull_request.merged == true
@@ -159,11 +184,14 @@ jobs:
             uvx "$GIT_CLIFF" --latest --strip header --output "$RUNNER_TEMP/notes.md"
             gh release create "$tag" --verify-tag --title "TimeNet $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
           fi
-      - name: Start the PyPI publish run
+      - name: Start the TestPyPI and PyPI publish runs
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: gh workflow run publish.yml --ref main -f target=PyPI -f package=both -f ref="v$VERSION"
+        run: |
+          for target in TestPyPI PyPI; do
+            gh workflow run publish.yml --ref main -f target="$target" -f package=both -f ref="v$VERSION"
+          done
 
   next-development-version:
     needs: release
