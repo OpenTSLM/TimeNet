@@ -10,6 +10,10 @@ body = """
 {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
 {{ commit.message | split(pat="\n") | first | trim | upper_first }}
 {%- endmacro -%}
+{% if version %}{% set v = version | trim_start_matches(pat="v") %}
+[![timenet {{ v }}](https://img.shields.io/badge/timenet-{{ v }}-blue?logo=pypi&logoColor=white)](https://pypi.org/project/timenet/{{ v }}/) \
+[![timenet-connectors {{ v }}](https://img.shields.io/badge/timenet--connectors-{{ v }}-blue?logo=pypi&logoColor=white)](https://pypi.org/project/timenet-connectors/{{ v }}/)
+{% endif %}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
 {% for commit in commits | filter(attribute="breaking", value=true) %}
@@ -33,6 +37,10 @@ topo_order = false
 sort_commits = "newest"
 protect_breaking_commits = true
 filter_commits = false
+# Link PR numbers explicitly, so they also work outside this repository's GitHub pages.
+commit_preprocessors = [
+  { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/OpenTSLM/TimeNet/pull/${1}))" },
+]
 commit_parsers = [
   { message = "^chore\\(release\\)", skip = true },
   { message = "^chore: start .* development", skip = true },
