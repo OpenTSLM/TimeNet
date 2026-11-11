@@ -119,8 +119,8 @@ jobs:
           git push --force origin "$branch"
           {
             echo "Merging this PR tags v$VERSION, creates the GitHub release with the notes below, and"
-            echo "starts the PyPI publish run for approval. To change the notes, edit them in the"
-            echo "GitHub release after it is created."
+            echo "starts the TestPyPI and PyPI publish runs for approval. To change the notes, edit"
+            echo "them in the GitHub release after it is created."
             echo
             echo "---"
             echo
