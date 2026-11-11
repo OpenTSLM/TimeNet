@@ -6,7 +6,7 @@ from pathlib import Path
 
 import duckdb
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import FormatVersionSubject, TimeFFormatError, TimeFFormatVersionError
 from timenet.format.control_schema import schema_ddl
 
 
@@ -15,6 +15,9 @@ CONTROL_FILE = "control.duckdb"
 
 CONTROL_SCHEMA_VERSION = 1
 """Schema version written into :data:`CONTROL_FILE`."""
+
+_IN_MEMORY_DATABASE = "an in-memory control database"
+"""What an error names in place of a file for a control database without one."""
 
 CATALOG_ERRORS = (duckdb.CatalogException, duckdb.BinderException, duckdb.ConversionException)
 """DuckDB errors that mean a catalog lacks a table, column, or type that a read expects."""
@@ -54,16 +57,26 @@ def check_control_schema(connection: duckdb.DuckDBPyConnection) -> int:
         connection: An open TimeF control database.
 
     Raises:
+        TimeFFormatVersionError: If the schema is newer than this TimeNet reads.
         TimeFFormatError: If the schema metadata is missing, malformed, or unsupported.
     """
     try:
         row = connection.execute("SELECT value FROM control_metadata WHERE key = 'schema_version'").fetchone()
     except duckdb.Error as exc:
         raise TimeFFormatError("control.duckdb does not contain valid schema metadata") from exc
-    if row is None or row[0] != str(CONTROL_SCHEMA_VERSION):
-        found = None if row is None else row[0]
-        raise TimeFFormatError(f"unsupported control schema version {found!r}; expected {CONTROL_SCHEMA_VERSION}")
-    return int(row[0])
+    if row is not None and row[0] == str(CONTROL_SCHEMA_VERSION):
+        return CONTROL_SCHEMA_VERSION
+    found = None if row is None else row[0]
+    if isinstance(found, str) and found.isdecimal() and int(found) > CONTROL_SCHEMA_VERSION:
+        where = _database_file(connection) or _IN_MEMORY_DATABASE
+        raise TimeFFormatVersionError(FormatVersionSubject.CONTROL_SCHEMA, where, int(found), CONTROL_SCHEMA_VERSION)
+    raise TimeFFormatError(f"unsupported control schema version {found!r}; expected {CONTROL_SCHEMA_VERSION}")
+
+
+def _database_file(connection: duckdb.DuckDBPyConnection) -> str | None:
+    """Return the file of the current database of a connection, or ``None`` for an in-memory database."""
+    row = connection.execute("SELECT path FROM duckdb_databases() WHERE database_name = current_database()").fetchone()
+    return None if row is None else row[0]
 
 
 @contextmanager

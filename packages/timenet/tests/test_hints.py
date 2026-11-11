@@ -4,7 +4,9 @@ import pytest
 from timenet import _hints as hints_module
 from timenet._hints import CliWording, Facts, RequestedRelease, SdkWording, hint
 from timenet.errors import (
+    FormatVersionSubject,
     TimeFFormatError,
+    TimeFFormatVersionError,
     TimeFValidationError,
     TimeNetDatasetNotFoundError,
     TimeNetInvalidCardError,
@@ -102,3 +104,17 @@ def test_a_version_in_another_spelling_names_the_build_of_its_connector(tmp_path
     assert hint(error, facts, SdkWording()) == (
         "Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
     )
+
+
+def test_a_newer_format_version_names_the_upgrade_not_a_delete(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    path = tmp_path / "store/org/a/1.0.0/manifest.json"
+    facts = Facts([store], store)
+
+    def error(found):
+        return TimeFFormatVersionError(FormatVersionSubject.TIMEF_FORMAT, str(path), found, 1)
+
+    # Deleting and downloading the release again gives the same manifest, so only an upgrade helps.
+    assert hint(error(2), facts, SdkWording()) == "Upgrade the timenet package to read it."
+    # An upgrade does not read an older format.
+    assert hint(error(0), facts, SdkWording()) is None

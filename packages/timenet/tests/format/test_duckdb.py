@@ -1,7 +1,7 @@
 import duckdb
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import FormatVersionSubject, TimeFFormatError, TimeFFormatVersionError
 from timenet.format.duckdb import (
     CONTROL_SCHEMA_VERSION,
     check_control_schema,
@@ -63,14 +63,41 @@ def test_entity_id_columns_are_bigint_and_dataset_id_stays_varchar(tmp_path):
     }
 
 
-def test_control_schema_rejects_an_unknown_version(tmp_path):
+def test_a_newer_control_schema_names_the_file_and_both_versions(tmp_path):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '999'")
+        connection.execute("UPDATE control_metadata SET value = '2'")
 
-        with pytest.raises(TimeFFormatError, match="unsupported control schema version"):
+        with pytest.raises(TimeFFormatVersionError) as caught:
             check_control_schema(connection)
+
+    assert str(caught.value) == f"{path} uses control schema version 2, but the newest that this timenet reads is 1."
+    assert caught.value.subject is FormatVersionSubject.CONTROL_SCHEMA
+
+
+def test_a_newer_in_memory_control_schema_names_no_file():
+    with duckdb.connect() as connection:
+        create_control_schema(connection)
+        connection.execute("UPDATE control_metadata SET value = '2'")
+
+        with pytest.raises(
+            TimeFFormatVersionError, match=r"^an in-memory control database uses control schema version 2, but"
+        ):
+            check_control_schema(connection)
+
+
+@pytest.mark.parametrize("value", ["0", "two", "-2"])
+def test_an_invalid_control_schema_version_reports_as_unsupported(tmp_path, value):
+    path = tmp_path.joinpath("control.duckdb")
+    with connect_control(path) as connection:
+        create_control_schema(connection)
+        connection.execute("UPDATE control_metadata SET value = ?", [value])
+
+        with pytest.raises(TimeFFormatError, match="unsupported control schema version") as caught:
+            check_control_schema(connection)
+
+    assert not isinstance(caught.value, TimeFFormatVersionError)
 
 
 def test_control_schema_rejects_a_non_timef_database(tmp_path):

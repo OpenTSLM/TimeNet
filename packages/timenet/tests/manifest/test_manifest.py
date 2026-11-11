@@ -1,3 +1,4 @@
+import json
 import sys
 from typing import Any, TypeVar, cast
 
@@ -7,6 +8,7 @@ import pint
 from pydantic import BaseModel, ValidationError
 import pytest
 
+from timenet.errors import FormatVersionSubject, TimeFFormatVersionError, TimeNetManifestError
 from timenet.manifest import (
     BuildEnvironment,
     FilePart,
@@ -15,6 +17,7 @@ from timenet.manifest import (
     ManifestCounts,
     ManifestFiles,
     PayloadSource,
+    parse_manifest,
 )
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
@@ -307,6 +310,44 @@ def test_unsupported_format_version_rejected():
     d["timef_format_version"] = 99
     with pytest.raises(ValidationError):
         Manifest.model_validate(d)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{}, {"new_block": {}}, {"values_backend": "lance"}, {"metadata": {"new_card_field": "x"}}],
+    ids=["version only", "new field", "new enum value", "new nested field"],
+)
+def test_a_manifest_version_error_names_both_versions(change):
+    data = _manifest().to_dict()
+    for key, value in change.items():
+        data[key] = data[key] | value if isinstance(data.get(key), dict) else value
+    data["timef_format_version"] = 2
+
+    with pytest.raises(TimeFFormatVersionError) as caught:
+        parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
+
+    # A newer format almost always adds fields too, and the version must win over them.
+    assert (
+        str(caught.value)
+        == "the manifest of org/a@1.0.0 uses TimeF format version 2, but the newest that this timenet reads is 1."
+    )
+    assert (caught.value.subject, caught.value.found, caught.value.supported) == (
+        FormatVersionSubject.TIMEF_FORMAT,
+        2,
+        1,
+    )
+
+
+@pytest.mark.parametrize("version", [0, "2", True])
+def test_an_invalid_manifest_version_reports_as_not_valid(version):
+    data = _manifest().to_dict()
+    data["timef_format_version"] = version
+
+    with pytest.raises(TimeNetManifestError) as caught:
+        parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
+
+    assert not isinstance(caught.value, TimeFFormatVersionError)
+    assert caught.value.detail.startswith("timef_format_version: ")
 
 
 def test_direct_construction_validates_format_version():

@@ -345,8 +345,9 @@ releases that source reuses.
 | A payload source differs from its pins | `TimeFFormatError` | The source and the first differing file |
 | A file is missing or has another size | `TimeNetFileError` | The file, its expected size, and its actual size |
 
-An invalid or unsupported manifest raises `TimeNetManifestError`, and a missing one raises
-`FileNotFoundError`.
+An invalid manifest raises `TimeNetManifestError`. A manifest of a newer TimeF format or a
+`control.duckdb` of a newer control schema raises `TimeFFormatVersionError`. A missing manifest
+raises `FileNotFoundError`.
 
 ### Where payload sources are found
 

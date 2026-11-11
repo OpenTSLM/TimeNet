@@ -93,7 +93,9 @@ how many timesteps each signal misses. Parquet stores the missing timesteps in A
 validity arrays next to the values.
 
 Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's
-`ValidationError`.
+`ValidationError`. `TIMEF_FORMAT_VERSION` in `timenet.manifest` is the version that this TimeNet
+writes, and the newest that it reads. It versions every file of a release except `control.duckdb`,
+which has its own schema version.
 
 ### Codec
 
@@ -107,8 +109,9 @@ and `counts` default to empty. Unknown fields are rejected. A malformed block ra
 `ValidationError` with its native field locations and error details.
 
 Registries read a stored manifest with `read_manifest(path)` or `parse_manifest(text, where)` from
-`timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`. A file that cannot
-be read raises a plain `TimeFFormatError`.
+`timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`. A manifest of a
+newer TimeF format raises `TimeFFormatVersionError` instead. A file that cannot be read raises a
+plain `TimeFFormatError`.
 
 ### Serialization notes
 

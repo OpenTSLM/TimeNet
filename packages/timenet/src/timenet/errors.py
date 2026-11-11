@@ -309,6 +309,39 @@ class TimeNetManifestError(TimeFFormatError):
         return f"{self.where} is not a valid manifest: {self.detail}"
 
 
+class FormatVersionSubject(Enum):
+    """A versioned part of a stored TimeF release. The value names it in error messages."""
+
+    TIMEF_FORMAT = "TimeF format"
+    """The format of ``manifest.json``, given by its ``timef_format_version``."""
+    CONTROL_SCHEMA = "control schema"
+    """The schema of ``control.duckdb``, given by the ``schema_version`` key of ``control_metadata``."""
+
+
+class TimeFFormatVersionError(TimeFFormatError):
+    """A stored TimeF artifact has a newer format version than this TimeNet reads.
+
+    Attributes:
+        subject: The versioned part of the release.
+        where: The file of the artifact, or a description of where a registry keeps it.
+        found: The version that the artifact records.
+        supported: The newest version that this TimeNet reads.
+    """
+
+    def __init__(self, subject: FormatVersionSubject, where: str, found: int, supported: int) -> None:
+        super().__init__(subject, where, found, supported)
+        self.subject = subject
+        self.where = where
+        self.found = found
+        self.supported = supported
+
+    def _message(self) -> str:
+        return (
+            f"{self.where} uses {self.subject.value} version {self.found}, "
+            f"but the newest that this timenet reads is {self.supported}."
+        )
+
+
 class TimeNetOriginError(TimeFFormatError):
     """The provenance record of a release in the local registry is not valid.
 

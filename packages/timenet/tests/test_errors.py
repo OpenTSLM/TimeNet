@@ -4,8 +4,10 @@ import pickle
 import pytest
 
 from timenet.errors import (
+    FormatVersionSubject,
     ReleaseDifference,
     TimeFFormatError,
+    TimeFFormatVersionError,
     TimeFNotFoundError,
     TimeFReaderError,
     TimeFValidationError,
@@ -166,6 +168,22 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
                 "path": Path("/store/org/a/1.0.0/manifest.json"),
             },
             "/store/org/a/1.0.0/manifest.json is not a valid manifest: Invalid JSON",
+            (TimeFFormatError,),
+        ),
+        (
+            TimeFFormatVersionError(
+                FormatVersionSubject.TIMEF_FORMAT,
+                "/store/org/a/1.0.0/manifest.json",
+                2,
+                1,
+            ),
+            {
+                "subject": FormatVersionSubject.TIMEF_FORMAT,
+                "where": "/store/org/a/1.0.0/manifest.json",
+                "found": 2,
+                "supported": 1,
+            },
+            "/store/org/a/1.0.0/manifest.json uses TimeF format version 2, but the newest that this timenet reads is 1.",
             (TimeFFormatError,),
         ),
     ],

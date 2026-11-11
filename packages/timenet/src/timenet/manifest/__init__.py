@@ -3,6 +3,7 @@
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import FilePart, ManifestFiles
 from timenet.manifest.manifest import (
+    TIMEF_FORMAT_VERSION,
     BuildEnvironment,
     GitSource,
     GitSourceMap,
@@ -15,6 +16,7 @@ from timenet.manifest.payload_source import PayloadSource
 
 
 __all__ = [
+    "TIMEF_FORMAT_VERSION",
     "BuildEnvironment",
     "FilePart",
     "GitSource",
