@@ -43,6 +43,8 @@ jobs:
       # tokens are stored as repo secrets.
       id-token: write
       contents: read
+      # Start the PyPI run after a TestPyPI run of a release tag.
+      actions: write
     steps:
       - name: Guard PyPI to main
         run: |
@@ -141,6 +143,23 @@ jobs:
           else
             uv publish
           fi
+      - name: Start the PyPI run
+        # A TestPyPI run of a release tag starts the PyPI run of the same tag, which waits for
+        # approval. So PyPI can only be approved after TestPyPI took the same files.
+        if: inputs.target == 'TestPyPI' && inputs.ref != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PACKAGE: ${{ inputs.package }}
+          REF: ${{ inputs.ref }}
+        run: |
+          name="Publish $PACKAGE $REF to PyPI"
+          if gh run list --workflow publish.yml --event workflow_dispatch --limit 100 --json displayTitle \
+              --jq '.[].displayTitle' | grep -qxF "$name"; then
+            echo "Skipping '$name': it was already started."
+            exit 0
+          fi
+          gh workflow run publish.yml --ref main -f target=PyPI -f package="$PACKAGE" -f ref="$REF"
       - name: Summary
         if: success()
         run: |

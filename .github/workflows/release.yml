@@ -7,11 +7,11 @@ name: Release
 #   1. Run this workflow on main and pick the package. It opens a release PR that sets the version
 #      and shows the notes.
 #   2. Merge the release PR. For every package whose version the PR changed, this tags
-#      <package>-vX.Y.Z and creates a GitHub release. It starts a TestPyPI and a PyPI run of
-#      publish.yml (each waits for approval in the pypi environment), and opens a PR that moves the
-#      released packages to their next development version, X.(Y+1).0.dev0.
-#   3. Approve the TestPyPI run and check the result, approve the PyPI run, then merge the
-#      development-version PR.
+#      <package>-vX.Y.Z and creates a GitHub release. It starts a TestPyPI run of publish.yml,
+#      which waits for approval in the pypi environment, and opens a PR that moves the released
+#      packages to their next development version, X.(Y+1).0.dev0.
+#   3. Approve the TestPyPI run. Once it has uploaded, it starts the PyPI run, which waits for
+#      approval too. Check TestPyPI, approve the PyPI run, then merge the development-version PR.
 # Releasing both raises the timenet floor of timenet-connectors to the new timenet version.
 # Releasing one package alone keeps the floor. The release PR warns when the other package has
 # changes that the release leaves out.
@@ -180,8 +180,8 @@ jobs:
           git push --force origin "$BRANCH"
           {
             echo "Merging this PR tags each package below, creates its GitHub release with these notes,"
-            echo "and starts the TestPyPI and PyPI publish runs for approval. To change the notes, edit"
-            echo "them in the GitHub release after it is created."
+            echo "and starts the TestPyPI publish run for approval. A successful TestPyPI run starts the"
+            echo "PyPI run. To change the notes, edit them in the GitHub release after it is created."
             echo
             echo "---"
             echo
@@ -267,7 +267,7 @@ jobs:
               gh release create "$tag" --verify-tag --title "$package $version" --notes-file "$RUNNER_TEMP/notes.md"
             fi
           done
-      - name: Start the TestPyPI and PyPI publish runs
+      - name: Start the TestPyPI publish run
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASED: ${{ steps.released.outputs.released }}
@@ -278,16 +278,15 @@ jobs:
           if [ ${#released[@]} -eq 2 ]; then package=both; fi
           # Both tags of a release point at the same commit, so either one builds both packages.
           ref="${first%=*}-v${first#*=}"
-          for target in TestPyPI PyPI; do
-            # A re-run: skip a publish run this job already started. Its name comes from publish.yml's run-name.
-            name="Publish $package $ref to $target"
-            if gh run list --workflow publish.yml --event workflow_dispatch --limit 100 --json displayTitle \
-                --jq '.[].displayTitle' | grep -qxF "$name"; then
-              echo "Skipping '$name': it was already started."
-              continue
-            fi
-            gh workflow run publish.yml --ref main -f target="$target" -f package="$package" -f ref="$ref"
-          done
+          # A re-run: skip the publish run if this job already started it. Its name comes from
+          # publish.yml's run-name. A successful TestPyPI run starts the PyPI run.
+          name="Publish $package $ref to TestPyPI"
+          if gh run list --workflow publish.yml --event workflow_dispatch --limit 100 --json displayTitle \
+              --jq '.[].displayTitle' | grep -qxF "$name"; then
+            echo "Skipping '$name': it was already started."
+            exit 0
+          fi
+          gh workflow run publish.yml --ref main -f target=TestPyPI -f package="$package" -f ref="$ref"
 
   next-development-version:
     needs: release
