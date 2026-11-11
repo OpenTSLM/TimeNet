@@ -29,7 +29,7 @@ from timenet.values_backends import ValuesBackend
 
 
 TIMEF_FORMAT_VERSION = 1
-"""The TimeF format version that this TimeNet writes, and the newest that it reads.
+"""The maximum TimeF format version this TimeNet package supports.
 
 It versions every file of a release except ``control.duckdb``, which
 :data:`~timenet.format.duckdb.CONTROL_SCHEMA_VERSION` versions.
