@@ -19,7 +19,9 @@ framework.
 >
 > [![TimeNet Online Hackathon](https://i.imgur.com/coD5x4b.png)](https://challenge.timenet.ai/)
 >
-> **TimeNet Online Hackathon (November 2026, round 1 closes Nov 22).** Pick a time-series problem, onboard a dataset in TimeNet format, then train or fine-tune a Time-Series Language Model to forecast, classify, or detect anomalies. Teams of 2-4 can register at [challenge.timenet.ai](https://challenge.timenet.ai/).
+> **TimeNet Online Hackathon.** Pick a time-series problem, onboard a dataset in TimeNet format, then train or fine-tune a Time-Series Language Model to forecast, classify, or detect anomalies.
+>
+> **Register here:** [challenge.timenet.ai](https://challenge.timenet.ai/)
 
 ## Quick start
 
