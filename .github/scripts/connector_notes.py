@@ -1,5 +1,9 @@
 # /// script
 # requires-python = ">=3.11"
+# dependencies = ["GitPython>=3.1"]
+#
+# [tool.ty.rules]
+# unresolved-import = "ignore"
 # ///
 """Print the release notes of timenet-connectors between two refs.
 
@@ -24,8 +28,8 @@ Called by .github/workflows/release.yml. Run it the way the workflow does::
 
 import argparse
 import re
-import shutil
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argument vectors, never a shell string
+
+from git import Repo
 
 
 PACKAGE = "packages/timenet-connectors"
@@ -37,14 +41,13 @@ SUBJECT = re.compile(r"^(?P<type>\w+)(?:\((?P<scope>[^)]*)\))?(?P<bang>!)?: (?P<
 SKIP = re.compile(r"^chore(\(release\)|: start .* development)")
 
 
-def git(*args: str) -> str:
-    """Run git and return its output.
+def repo() -> Repo:
+    """Open the repository around the current directory.
 
     Returns:
-        The standard output.
+        The repository.
     """
-    command = [shutil.which("git") or "git", *args]
-    return subprocess.run(command, check=True, capture_output=True, text=True).stdout  # ruff: ignore[subprocess-without-shell-equals-true]
+    return Repo(search_parent_directories=True)
 
 
 def commits(base: str, head: str, *paths: str) -> list[tuple[str, str]]:
@@ -53,8 +56,8 @@ def commits(base: str, head: str, *paths: str) -> list[tuple[str, str]]:
     Returns:
         ``(short hash, subject)`` pairs, without release and development-version commits.
     """
-    lines = git("log", "--reverse", "--format=%h %s", f"{base}..{head}", "--", *paths).splitlines()
-    pairs = [line.split(" ", 1) for line in lines]
+    found = repo().iter_commits(f"{base}..{head}", paths=list(paths), reverse=True)
+    pairs = [(commit.hexsha[:9], str(commit.summary)) for commit in found]
     return [(sha, subject) for sha, subject in pairs if not SKIP.match(subject)]
 
 
@@ -81,15 +84,19 @@ def connectors(ref: str) -> dict[str, tuple[str, str]]:
         ``{dataset_id: (folder, name)}``.
     """
     found = {}
-    for card in git("ls-tree", "-r", "--name-only", ref, "--", DATASETS).splitlines():
-        if not re.fullmatch(re.escape(DATASETS) + r"/[^/]+/[^/]+/dataset\.yaml", card):
+    try:
+        datasets = repo().commit(ref).tree / DATASETS
+    except KeyError:
+        return found
+    for folder in (folder for org in datasets.trees for folder in org.trees):
+        try:
+            text = (folder / "dataset.yaml").data_stream.read().decode()
+        except KeyError:
             continue
-        text = git("show", f"{ref}:{card}")
-        folder = card.rsplit("/", 1)[0]
         dataset_id = re.search(r"^dataset_id:\s*(\S+)", text, re.M)
         name = re.search(r"^name:\s*(.+)$", text, re.M)
-        key = dataset_id[1] if dataset_id else "/".join(folder.split("/")[-2:])
-        found[key] = (folder, name[1].strip() if name else key)
+        key = dataset_id[1] if dataset_id else "/".join(folder.path.split("/")[-2:])
+        found[key] = (folder.path, name[1].strip() if name else key)
     return found
 
 
