@@ -15,6 +15,14 @@ provides one API to find, build, download, and load them.
 TimeNet handles the data layer. Model training, inference, and evaluation stay in your chosen
 framework.
 
+> ### TimeNet Hackathon
+>
+> [![TimeNet Online Hackathon](https://i.imgur.com/coD5x4b.png)](https://challenge.timenet.ai/)
+>
+> **TimeNet Online Hackathon is live.** Pick a time-series problem, onboard a dataset in TimeNet format, then train or fine-tune a Temporal AI Model (e.g. [OpenTSLM](https://github.com/OpenTSLM/OpenTSLM)) to explore what it can do. Choose any use case, from forecasting and classification to explanation, reasoning and beyond.
+>
+> **Register here:** [challenge.timenet.ai](https://challenge.timenet.ai/)
+
 ## Quick start
 
 TimeNet needs Python 3.11 or newer.
