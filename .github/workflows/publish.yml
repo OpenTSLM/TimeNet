@@ -20,8 +20,12 @@ on:
           - both
           - timenet
           - timenet-connectors
+      ref:
+        description: Release tag to build, for example v0.12.0. Leave empty to build the branch above.
+        required: false
+        type: string
 
-run-name: Publish ${{ inputs.package }} to ${{ inputs.target }}
+run-name: Publish ${{ inputs.package }} ${{ inputs.ref }} to ${{ inputs.target }}
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
@@ -49,8 +53,30 @@ jobs:
           fi
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - name: Guard the release tag
+        if: inputs.ref != ''
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          if ! [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error title=Invalid ref::Build only a vX.Y.Z tag on main, not '$REF'."
+            exit 1
+          fi
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+      - name: Guard PyPI to release versions
+        if: inputs.target == 'PyPI'
+        run: |
+          for package in timenet timenet-connectors; do
+            version=$(uv version --package "$package" --short)
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error title=Development version::$package is at $version. Publish a release tag instead."
+              exit 1
+            fi
+          done
       - name: Build
         # build_dists.py records the commit inside each package, so a build can name its code.
         run: |

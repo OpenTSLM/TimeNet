@@ -1,0 +1,182 @@
+name: Release
+
+# Releases both packages in lockstep, in three steps:
+#   1. Run this workflow on main. It opens a release PR that sets the version and shows the notes.
+#   2. Merge the release PR. This tags vX.Y.Z, creates the GitHub release, starts publish.yml for
+#      the tag (which waits for approval in the pypi environment), and opens a PR that moves main
+#      to the next development version, X.(Y+1).0.dev0.
+#   3. Approve the publish run, then merge the development-version PR.
+#
+# Needs a GitHub App with contents and pull-requests write access, installed on this repository,
+# with its id in the RELEASE_APP_ID variable and its key in the RELEASE_APP_PRIVATE_KEY secret.
+# PRs opened with GITHUB_TOKEN are blocked by the repository settings and would not run CI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, for example 0.12.0. Leave empty to compute it from the commits.
+        required: false
+        type: string
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GIT_CLIFF: git-cliff==2.14.2
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard to main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error title=Invalid branch::Start a release from main."
+          exit 1
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Choose the version
+        id: version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          version=${REQUESTED:-$(uvx "$GIT_CLIFF" --bumped-version)}
+          version=${version#v}
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid version::'$version' is not X.Y.Z."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error title=Version exists::Tag v$version already exists."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Set the version and write the notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for package in timenet timenet-connectors; do
+            uv version --package "$package" "$VERSION" --frozen
+          done
+          # Connectors needs the timenet release that ships with it.
+          sed -i -E "s/\"timenet\[build\]>=[^\"]*\"/\"timenet[build]>=$VERSION\"/" packages/timenet-connectors/pyproject.toml
+          grep -q "\"timenet\[build\]>=$VERSION\"" packages/timenet-connectors/pyproject.toml
+          uv lock
+          uvx "$GIT_CLIFF" --unreleased --tag "v$VERSION" --strip header --output "$RUNNER_TEMP/notes.md"
+      - name: Open the release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          branch="release/v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "chore(release): $VERSION"
+          git push origin "$branch"
+          {
+            echo "Merging this PR tags v$VERSION, creates the GitHub release with the notes below, and"
+            echo "starts the PyPI publish run for approval. To change the notes, edit them in the"
+            echo "GitHub release after it is created."
+            echo
+            echo "---"
+            echo
+            cat "$RUNNER_TEMP/notes.md"
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base main --head "$branch" --title "chore(release): $VERSION" --body-file "$RUNNER_TEMP/body.md"
+
+  release:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Read the version
+        id: version
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          version=$(uv version --package timenet --short)
+          connectors=$(uv version --package timenet-connectors --short)
+          if [ "$version" != "$connectors" ] || [ "release/v$version" != "$HEAD_REF" ]; then
+            echo "::error title=Version mismatch::timenet $version, connectors $connectors, branch $HEAD_REF."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Tag and create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "TimeNet $VERSION"
+          uvx "$GIT_CLIFF" --latest --strip header --output "$RUNNER_TEMP/notes.md"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" --verify-tag --title "TimeNet $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+      - name: Start the PyPI publish run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh workflow run publish.yml --ref main -f target=PyPI -f package=both -f ref="v$VERSION"
+
+  next-development-version:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Open the development version PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          for package in timenet timenet-connectors; do
+            uv version --package "$package" --bump minor --bump dev=0 --frozen
+          done
+          uv lock
+          next=$(uv version --package timenet --short)
+          branch="chore/start-${next%.dev0}-development"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "chore: start ${next%.dev0} development"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "chore: start ${next%.dev0} development" \
+            --body "Moves both packages to $next, so builds from main are not mistaken for the release."
