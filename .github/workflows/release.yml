@@ -33,6 +33,7 @@ permissions:
 
 env:
   GIT_CLIFF: git-cliff==2.14.2
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   authorize:
