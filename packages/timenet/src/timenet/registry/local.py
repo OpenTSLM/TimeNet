@@ -70,6 +70,15 @@ class LocalRegistry(WritableRegistry):
         return self._root
 
     @property
+    def requires_clean_code_provenance(self) -> bool:
+        """Whether this registry refuses releases built from locally modified TimeNet code.
+
+        Returns:
+            ``False``, since a local registry takes any release.
+        """
+        return False
+
+    @property
     def requires_open_access(self) -> bool:
         """Whether local releases must declare open access.
 

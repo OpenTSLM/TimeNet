@@ -175,6 +175,7 @@ class RemoteRegistry(LazyReadRegistry):
         Raises:
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
+            TimeNetBuildError: If the manifest records TimeNet code with local changes.
             TimeNetRegistryError: If this registry is read-only, or the service skips a listed file or
                 requests a missing file.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release

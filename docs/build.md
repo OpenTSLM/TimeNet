@@ -135,6 +135,17 @@ A remote registry holds only releases with access declared `open`. Before
 `timenet.publish()` copies anything to such a registry, it checks the card and the lineage of each
 release.
 
+## Clean code provenance for remote registries
+
+The manifest of a release records the git commit of the TimeNet code that built it, and whether that
+code had local changes (see [`build_env.git`](manifest.md)). A remote registry holds only releases
+built from committed code. Before `timenet.publish()` copies anything to such a registry, it checks
+the manifest of each release that it copies. If a manifest records local changes, `publish()` raises
+`TimeNetBuildError` and copies nothing.
+
+The local registry accepts any release, so a build with local changes still lands there. To publish
+it, commit the changes, build the release again with `force=True`, and publish it.
+
 ## Prepare parent releases
 
 A connector card can declare exact parent releases under `parents`. The connector reads these

@@ -13,8 +13,10 @@ from pathlib import Path
 import pyarrow.fs as pafs
 
 from timenet.dataset import TimeFDataset
+from timenet.errors import TimeNetBuildError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, PayloadSource, read_manifest
+from timenet.provenance import TimeNetSnapshot
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import check_file_sizes
 from timenet.registry.version import DatasetVersion
@@ -67,11 +69,37 @@ class WritableRegistry(BaseRegistry, ABC):
         Raises:
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
+            TimeNetBuildError: If this registry refuses releases built from locally modified code, and the manifest records local changes.
         """
 
-    @staticmethod
-    def _read_release(directory: Path) -> Manifest:
-        """Read a release manifest and check the listed file sizes.
+    @property
+    def requires_clean_code_provenance(self) -> bool:
+        """Whether this registry refuses releases built from locally modified TimeNet code."""
+        return True
+
+    def require_clean_code_provenance(self, manifest: Manifest) -> None:
+        """Raise ``TimeNetBuildError`` if this registry refuses releases built from locally modified code, and ``manifest`` records local changes.
+
+        Args:
+            manifest: The manifest of the release to publish.
+
+        Raises:
+            TimeNetBuildError: If the manifest records local changes or no commit for a TimeNet package.
+        """
+        if not self.requires_clean_code_provenance:
+            return
+        modified = TimeNetSnapshot.from_source_map(manifest.build_env.git).packages_with_local_changes()
+        if modified:
+            reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
+            changes = ", ".join(f"{package.package_name} (commit {package.source.sha[:12]})" for package in modified)
+            raise TimeNetBuildError(
+                f"{self} does not take releases built from locally modified TimeNet code, so it refuses {reference}: "
+                f"it records local changes in {changes}. Commit the changes and build the release again, or keep it "
+                "in a local registry."
+            )
+
+    def _read_release(self, directory: Path) -> Manifest:
+        """Read a release manifest, check the listed file sizes, and refuse a release that this registry does not take.
 
         Args:
             directory: The release directory.
@@ -82,8 +110,10 @@ class WritableRegistry(BaseRegistry, ABC):
         Raises:
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by read_manifest and check_file_sizes
+            TimeNetBuildError: If this registry refuses releases built from locally modified code, and the manifest records local changes.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by read_manifest, check_file_sizes and require_clean_code_provenance
         manifest = read_manifest(directory / MANIFEST_FILE)
+        self.require_clean_code_provenance(manifest)
         reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
         version = DatasetVersion(manifest, pafs.LocalFileSystem(), str(directory))
         check_file_sizes(version, manifest.files.all_files(), owner=str(reference))

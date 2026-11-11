@@ -264,6 +264,10 @@ class TimeNetSnapshot(Snapshot):
             sources.update(package.to_source_map())
         return sources
 
+    def packages_with_local_changes(self) -> list[PackageSnapshot]:
+        """Return each installed TimeNet package whose code has local changes."""
+        return [package for package in self._installed() if package.source.contains_local_changes]
+
     def _installed(self) -> list[PackageSnapshot]:
         """Return the snapshot of each installed TimeNet package."""
         return [package for package in (self.timenet, self.timenet_connectors) if package is not None]

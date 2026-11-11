@@ -20,9 +20,12 @@ from timenet.errors import (
     TimeFFormatError,
     TimeFValidationError,
     TimeNetAccessError,
+    TimeNetBuildError,
     TimeNetMissingParentError,
     TimeNetVersionConflictError,
 )
+from timenet.format.constants import MANIFEST_FILE
+from timenet.manifest import GitSource
 from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry, WritableRegistry, copy_release, open_local_version
@@ -542,3 +545,44 @@ def test_copy_release_refuses_to_fetch_a_release_that_is_not_open_from_a_registr
     assert raised.value.dataset == child_ref
     assert not dest.exists(*child)
     assert not dest.exists(*parent)  # the open parent is not copied either: every check runs first
+
+
+def _record_local_changes(root: Path, reference: DatasetRef) -> None:
+    """Rewrite the manifest of ``reference`` under ``root`` as a build from timenet code with local changes."""
+    manifest = LocalRegistry(root).get_manifest(reference.dataset_id, str(reference.version))
+    git = {"timenet": GitSource(sha="a" * 40, contains_local_changes=True)}
+    build_env = manifest.build_env.model_copy(update={"git": git})
+    (release_dir(root, reference) / MANIFEST_FILE).write_text(
+        manifest.model_copy(update={"build_env": build_env}).to_json()
+    )
+
+
+@pytest.mark.parametrize("changed", [child_ref, parent_ref], ids=["release", "payload-source"])
+def test_copy_release_refuses_a_build_with_local_changes_for_a_registry_that_is_not_local(changed, tmp_path):
+    root = tmp_path / "source"
+    _write_parent_and_child(root)
+    _record_local_changes(root, changed)
+    dest, _ = _remote(tmp_path, "dest", token="tok_rw")
+    with pytest.raises(TimeNetBuildError, match=f"refuses {changed}: it records local changes in timenet \\(commit "):
+        copy_release(child_ref, LocalRegistry(root), dest)
+    assert not dest.exists(*child)
+    assert not dest.exists(*parent)  # every check runs before the first copy
+
+
+def test_copy_release_copies_a_build_with_local_changes_between_local_registries(tmp_path):
+    root = tmp_path / "source"
+    _write_parent_and_child(root)
+    _record_local_changes(root, child_ref)
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(child_ref, LocalRegistry(root), dest)
+    assert dest.get_manifest(*child).build_env.git["timenet"].contains_local_changes
+
+
+def test_put_release_refuses_a_build_with_local_changes_for_a_registry_that_is_not_local(tmp_path):
+    root = tmp_path / "source"
+    _write_parent_and_child(root)
+    _record_local_changes(root, parent_ref)
+    dest, _ = _remote(tmp_path, "dest", token="tok_rw")
+    with pytest.raises(TimeNetBuildError, match=f"refuses {parent_ref}: it records local changes in timenet"):
+        dest.put_release(release_dir(root, parent_ref))
+    assert not dest.exists(*parent)
