@@ -1,6 +1,7 @@
 """Tests for the pinned Hub base and its download helper, driven against a fake huggingface_hub."""
 
 import asyncio
+from fnmatch import fnmatchcase
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -8,10 +9,10 @@ from typing import ClassVar
 
 import pytest
 
-from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError, TimeNetDownloadError
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.download.progress import DownloadProgress, progress_sink
-from timenet_connectors.sources.huggingface_hub import download_hub_files, hub_snapshot
+from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
 
 _SHA = "0" * 40
@@ -37,8 +38,9 @@ class _HubTqdm:
         return None
 
 
-def _fake_hub(monkeypatch, tmp_path, present=None, error=None, bars=None):
-    """Install a fake huggingface_hub whose snapshot_download writes the allowed files into a snapshot."""
+def _fake_hub(monkeypatch, tmp_path, files=("data/train.jsonl", "data/test.jsonl"), error=None, bars=None):
+    """Install a fake huggingface_hub. Its snapshot_download writes the revision's ``files`` that match the
+    allowed patterns into a snapshot, as the Hub does."""
     calls = []
 
     def snapshot_download(repo, **kwargs):
@@ -48,8 +50,8 @@ def _fake_hub(monkeypatch, tmp_path, present=None, error=None, bars=None):
         if error is not None:
             raise error
         snapshot = tmp_path / "snapshot"
-        for name in kwargs["allow_patterns"]:
-            if present is None or name in present:
+        for name in files:
+            if any(fnmatchcase(name, pattern) for pattern in kwargs["allow_patterns"]):
                 path = snapshot / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(name)
@@ -111,11 +113,9 @@ def test_download_failure_names_the_pinned_revision(monkeypatch, tmp_path):
 
 
 def test_a_file_absent_from_the_revision_fails(monkeypatch, tmp_path):
-    _fake_hub(monkeypatch, tmp_path, present={"data/train.jsonl"})
+    _fake_hub(monkeypatch, tmp_path, files=("data/train.jsonl",))
     with pytest.raises(TimeNetDownloadError, match=rf"org/repo@{_SHA} has no data/test\.jsonl$"):
-        asyncio.run(
-            download_hub_files("org/repo", ["data/train.jsonl", "data/test.jsonl"], revision=_SHA, cache_dir=tmp_path)
-        )
+        asyncio.run(_Pinned().download_async(tmp_path / "cache"))
 
 
 def test_missing_hub_library_states_the_fix(monkeypatch, tmp_path):
@@ -166,17 +166,47 @@ def test_convert_checks_refs_before_the_subclass_runs():
     assert _Pinned.convert.__name__ == "convert"
 
 
-def test_snapshot_selects_patterns_and_keeps_the_snapshot_root(monkeypatch, tmp_path):
-    calls = _fake_hub(monkeypatch, tmp_path)
-    hub = sys.modules["huggingface_hub"]
-    monkeypatch.setattr(
-        hub, "list_repo_files", lambda *args, **kwargs: ["meta.csv", "data/train.parquet", "README.md"], raising=False
-    )
+def test_ref_paths_maps_parts_and_names_the_repo_when_one_is_missing():
+    refs = [HubFileRef(Path("train.jsonl"), "train")]
+    assert _Pinned().ref_paths(refs, "train") == {"train": Path("train.jsonl")}
+    with pytest.raises(TimeNetConnectorError, match=r"^org/repo refs lack test$"):
+        _Pinned().ref_paths(refs, "train", "test")
+
+
+def test_snapshot_downloads_the_matching_files_and_returns_the_snapshot_root(monkeypatch, tmp_path):
+    calls = _fake_hub(monkeypatch, tmp_path, files=("meta.csv", "data/train.parquet", "README.md"))
 
     # asyncio.run gives the helper a running event loop, as download_async does in a build.
     root = asyncio.run(hub_snapshot("org/repo", _SHA, tmp_path, ("data/*.parquet",)))
     assert root == tmp_path / "snapshot"
-    assert (root / "data/train.parquet").is_file()
-    assert calls[0][1]["allow_patterns"] == ["data/train.parquet"]
-    with pytest.raises(TimeNetDownloadError, match="no files matching"):
-        asyncio.run(hub_snapshot("org/repo", _SHA, tmp_path, ("missing/*",)))
+    assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()) == [
+        "data/train.parquet"
+    ]
+    assert calls[0][1]["allow_patterns"] == ["data/*.parquet"]
+
+
+class _Patterned(BaseHuggingFaceConnector):
+    HF_REPO = "org/repo"
+    SOURCE_REVISION = _SHA
+    SOURCE_FILES: ClassVar = {"questions": "qa.csv", "series": "data/*.parquet"}
+
+    def convert(self, raw_refs):
+        return raw_refs
+
+
+def test_a_pattern_part_resolves_to_the_directory_of_its_files(monkeypatch, tmp_path):
+    calls = _fake_hub(monkeypatch, tmp_path, files=("qa.csv", "data/a.parquet", "data/b.parquet", "README.md"))
+
+    refs = asyncio.run(_Patterned().download_async(tmp_path / "cache"))
+
+    assert refs == [
+        HubFileRef(tmp_path / "snapshot" / "qa.csv", "questions"),
+        HubFileRef(tmp_path / "snapshot" / "data", "series"),
+    ]
+    assert calls[0][1]["allow_patterns"] == ["qa.csv", "data/*.parquet"]
+
+
+def test_a_declared_file_or_pattern_without_a_match_fails(monkeypatch, tmp_path):
+    _fake_hub(monkeypatch, tmp_path, files=("qa.csv", "README.md"))
+    with pytest.raises(TimeNetDownloadError, match=rf"org/repo@{_SHA} has no data/\*\.parquet$"):
+        asyncio.run(_Patterned().download_async(tmp_path / "cache"))

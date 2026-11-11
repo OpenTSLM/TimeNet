@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError, TimeNetDownloadError
+from timenet.values_backends import ValuesBackend
 from timenet_connectors.datasets.datadog.arfbench.questions import ARFBenchQuestion, read_questions
 from timenet_connectors.datasets.datadog.arfbench.series import MetricSeriesFiles
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
@@ -80,7 +81,7 @@ class ARFBenchSource:
 class ARFBenchConnector(BaseConnector[ARFBenchSource]):
     """Connector for ARFBench (Hub repo ``Datadog/ARFBench``)."""
 
-    values_backend = "zarr"  # the chart tensors need it
+    values_backend = ValuesBackend.ZARR  # the chart tensors need it
 
     async def download_async(self, cache_dir: Path) -> list[ARFBenchSource]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Download the question table, series files, and charts from the pinned release.
