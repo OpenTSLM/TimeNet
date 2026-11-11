@@ -67,27 +67,40 @@ def test_a_newer_control_schema_names_the_file_and_both_versions(tmp_path):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '2'")
+        connection.execute("UPDATE control_metadata SET value = '3'")
 
         with pytest.raises(TimeFFormatVersionError) as caught:
             check_control_schema(connection)
 
-    assert str(caught.value) == f"{path} uses control schema version 2, but the newest that this timenet reads is 1."
+    assert str(caught.value) == f"{path} uses control schema version 3, but the newest that this timenet reads is 2."
     assert caught.value.subject is FormatVersionSubject.CONTROL_SCHEMA
 
 
 def test_a_newer_in_memory_control_schema_names_no_file():
     with duckdb.connect() as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '2'")
+        connection.execute("UPDATE control_metadata SET value = '3'")
 
         with pytest.raises(
-            TimeFFormatVersionError, match=r"^an in-memory control database uses control schema version 2, but"
+            TimeFFormatVersionError, match=r"^an in-memory control database uses control schema version 3, but"
         ):
             check_control_schema(connection)
 
 
-@pytest.mark.parametrize("value", ["0", "two", "-2"])
+def test_an_older_control_schema_names_the_oldest_version_that_is_read(tmp_path):
+    path = tmp_path.joinpath("control.duckdb")
+    with connect_control(path) as connection:
+        create_control_schema(connection)
+        connection.execute("UPDATE control_metadata SET value = '1'")
+
+        with pytest.raises(TimeFFormatVersionError) as caught:
+            check_control_schema(connection)
+
+    assert str(caught.value) == f"{path} uses control schema version 1, but the oldest that this timenet reads is 2."
+    assert caught.value.path == path
+
+
+@pytest.mark.parametrize("value", ["0", "two", "-2", "02"])
 def test_an_invalid_control_schema_version_reports_as_unsupported(tmp_path, value):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:

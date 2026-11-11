@@ -544,17 +544,21 @@ def test_missing_root_or_manifest_raises(tmp_path):
         open_local_version(empty)
 
 
-@pytest.mark.parametrize("format_version", [2, 3, 99])
-def test_unsupported_format_version_raises(tmp_path, format_version):
+@pytest.mark.parametrize(
+    ("format_version", "error", "message"),
+    [
+        (4, TimeFFormatVersionError, "uses TimeF format version 4, but the newest that this timenet reads is 3"),
+        (99, TimeFFormatVersionError, "uses TimeF format version 99, but the newest that this timenet reads is 3"),
+        (2, TimeFFormatVersionError, "uses TimeF format version 2, but the oldest that this timenet reads is 3"),
+    ],
+)
+def test_unsupported_format_version_raises(tmp_path, format_version, error, message):
     version_dir = _write(tmp_path)
     manifest_path = version_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(
-        TimeFFormatVersionError,
-        match=f"uses TimeF format version {format_version}, but the newest that this timenet reads is 1",
-    ):
+    with pytest.raises(error, match=message):
         open_local_version(version_dir)
 
 

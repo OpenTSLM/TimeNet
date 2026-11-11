@@ -106,15 +106,17 @@ def test_a_version_in_another_spelling_names_the_build_of_its_connector(tmp_path
     )
 
 
-def test_a_newer_format_version_names_the_upgrade_not_a_delete(tmp_path):
+def test_a_format_version_error_names_an_upgrade_or_a_new_download_by_direction(tmp_path):
     store = LocalRegistry(tmp_path / "store")
     path = tmp_path / "store/org/a/1.0.0/manifest.json"
     facts = Facts([store], store)
 
-    def error(found):
-        return TimeFFormatVersionError(FormatVersionSubject.TIMEF_FORMAT, str(path), found, 1)
+    def error(found, path=path):
+        return TimeFFormatVersionError(FormatVersionSubject.TIMEF_FORMAT, str(path), found, 3, 3, path)
 
     # Deleting and downloading the release again gives the same manifest, so only an upgrade helps.
-    assert hint(error(2), facts, SdkWording()) == "Upgrade the timenet package to read it."
-    # An upgrade does not read an older format.
-    assert hint(error(0), facts, SdkWording()) is None
+    assert hint(error(4), facts, SdkWording()) == "Upgrade the timenet package to read it."
+    # An upgrade cannot read an older format, but a new download or build of the release can.
+    assert hint(error(2), facts, SdkWording()) == (f"Delete {path.parent} and download or build org/a@1.0.0 again.")
+    # A registry served the manifest, so no local delete replaces it.
+    assert hint(error(2, path=None), facts, SdkWording()) is None

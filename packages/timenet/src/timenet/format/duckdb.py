@@ -3,6 +3,7 @@
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+import re
 
 import duckdb
 
@@ -13,8 +14,14 @@ from timenet.format.control_schema import schema_ddl
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 1
-"""Schema version written into :data:`CONTROL_FILE`."""
+CONTROL_SCHEMA_VERSION = 2
+"""Schema version written into :data:`CONTROL_FILE`, and the newest that this TimeNet reads."""
+
+OLDEST_READABLE_CONTROL_SCHEMA_VERSION = 2
+"""The oldest schema version of :data:`CONTROL_FILE` that this TimeNet reads.
+
+Version 2 is the schema of TimeNet 0.12. Version 1 names layouts used during early development, and no TimeNet reads them.
+"""
 
 _IN_MEMORY_DATABASE = "an in-memory control database"
 """What an error names in place of a file for a control database without one."""
@@ -57,20 +64,29 @@ def check_control_schema(connection: duckdb.DuckDBPyConnection) -> int:
         connection: An open TimeF control database.
 
     Raises:
-        TimeFFormatVersionError: If the schema is newer than this TimeNet reads.
-        TimeFFormatError: If the schema metadata is missing, malformed, or unsupported.
+        TimeFFormatVersionError: If the schema is older or newer than this TimeNet reads.
+        TimeFFormatError: If the schema metadata is missing or malformed.
     """
     try:
         row = connection.execute("SELECT value FROM control_metadata WHERE key = 'schema_version'").fetchone()
     except duckdb.Error as exc:
         raise TimeFFormatError("control.duckdb does not contain valid schema metadata") from exc
-    if row is not None and row[0] == str(CONTROL_SCHEMA_VERSION):
-        return CONTROL_SCHEMA_VERSION
     found = None if row is None else row[0]
-    if isinstance(found, str) and found.isdecimal() and int(found) > CONTROL_SCHEMA_VERSION:
-        where = _database_file(connection) or _IN_MEMORY_DATABASE
-        raise TimeFFormatVersionError(FormatVersionSubject.CONTROL_SCHEMA, where, int(found), CONTROL_SCHEMA_VERSION)
-    raise TimeFFormatError(f"unsupported control schema version {found!r}; expected {CONTROL_SCHEMA_VERSION}")
+    # The writer stores str(version), so a version has no sign, no leading zero, and no other digits.
+    if not isinstance(found, str) or re.fullmatch(r"[1-9][0-9]*", found) is None:
+        raise TimeFFormatError(f"unsupported control schema version {found!r}; expected {CONTROL_SCHEMA_VERSION}")
+    version = int(found)
+    if not OLDEST_READABLE_CONTROL_SCHEMA_VERSION <= version <= CONTROL_SCHEMA_VERSION:
+        file = _database_file(connection)
+        raise TimeFFormatVersionError(
+            FormatVersionSubject.CONTROL_SCHEMA,
+            _IN_MEMORY_DATABASE if file is None else file,
+            version,
+            OLDEST_READABLE_CONTROL_SCHEMA_VERSION,
+            CONTROL_SCHEMA_VERSION,
+            None if file is None else Path(file),
+        )
+    return version
 
 
 def _database_file(connection: duckdb.DuckDBPyConnection) -> str | None:

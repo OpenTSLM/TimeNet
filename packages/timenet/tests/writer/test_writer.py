@@ -11,7 +11,7 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest
+from timenet.manifest import TIMEF_FORMAT_VERSION, Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
@@ -100,7 +100,7 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.dataset_id == "timenet/hello-world"
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == TIMEF_FORMAT_VERSION
     assert manifest.counts.records == 3
     assert len(manifest.dataset_schema.time_series_specs) == 2
     # files listed in the manifest all exist

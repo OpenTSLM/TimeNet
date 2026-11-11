@@ -40,7 +40,7 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=build_env,        # BuildEnvironment (required)
-    timef_format_version=1,     # required; validated against the supported set {1}
+    timef_format_version=3,     # required; the supported set is {3} as of TimeNet 0.12
 )
 ```
 
@@ -98,7 +98,9 @@ validity arrays next to the values.
 Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's
 `ValidationError`. `TIMEF_FORMAT_VERSION` in `timenet.manifest` is the version that this TimeNet
 writes, and the newest that it reads. It versions every file of a release except `control.duckdb`,
-which has its own schema version.
+which has its own schema version. `OLDEST_READABLE_TIMEF_FORMAT_VERSION` is the oldest version
+that this TimeNet reads. TimeNet 0.12 reads only version 3. Versions 1 and 2 name layouts used
+during early development, and no TimeNet reads them.
 
 ### Codec
 
@@ -112,9 +114,8 @@ and `counts` default to empty. Unknown fields are rejected. A malformed block ra
 `ValidationError` with its native field locations and error details.
 
 Registries read a stored manifest with `read_manifest(path)` or `parse_manifest(text, where)` from
-`timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`. A manifest of a
-newer TimeF format raises `TimeFFormatVersionError` instead. A file that cannot be read raises a
-plain `TimeFFormatError`.
+`timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`. A manifest of an
+older or a newer unsupported TimeF format raises `TimeFFormatVersionError` instead.
 
 ### Serialization notes
 

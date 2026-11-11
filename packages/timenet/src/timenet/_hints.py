@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 import shlex
 from typing import Any, TypeAlias
 
@@ -537,9 +538,14 @@ def _conflict(error: TimeNetVersionConflictError, facts: Facts) -> str:
     return "A published version cannot change, so a changed release needs a new version."
 
 
-def _bad_manifest(error: TimeNetManifestError, facts: Facts) -> str | None:
-    """Return a hint that names the delete that lets a download or a build replace a release, or None."""
-    local_registry, path = facts.local_registry, error.path
+def _replace_release(path: Path | None, facts: Facts) -> str | None:
+    """Return a hint that names the delete that lets a download or a build replace a release, or None.
+
+    Args:
+        path: A file of the release, or ``None`` for a file that a registry served.
+        facts: Details of the operation.
+    """
+    local_registry = facts.local_registry
     release = None if local_registry is None or path is None else local_registry.release_at(path)
     if path is None or release is None:
         return None
@@ -549,9 +555,11 @@ def _bad_manifest(error: TimeNetManifestError, facts: Facts) -> str | None:
     return f"{again}, then clear again." if facts.request is Operation.CLEAR else f"{again}."
 
 
-def _format_version(error: TimeFFormatVersionError) -> str | None:
-    """Return a hint that names the upgrade that reads a newer format, or None for an older one."""
-    return "Upgrade the timenet package to read it." if error.found > error.supported else None
+def _format_version(error: TimeFFormatVersionError, facts: Facts) -> str | None:
+    """Return a hint that names the upgrade for a newer format, or the new download or build for an older one."""
+    if error.found > error.newest_readable:
+        return "Upgrade the timenet package to read it."
+    return _replace_release(error.path, facts)
 
 
 def _bad_origin(release: DatasetRef, facts: Facts, wording: HintWording) -> str:
@@ -617,8 +625,8 @@ _REMEDIES: dict[type[TimeNetError], Remedy] = {
     TimeNetAccessError: lambda error, facts, wording: _access(error.dataset, facts, wording),
     TimeNetFileError: lambda error, facts, wording: _damaged(error.release, facts, wording),
     TimeNetVersionConflictError: lambda error, facts, _: _conflict(error, facts),
-    TimeNetManifestError: lambda error, facts, _: _bad_manifest(error, facts),
-    TimeFFormatVersionError: lambda error, _, __: _format_version(error),
+    TimeNetManifestError: lambda error, facts, _: _replace_release(error.path, facts),
+    TimeFFormatVersionError: lambda error, facts, _: _format_version(error, facts),
     TimeNetOriginError: lambda error, facts, wording: _bad_origin(error.release, facts, wording),
     TimeNetIsolationError: lambda _, __, wording: (
         f"Build in this interpreter with {wording.run_in_this_interpreter()}."

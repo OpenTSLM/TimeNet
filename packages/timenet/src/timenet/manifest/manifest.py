@@ -28,11 +28,18 @@ from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
 
-TIMEF_FORMAT_VERSION = 1
-"""The maximum TimeF format version this TimeNet package supports.
+TIMEF_FORMAT_VERSION = 3
+"""The maximum TimeF format version this TimeNet package supports, and the version that it writes.
 
 It versions every file of a release except ``control.duckdb``, which
 :data:`~timenet.format.duckdb.CONTROL_SCHEMA_VERSION` versions.
+"""
+
+OLDEST_READABLE_TIMEF_FORMAT_VERSION = 3
+"""The oldest TimeF format version that this TimeNet reads.
+
+Version 3 is the format of TimeNet 0.12. Versions 1 and 2 name layouts used during early development, and no TimeNet
+reads them.
 """
 
 GitSHA = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$")]
@@ -102,7 +109,9 @@ class Manifest(TimeFModel):
     reads their files too."""
     build_env: BuildEnvironment
     """The Python version, the package set, and the TimeNet commits that produced this version."""
-    timef_format_version: Annotated[int, Field(strict=True, ge=1, le=TIMEF_FORMAT_VERSION)]
+    timef_format_version: Annotated[
+        int, Field(strict=True, ge=OLDEST_READABLE_TIMEF_FORMAT_VERSION, le=TIMEF_FORMAT_VERSION)
+    ]
     """The TimeF format version of the release: every file except ``control.duckdb``, which has its own."""
 
     @model_validator(mode="after")
@@ -202,30 +211,35 @@ def parse_manifest(text: str | bytes, where: str, *, path: Path | None = None) -
         The manifest.
 
     Raises:
-        TimeFFormatVersionError: If the manifest uses a newer format than this TimeNet reads.
+        TimeFFormatVersionError: If the manifest uses an older or a newer format than this TimeNet reads.
         TimeNetManifestError: If the text is not a valid manifest.
     """
     try:
         return Manifest.model_validate_json(text)
     except ValidationError as error:
-        # A newer format usually adds fields too. Its version explains every other error, so it comes first.
+        # Another format usually adds or drops fields too. Its version explains every other error, so it comes first.
         found = _format_version(text)
-        if found is not None and found > TIMEF_FORMAT_VERSION:
+        if found is not None and not OLDEST_READABLE_TIMEF_FORMAT_VERSION <= found <= TIMEF_FORMAT_VERSION:
             raise TimeFFormatVersionError(
-                FormatVersionSubject.TIMEF_FORMAT, where, found, TIMEF_FORMAT_VERSION
+                FormatVersionSubject.TIMEF_FORMAT,
+                where,
+                found,
+                OLDEST_READABLE_TIMEF_FORMAT_VERSION,
+                TIMEF_FORMAT_VERSION,
+                path,
             ) from error
         raise TimeNetManifestError(where, _first_problem(error), path) from error
 
 
 def _format_version(text: str | bytes) -> int | None:
-    """Return the integer ``timef_format_version`` of a JSON object, or ``None`` if it has none."""
+    """Return the ``timef_format_version`` of a JSON object, or ``None`` if it has none or it is not a version."""
     try:
         data = json.loads(text)
     except ValueError:
         return None
     version = data.get("timef_format_version") if isinstance(data, dict) else None
-    # A bool is an int in Python, but not a format version.
-    return version if type(version) is int else None
+    # A bool is an int in Python, but not a format version. Versions start at 1.
+    return version if type(version) is int and version >= 1 else None
 
 
 def read_manifest(path: Path) -> Manifest:
@@ -239,7 +253,7 @@ def read_manifest(path: Path) -> Manifest:
 
     Raises:
         TimeFFormatError: If the file cannot be read.
-        TimeFFormatVersionError: If the manifest uses a newer format than this TimeNet reads.
+        TimeFFormatVersionError: If the manifest uses an older or a newer format than this TimeNet reads.
         TimeNetManifestError: If the file is not a valid manifest.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_manifest
     try:
