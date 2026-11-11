@@ -547,9 +547,9 @@ def test_missing_root_or_manifest_raises(tmp_path):
 @pytest.mark.parametrize(
     ("format_version", "error", "message"),
     [
-        (4, TimeFFormatVersionError, "uses TimeF format version 4, but the newest that this timenet reads is 3"),
-        (99, TimeFFormatVersionError, "uses TimeF format version 99, but the newest that this timenet reads is 3"),
-        (2, TimeFFormatVersionError, "uses TimeF format version 2, but the oldest that this timenet reads is 3"),
+        (3, TimeFFormatVersionError, "uses TimeF format version 3, but the newest that this timenet reads is 2"),
+        (99, TimeFFormatVersionError, "uses TimeF format version 99, but the newest that this timenet reads is 2"),
+        (1, TimeFFormatVersionError, "uses TimeF format version 1, but the oldest that this timenet reads is 2"),
     ],
 )
 def test_unsupported_format_version_raises(tmp_path, format_version, error, message):

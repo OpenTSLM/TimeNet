@@ -40,7 +40,7 @@ Manifest(
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
     build_env=build_env,        # BuildEnvironment (required)
-    timef_format_version=3,     # required; the supported set is {3} as of TimeNet 0.12
+    timef_format_version=2,     # required; the supported set is {2} as of TimeNet 0.12
 )
 ```
 
@@ -99,8 +99,8 @@ Direct construction and parsing with an unsupported `timef_format_version` raise
 `ValidationError`. `TIMEF_FORMAT_VERSION` in `timenet.manifest` is the version that this TimeNet
 writes, and the newest that it reads. It versions every file of a release except `control.duckdb`,
 which has its own schema version. `OLDEST_READABLE_TIMEF_FORMAT_VERSION` is the oldest version
-that this TimeNet reads. TimeNet 0.12 reads only version 3. Versions 1 and 2 name layouts used
-during early development, and no TimeNet reads them.
+that this TimeNet reads. TimeNet 0.12 reads only version 2. Version 1 names layouts used during
+early development, and no TimeNet reads them.
 
 ### Codec
 

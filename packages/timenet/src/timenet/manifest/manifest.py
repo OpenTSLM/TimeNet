@@ -28,18 +28,18 @@ from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
 
-TIMEF_FORMAT_VERSION = 3
+TIMEF_FORMAT_VERSION = 2
 """The maximum TimeF format version this TimeNet package supports, and the version that it writes.
 
 It versions every file of a release except ``control.duckdb``, which
 :data:`~timenet.format.duckdb.CONTROL_SCHEMA_VERSION` versions.
 """
 
-OLDEST_READABLE_TIMEF_FORMAT_VERSION = 3
+OLDEST_READABLE_TIMEF_FORMAT_VERSION = 2
 """The oldest TimeF format version that this TimeNet reads.
 
-Version 3 is the format of TimeNet 0.12. Versions 1 and 2 name layouts used during early development, and no TimeNet
-reads them.
+Version 2 is the format of TimeNet 0.12. Version 1 names layouts used during early development, and no TimeNet reads
+them.
 """
 
 GitSHA = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$")]

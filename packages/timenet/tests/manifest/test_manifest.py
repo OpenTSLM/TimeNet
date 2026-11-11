@@ -322,7 +322,7 @@ def test_a_manifest_version_error_names_both_versions(change):
     data = _manifest().to_dict()
     for key, value in change.items():
         data[key] = data[key] | value if isinstance(data.get(key), dict) else value
-    data["timef_format_version"] = 4
+    data["timef_format_version"] = 3
 
     with pytest.raises(TimeFFormatVersionError) as caught:
         parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
@@ -330,31 +330,30 @@ def test_a_manifest_version_error_names_both_versions(change):
     # A newer format almost always adds fields too, and the version must win over them.
     assert (
         str(caught.value)
-        == "the manifest of org/a@1.0.0 uses TimeF format version 4, but the newest that this timenet reads is 3."
+        == "the manifest of org/a@1.0.0 uses TimeF format version 3, but the newest that this timenet reads is 2."
     )
     assert (caught.value.subject, caught.value.found, caught.value.newest_readable) == (
         FormatVersionSubject.TIMEF_FORMAT,
-        4,
         3,
+        2,
     )
 
 
-@pytest.mark.parametrize("version", [1, 2])
 @pytest.mark.parametrize("change", ["version only", "fields differ"])
-def test_a_manifest_of_an_older_format_names_the_oldest_version_that_is_read(version, change):
+def test_a_manifest_of_an_older_format_names_the_oldest_version_that_is_read(change):
     data = _manifest().to_dict()
     if change == "fields differ":
-        # TimeNet 0.11 wrote no build_env, and its manifests had fields that are gone now.
+        # An older format can lack fields that are required now, and have fields that are gone.
         del data["build_env"]
         data["old_block"] = {}
-    data["timef_format_version"] = version
+    data["timef_format_version"] = 1
 
     with pytest.raises(TimeFFormatVersionError) as caught:
         parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
 
     # An older format usually lacks fields too, and the version must win over them.
     assert str(caught.value) == (
-        f"the manifest of org/a@1.0.0 uses TimeF format version {version}, but the oldest that this timenet reads is 3."
+        "the manifest of org/a@1.0.0 uses TimeF format version 1, but the oldest that this timenet reads is 2."
     )
 
 
