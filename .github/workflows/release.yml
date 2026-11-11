@@ -134,9 +134,9 @@ jobs:
           connectors=packages/timenet-connectors/pyproject.toml
           if [ "$PACKAGE" = both ]; then
             # Connectors needs the timenet release that ships with it.
-            timenet=$(uv version --package timenet --short)
-            sed -i -E "s/\"timenet\[build\]>=[^\"]*\"/\"timenet[build]>=$timenet\"/" "$connectors"
-            grep -q "\"timenet\[build\]>=$timenet\"" "$connectors"
+            timenet_version=$(uv version --package timenet --short)
+            sed -i -E "s/\"timenet\[build\]>=[^\"]*\"/\"timenet[build]>=$timenet_version\"/" "$connectors"
+            grep -q "\"timenet\[build\]>=$timenet_version\"" "$connectors"
           else
             # Warn when the other package has changes this release leaves out. Skip the commits
             # cliff.toml skips too: release and development-version commits.
