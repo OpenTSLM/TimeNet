@@ -1,7 +1,9 @@
 name: Release
 
 # Releases timenet, timenet-connectors, or both. Each package has its own version and its own tag,
-# <package>-vX.Y.Z, and its notes list the commits that touched its folder under packages/.
+# <package>-vX.Y.Z. The timenet notes list the commits that touched packages/timenet. The
+# timenet-connectors notes list the connectors added, changed or removed, and the changes to the
+# shared connector code (.github/scripts/connector_notes.py).
 #   1. Run this workflow on main and pick the package. It opens a release PR that sets the version
 #      and shows the notes.
 #   2. Merge the release PR. For every package whose version the PR changed, this tags
@@ -125,7 +127,12 @@ jobs:
             {
               echo "## $package $version"
               echo
-              cliff "$package" --unreleased --tag "$package-v$version" --strip header
+              if [ "$package" = timenet-connectors ]; then
+                last=$(git describe --tags --abbrev=0 --match "$package-v*" --match 'v*')
+                uv run --no-project .github/scripts/connector_notes.py "$last" HEAD --release "$package-v$version"
+              else
+                cliff "$package" --unreleased --tag "$package-v$version" --strip header
+              fi
               echo
             } >> "$RUNNER_TEMP/notes.md"
             titles+=("$package $version")
@@ -250,7 +257,13 @@ jobs:
               git push origin "$tag"
             fi
             if ! gh release view "$tag" >/dev/null 2>&1; then
-              cliff "$package" --latest --strip header --output "$RUNNER_TEMP/notes.md"
+              if [ "$package" = timenet-connectors ]; then
+                # The new tag is on HEAD, so the last release is the newest tag before it.
+                last=$(git describe --tags --abbrev=0 --match "$package-v*" --match 'v*' HEAD^)
+                uv run --no-project .github/scripts/connector_notes.py "$last" HEAD --release "$tag" > "$RUNNER_TEMP/notes.md"
+              else
+                cliff "$package" --latest --strip header --output "$RUNNER_TEMP/notes.md"
+              fi
               gh release create "$tag" --verify-tag --title "$package $version" --notes-file "$RUNNER_TEMP/notes.md"
             fi
           done
