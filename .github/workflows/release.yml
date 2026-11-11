@@ -6,6 +6,9 @@ name: Release
 #      the tag (which waits for approval in the pypi environment), and opens a PR that moves main
 #      to the next development version, X.(Y+1).0.dev0.
 #   3. Approve the publish run, then merge the development-version PR.
+# The version is fixed when the release PR opens. If main gets changes that need a bigger bump
+# before you merge it, close the release PR and run this workflow again.
+# Every job can be re-run: steps that already happened are skipped.
 #
 # Needs a GitHub App with contents and pull-requests write access, installed on this repository,
 # with its id in the RELEASE_APP_ID variable and its key in the RELEASE_APP_PRIVATE_KEY secret.
@@ -88,7 +91,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git commit -am "chore(release): $VERSION"
-          git push origin "$branch"
+          git push --force origin "$branch"
           {
             echo "Merging this PR tags v$VERSION, creates the GitHub release with the notes below, and"
             echo "starts the PyPI publish run for approval. To change the notes, edit them in the"
@@ -98,7 +101,11 @@ jobs:
             echo
             cat "$RUNNER_TEMP/notes.md"
           } > "$RUNNER_TEMP/body.md"
-          gh pr create --base main --head "$branch" --title "chore(release): $VERSION" --body-file "$RUNNER_TEMP/body.md"
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr edit "$branch" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head "$branch" --title "chore(release): $VERSION" --body-file "$RUNNER_TEMP/body.md"
+          fi
 
   release:
     if: >-
@@ -137,10 +144,21 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$VERSION" -m "TimeNet $VERSION"
-          uvx "$GIT_CLIFF" --latest --strip header --output "$RUNNER_TEMP/notes.md"
-          git push origin "v$VERSION"
-          gh release create "v$VERSION" --verify-tag --title "TimeNet $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          tag="v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            # A re-run: the tag is already pushed. It must point at this release.
+            if [ "$(git rev-parse "$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
+              echo "::error title=Tag mismatch::$tag exists on another commit."
+              exit 1
+            fi
+          else
+            git tag -a "$tag" -m "TimeNet $VERSION"
+            git push origin "$tag"
+          fi
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            uvx "$GIT_CLIFF" --latest --strip header --output "$RUNNER_TEMP/notes.md"
+            gh release create "$tag" --verify-tag --title "TimeNet $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
       - name: Start the PyPI publish run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,17 +184,20 @@ jobs:
       - name: Open the development version PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASED: ${{ needs.release.outputs.version }}
         run: |
           for package in timenet timenet-connectors; do
             uv version --package "$package" --bump minor --bump dev=0 --frozen
           done
           uv lock
           next=$(uv version --package timenet --short)
-          branch="chore/start-${next%.dev0}-development"
+          branch="chore/start-development-after-v$RELEASED"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git commit -am "chore: start ${next%.dev0} development"
-          git push origin "$branch"
-          gh pr create --base main --head "$branch" --title "chore: start ${next%.dev0} development" \
-            --body "Moves both packages to $next, so builds from main are not mistaken for the release."
+          git push --force origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head "$branch" --title "chore: start ${next%.dev0} development" \
+              --body "Moves both packages to $next, so builds from main are not mistaken for the $RELEASED release."
+          fi

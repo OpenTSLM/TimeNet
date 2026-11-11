@@ -34,7 +34,6 @@ sort_commits = "newest"
 protect_breaking_commits = true
 filter_commits = false
 commit_parsers = [
-  { message = "^Merge branch", skip = true },
   { message = "^chore\\(release\\)", skip = true },
   { message = "^chore: start .* development", skip = true },
   { message = "^feat[(!:]", group = "<!-- 0 -->Features" },
