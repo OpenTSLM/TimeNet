@@ -10,6 +10,7 @@ import pytest
 
 from timenet.errors import FormatVersionSubject, TimeFFormatVersionError, TimeNetManifestError
 from timenet.manifest import (
+    TIMEF_FORMAT_VERSION,
     BuildEnvironment,
     FilePart,
     GitSource,
@@ -107,7 +108,7 @@ def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
         ),
         values_backend=cast("ValuesBackend", values_backend),
         build_env=_BUILD_ENV,
-        timef_format_version=1,
+        timef_format_version=TIMEF_FORMAT_VERSION,
     )
 
 
@@ -120,7 +121,7 @@ def test_files_all_parts_concatenates_in_order():
 
 
 def test_format_version():
-    assert _manifest().timef_format_version == 1
+    assert _manifest().timef_format_version == TIMEF_FORMAT_VERSION
 
 
 def test_unknown_spec_unit_is_null_in_manifest():
@@ -165,8 +166,8 @@ def test_manifest_rejects_unknown_domain():
         Manifest.model_validate(payload)
 
 
-def test_missing_values_round_trip_at_format_version_1():
-    # Schemas with missing values retain format version 1. Reading such artifacts still requires
+def test_missing_values_round_trip_at_the_current_format_version():
+    # Schemas with missing values keep the current format version. Reading such artifacts still requires
     # an SDK that supports missing values, including the parallel validity arrays in Zarr.
     base = _replace(
         _manifest(),
@@ -180,9 +181,9 @@ def test_missing_values_round_trip_at_format_version_1():
         files=base.files,
         dataset_schema=_replace(base.dataset_schema, time_series_specs=(spec,)),
         build_env=_BUILD_ENV,
-        timef_format_version=1,
+        timef_format_version=TIMEF_FORMAT_VERSION,
     )
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == TIMEF_FORMAT_VERSION
     stored = manifest.to_dict()["schema"]["time_series_specs"][0]
     assert stored["missing"] == {"reason": "sensor_gap", "description": "The sensor lost contact."}
     assert "nullable" not in stored
@@ -197,7 +198,7 @@ def test_a_spec_without_missing_allows_no_missing_timestep():
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("missing")
     restored = Manifest.model_validate(data)
-    assert restored.timef_format_version == 1
+    assert restored.timef_format_version == TIMEF_FORMAT_VERSION
     assert restored.dataset_schema.time_series_specs[0].missing is None
     assert restored.dataset_schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
@@ -275,7 +276,7 @@ def test_model_validate_json_exposes_pydantic_json_error():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 1
+    assert d["timef_format_version"] == TIMEF_FORMAT_VERSION
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
@@ -321,7 +322,7 @@ def test_a_manifest_version_error_names_both_versions(change):
     data = _manifest().to_dict()
     for key, value in change.items():
         data[key] = data[key] | value if isinstance(data.get(key), dict) else value
-    data["timef_format_version"] = 2
+    data["timef_format_version"] = 3
 
     with pytest.raises(TimeFFormatVersionError) as caught:
         parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
@@ -329,16 +330,34 @@ def test_a_manifest_version_error_names_both_versions(change):
     # A newer format almost always adds fields too, and the version must win over them.
     assert (
         str(caught.value)
-        == "the manifest of org/a@1.0.0 uses TimeF format version 2, but the newest that this timenet reads is 1."
+        == "the manifest of org/a@1.0.0 uses TimeF format version 3, but the newest that this timenet reads is 2."
     )
-    assert (caught.value.subject, caught.value.found, caught.value.supported) == (
+    assert (caught.value.subject, caught.value.found, caught.value.newest_readable) == (
         FormatVersionSubject.TIMEF_FORMAT,
+        3,
         2,
-        1,
     )
 
 
-@pytest.mark.parametrize("version", [0, "2", True])
+@pytest.mark.parametrize("change", ["version only", "fields differ"])
+def test_a_manifest_of_an_older_format_names_the_oldest_version_that_is_read(change):
+    data = _manifest().to_dict()
+    if change == "fields differ":
+        # An older format can lack fields that are required now, and have fields that are gone.
+        del data["build_env"]
+        data["old_block"] = {}
+    data["timef_format_version"] = 1
+
+    with pytest.raises(TimeFFormatVersionError) as caught:
+        parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
+
+    # An older format usually lacks fields too, and the version must win over them.
+    assert str(caught.value) == (
+        "the manifest of org/a@1.0.0 uses TimeF format version 1, but the oldest that this timenet reads is 2."
+    )
+
+
+@pytest.mark.parametrize("version", [0, "3", True])
 def test_an_invalid_manifest_version_reports_as_not_valid(version):
     data = _manifest().to_dict()
     data["timef_format_version"] = version
@@ -368,7 +387,7 @@ def test_dataset_id_must_match_metadata():
             metadata=_manifest().metadata,
             files=_manifest().files,
             build_env=_BUILD_ENV,
-            timef_format_version=1,
+            timef_format_version=TIMEF_FORMAT_VERSION,
         )
 
 
@@ -517,7 +536,7 @@ def test_codec_roundtrip_property(version, records, task_counts):
         counts=ManifestCounts(records=records, tasks=task_counts),
         files=ManifestFiles(control=_CONTROL),
         build_env=_BUILD_ENV,
-        timef_format_version=1,
+        timef_format_version=TIMEF_FORMAT_VERSION,
     )
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
 

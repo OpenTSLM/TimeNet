@@ -319,27 +319,42 @@ class FormatVersionSubject(Enum):
 
 
 class TimeFFormatVersionError(TimeFFormatError):
-    """A stored TimeF artifact has a newer format version than this TimeNet reads.
+    """A stored TimeF artifact has a format version that this TimeNet does not read.
 
     Attributes:
         subject: The versioned part of the release.
         where: The file of the artifact, or a description of where a registry keeps it.
-        found: The version that the artifact records.
-        supported: The newest version that this TimeNet reads.
+        found: The version that the artifact records, older than ``oldest_readable`` or newer than
+            ``newest_readable``.
+        oldest_readable: The oldest version that this TimeNet reads.
+        newest_readable: The newest version that this TimeNet reads.
+        path: The file of the artifact, or ``None`` for an artifact that a registry served.
     """
 
-    def __init__(self, subject: FormatVersionSubject, where: str, found: int, supported: int) -> None:
-        super().__init__(subject, where, found, supported)
+    def __init__(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - a pickled error passes them in order
+        self,
+        subject: FormatVersionSubject,
+        where: str,
+        found: int,
+        oldest_readable: int,
+        newest_readable: int,
+        path: "Path | None" = None,
+    ) -> None:
+        super().__init__(subject, where, found, oldest_readable, newest_readable, path)
         self.subject = subject
         self.where = where
         self.found = found
-        self.supported = supported
+        self.oldest_readable = oldest_readable
+        self.newest_readable = newest_readable
+        self.path = path
 
     def _message(self) -> str:
-        return (
-            f"{self.where} uses {self.subject.value} version {self.found}, "
-            f"but the newest that this timenet reads is {self.supported}."
+        bound = (
+            f"the newest that this timenet reads is {self.newest_readable}"
+            if self.found > self.newest_readable
+            else f"the oldest that this timenet reads is {self.oldest_readable}"
         )
+        return f"{self.where} uses {self.subject.value} version {self.found}, but {bound}."
 
 
 class TimeNetOriginError(TimeFFormatError):

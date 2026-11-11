@@ -10,7 +10,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest
+from timenet.manifest import TIMEF_FORMAT_VERSION, Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -197,7 +197,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == TIMEF_FORMAT_VERSION
     with TimeFReader(open_local_version(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).signals[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)
