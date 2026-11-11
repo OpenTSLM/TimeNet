@@ -9,7 +9,7 @@ stamped at month start. The panel has no price series and the dataset has no tas
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar
@@ -28,7 +28,7 @@ from timenet.types.specs import MissingReason, MissingValues
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 
 
-ORIGIN = TimeOrigin(datetime(1920, 1, 1, tzinfo=timezone.utc))
+ORIGIN = TimeOrigin(datetime(1920, 1, 1, tzinfo=UTC))
 """The shared relative zero: US crude production, the oldest series, starts in 1920-01."""
 ACCESS_DATE = "2026-11-11"
 US_PER_DAY = 86_400 * 10**6
@@ -88,7 +88,9 @@ CFTC_COLUMNS = (
     "nonrept_short",
 )
 
-NOT_RECORDED = MissingValues(reason=MissingReason.NOT_RECORDED, description="The source reported no value for the step.")
+NOT_RECORDED = MissingValues(
+    reason=MissingReason.NOT_RECORDED, description="The source reported no value for the step."
+)
 
 
 def _us(timestamps: pa.Array) -> np.ndarray:
@@ -97,7 +99,7 @@ def _us(timestamps: pa.Array) -> np.ndarray:
     Returns:
         Offsets in whole microseconds, one per row.
     """
-    moments = pc.cast(timestamps, pa.timestamp("us", tz="UTC")).to_pylist()
+    moments = timestamps.cast(pa.timestamp("us", tz="UTC")).to_pylist()
     return np.array([offset_us(moment, ORIGIN.timestamp) for moment in moments], dtype=np.int64)
 
 
@@ -165,6 +167,253 @@ def _common(publisher: str, upstream_id: str, frequency: str, unit_label: str, l
     }
 
 
+def _weekly_stocks(path: Path) -> Signal:
+    """Build the weekly crude-stocks signal on a 7-day grid, with missing weeks declared.
+
+    Returns:
+        The stocks signal.
+
+    Raises:
+        TimeNetConnectorError: If the week-ending dates are not all seven days apart.
+    """
+    stocks = _sorted_by(_read(path, ["period_end", "value"]), "period_end")
+    offsets = _us(stocks["period_end"])
+    values = stocks["value"].cast(pa.float64()).to_numpy(zero_copy_only=False)
+    step = int(WEEK_US)
+    if np.any((offsets[1:] - offsets[:-1]) % step != 0):
+        raise TimeNetConnectorError("weekly stocks are not on a 7-day grid")
+    n_steps = int((offsets[-1] - offsets[0]) // step) + 1
+    grid = np.full(n_steps, np.nan)
+    grid[(offsets - offsets[0]) // step] = values
+    signal = Signal.from_values(
+        pa.array(grid, mask=np.isnan(grid)),
+        spec=TimeSeriesSpec(
+            spec_type="crude_stocks_ex_spr",
+            name="US commercial crude oil stocks, excluding SPR",
+            unit_value="kilooil_barrel",
+            dtype="float64",
+            missing=NOT_RECORDED,
+        ),
+        name="eia_WCESTUS1",
+        time_axis=RegularAxis(period_us=WEEK_US, offset_us=int(offsets[0])),
+    )
+    for key, value in _common(
+        "EIA", "WCESTUS1", "weekly", "thousand barrels", LAG_MONTHS["eia_stocks"], geography="USA"
+    ).items():
+        signal.annotate(Annotation(key=key, value=value))
+    return signal
+
+
+def _eia_signals(paths: Mapping[str, Path]) -> tuple[Signal, ...]:
+    """Build the EIA survey signals: weekly stocks on a 7-day grid, monthly production, international production."""
+    signals: list[Signal] = [_weekly_stocks(paths["stocks"])]
+
+    production = _read(paths["production"], ["period_start", "value"])
+    signal = _irregular(
+        production["value"].cast(pa.float64()).to_numpy(zero_copy_only=False),
+        _us(production["period_start"]),
+        spec=TimeSeriesSpec(
+            spec_type="us_crude_production",
+            name="US field production of crude oil",
+            unit_value="kilooil_barrel/day",
+            dtype="float64",
+        ),
+        name="eia_MCRFPUS2",
+        annotations=_common(
+            "EIA", "MCRFPUS2", "monthly", "thousand barrels per day", LAG_MONTHS["eia_production"], geography="USA"
+        ),
+    )
+    if signal is not None:
+        signals.append(signal)
+
+    international = _read(
+        paths["international"],
+        ["period_start", "countryRegionId", "countryRegionName", "is_aggregate", "value", "missing_reason"],
+    )
+    spec = TimeSeriesSpec(
+        spec_type="petroleum_liquids_production",
+        name="Total petroleum and other liquids production",
+        unit_value="kilooil_barrel/day",
+        dtype="float64",
+    )
+    ids = international["countryRegionId"].unique().to_pylist()
+    for region_id in ids:
+        rows = international.filter(pc.field("countryRegionId") == region_id)
+        region_name = rows["countryRegionName"][0].as_py()
+        aggregate = bool(rows["is_aggregate"][0].as_py())
+        signal = _irregular(
+            rows["value"].cast(pa.float64()).to_numpy(zero_copy_only=False),
+            _us(rows["period_start"]),
+            spec=spec,
+            name=f"eia_intl_{region_id}",
+            annotations=_common(
+                "EIA",
+                f"international/{region_id}",
+                "monthly",
+                "thousand barrels per day",
+                LAG_MONTHS["eia_international"],
+                geography=str(region_id),
+                geography_name=str(region_name),
+                aggregate="true" if aggregate else "false",
+                product="Total petroleum and other liquids",
+            ),
+        )
+        if signal is not None:
+            signals.append(signal)
+    return tuple(signals)
+
+
+def _jodi_signals(path: Path) -> tuple[Signal, ...]:
+    """Build one signal per (area, flow) of JODI crude oil, in the flow's own unit."""
+    table = _read(path, ["ref_area", "period_start", "flow_breakdown", "unit_measure", "value"])
+    signals: list[Signal] = []
+    for flow, (flow_name, unit_code, unit) in JODI_FLOWS.items():
+        rows = table.filter((pc.field("flow_breakdown") == flow) & (pc.field("unit_measure") == unit_code))
+        spec = TimeSeriesSpec(
+            spec_type=f"crude_{flow_name}",
+            name=f"Crude oil {flow_name.replace('_', ' ')}",
+            unit_value=unit,
+            dtype="float64",
+        )
+        for area in rows["ref_area"].unique().to_pylist():
+            area_rows = rows.filter(pc.field("ref_area") == area)
+            signal = _irregular(
+                area_rows["value"].cast(pa.float64()).to_numpy(zero_copy_only=False),
+                _us(area_rows["period_start"]),
+                spec=spec,
+                name=f"jodi_{area}_{flow}",
+                annotations=_common(
+                    "JODI",
+                    f"CRUDEOIL/{flow}/{unit_code}/{area}",
+                    "monthly",
+                    "thousand barrels" if unit_code == "KBBL" else "thousand barrels per day",
+                    LAG_MONTHS["jodi"],
+                    geography=str(area),
+                    product="CRUDEOIL",
+                    flow=flow,
+                ),
+            )
+            if signal is not None:
+                signals.append(signal)
+    return tuple(signals)
+
+
+def _cftc_signals(path: Path) -> tuple[Signal, ...]:
+    """Build one signal per positioning column of the WTI Commitments of Traders report."""
+    table = _sorted_by(_read(path), "date")
+    offsets = _us(table["date"])
+    signals: list[Signal] = []
+    for column in CFTC_COLUMNS:
+        if column not in table.column_names:
+            continue
+        signal = _irregular(
+            table[column].cast(pa.float64()).to_numpy(zero_copy_only=False),
+            offsets,
+            spec=TimeSeriesSpec(
+                spec_type=f"cot_{column}",
+                name=f"COT {column.replace('_', ' ')}",
+                unit_value="dimensionless",
+                dtype="float64",
+            ),
+            name=f"cftc_067651_{column}",
+            annotations=_common(
+                "CFTC",
+                f"067651/{column}",
+                "weekly (Tuesday as-of)",
+                "contracts",
+                LAG_MONTHS["cftc"],
+                market="WTI crude oil, NYMEX, code 067651",
+            ),
+        )
+        if signal is not None:
+            signals.append(signal)
+    return tuple(signals)
+
+
+def _frb_signals(path: Path) -> tuple[Signal, ...]:
+    """Build the broad dollar index signals, DTWEXBGS and its predecessor DTWEXM."""
+    table = _read(path, ["series_id", "date", "value"])
+    signals: list[Signal] = []
+    for series_id, spec_type, label in (
+        ("DTWEXBGS", "dollar_index_broad", "Nominal broad US dollar index, Jan 2006 = 100"),
+        ("DTWEXM", "dollar_index_major", "Trade-weighted US dollar index, major currencies, Mar 1973 = 100"),
+    ):
+        rows = table.filter(pc.field("series_id") == series_id)
+        signal = _irregular(
+            rows["value"].cast(pa.float64()).to_numpy(zero_copy_only=False),
+            _us(rows["date"]),
+            spec=TimeSeriesSpec(spec_type=spec_type, name=label, unit_value="dimensionless", dtype="float64"),
+            name=f"frb_{series_id}",
+            annotations=_common("FRB", series_id, "daily (business days)", "index", LAG_MONTHS["frb"]),
+        )
+        if signal is not None:
+            signals.append(signal)
+    return tuple(signals)
+
+
+def _gpr_signals(path: Path) -> tuple[Signal, ...]:
+    """Build the geopolitical risk index and its threats and acts components."""
+    table = _sorted_by(_read(path, ["month", "gpr", "gpr_threats", "gpr_acts"]), "month")
+    offsets = _us(table["month"])
+    signals: list[Signal] = []
+    for column, label in (
+        ("gpr", "Geopolitical risk index"),
+        ("gpr_threats", "Geopolitical threats index"),
+        ("gpr_acts", "Geopolitical acts index"),
+    ):
+        signal = _irregular(
+            table[column].cast(pa.float64()).to_numpy(zero_copy_only=False),
+            offsets,
+            spec=TimeSeriesSpec(spec_type=column, name=label, unit_value="dimensionless", dtype="float64"),
+            name=f"gpr_{column}",
+            annotations=_common("GPR", column, "monthly", "index (1985-2019 = 100)", LAG_MONTHS["gpr"]),
+        )
+        if signal is not None:
+            signals.append(signal)
+    return tuple(signals)
+
+
+def _steo_records(path: Path) -> list[Record]:
+    """Build one Record per STEO publication month with its forward WTI forecast path."""
+    table = _read(path, ["pub_year", "pub_month", "target_month_start", "horizon_months", "wti"])
+    spec = TimeSeriesSpec(
+        spec_type="wti_forecast",
+        name="STEO WTI spot price forecast (USD per barrel)",
+        unit_value=None,
+        dtype="float64",
+    )
+    years = table["pub_year"].cast(pa.int64()).to_numpy(zero_copy_only=False)
+    months = table["pub_month"].cast(pa.int64()).to_numpy(zero_copy_only=False)
+    table = table.append_column("pub_key", pa.array(years * 100 + months))
+    records: list[Record] = []
+    for key in sorted(table["pub_key"].unique().to_pylist()):
+        rows = table.filter(pc.field("pub_key") == key)
+        year, month = divmod(int(key), 100)
+        signal = _irregular(
+            rows["wti"].cast(pa.float64()).to_numpy(zero_copy_only=False),
+            _us(rows["target_month_start"]),
+            spec=spec,
+            name="wti_forecast",
+            annotations=_common(
+                "EIA",
+                f"STEO/{year}-{month:02d}/WTIPUUS",
+                "monthly",
+                "USD per barrel",
+                0,
+                information_cutoff=f"end of {year}-{month - 1:02d}" if month > 1 else f"end of {year - 1}-12",
+            ),
+        )
+        if signal is None:
+            continue
+        record = Record(
+            sources=(Source(name=f"EIA STEO {year}-{month:02d}", signals=(signal,)),),
+            start_time=ORIGIN,
+            metadata={"kind": "steo_vintage", "pub_month": f"{year}-{month:02d}", "forward_months": len(rows)},
+        )
+        records.append(record)
+    return records
+
+
 class OilFundamentalsConnector(BaseHuggingFaceConnector):
     """Connector for the ``sethlei/oil-fundamentals`` panel (Hub repo ``sethlei/oil-fundamentals``)."""
 
@@ -193,11 +442,11 @@ class OilFundamentalsConnector(BaseHuggingFaceConnector):
         paths = self.ref_paths(raw_refs, *self.SOURCE_FILES)
         dataset = TimeFDataset(metadata=self.metadata())
         sources = (
-            Source(name="EIA", signals=self._eia_signals(paths)),
-            Source(name="JODI", signals=self._jodi_signals(paths["jodi"])),
-            Source(name="CFTC", signals=self._cftc_signals(paths["cftc"])),
-            Source(name="FRB", signals=self._frb_signals(paths["frb"])),
-            Source(name="GPR", signals=self._gpr_signals(paths["gpr"])),
+            Source(name="EIA", signals=_eia_signals(paths)),
+            Source(name="JODI", signals=_jodi_signals(paths["jodi"])),
+            Source(name="CFTC", signals=_cftc_signals(paths["cftc"])),
+            Source(name="FRB", signals=_frb_signals(paths["frb"])),
+            Source(name="GPR", signals=_gpr_signals(paths["gpr"])),
         )
         panel = dataset.add_record(record=Record(sources=sources, start_time=ORIGIN, metadata={"kind": "panel"}))
         panel.add_annotations(
@@ -207,7 +456,7 @@ class OilFundamentalsConnector(BaseHuggingFaceConnector):
                 Annotation(key="month_convention", value="month start"),
             ]
         )
-        for record in self._steo_records(paths["steo"]):
+        for record in _steo_records(paths["steo"]):
             dataset.add_record(record=record)
         dataset.annotate(
             Annotation(
@@ -219,193 +468,6 @@ class OilFundamentalsConnector(BaseHuggingFaceConnector):
             )
         )
         return dataset
-
-    def _eia_signals(self, paths: Mapping[str, Path]) -> tuple[Signal, ...]:
-        """Build the EIA survey signals: weekly stocks on a 7-day grid, monthly production, international production."""
-        signals: list[Signal] = []
-        stocks = _sorted_by(_read(paths["stocks"], ["period_end", "value"]), "period_end")
-        offsets = _us(stocks["period_end"])
-        values = pc.cast(stocks["value"], pa.float64()).to_numpy(zero_copy_only=False)
-        step = int(WEEK_US)
-        if np.any((offsets[1:] - offsets[:-1]) % step != 0):
-            raise TimeNetConnectorError("weekly stocks are not on a 7-day grid")
-        n_steps = int((offsets[-1] - offsets[0]) // step) + 1
-        grid = np.full(n_steps, np.nan)
-        grid[(offsets - offsets[0]) // step] = values
-        stocks_signal = Signal.from_values(
-            pa.array(grid, mask=np.isnan(grid)),
-            spec=TimeSeriesSpec(
-                spec_type="crude_stocks_ex_spr",
-                name="US commercial crude oil stocks, excluding SPR",
-                unit_value="kilooil_barrel",
-                dtype="float64",
-                missing=NOT_RECORDED,
-            ),
-            name="eia_WCESTUS1",
-            time_axis=RegularAxis(period_us=WEEK_US, offset_us=int(offsets[0])),
-        )
-        for key, value in _common("EIA", "WCESTUS1", "weekly", "thousand barrels", LAG_MONTHS["eia_stocks"], geography="USA").items():
-            stocks_signal.annotate(Annotation(key=key, value=value))
-        signals.append(stocks_signal)
-
-        production = _read(paths["production"], ["period_start", "value"])
-        signal = _irregular(
-            pc.cast(production["value"], pa.float64()).to_numpy(zero_copy_only=False),
-            _us(production["period_start"]),
-            spec=TimeSeriesSpec(spec_type="us_crude_production", name="US field production of crude oil", unit_value="kilooil_barrel/day", dtype="float64"),
-            name="eia_MCRFPUS2",
-            annotations=_common("EIA", "MCRFPUS2", "monthly", "thousand barrels per day", LAG_MONTHS["eia_production"], geography="USA"),
-        )
-        if signal is not None:
-            signals.append(signal)
-
-        international = _read(
-            paths["international"],
-            ["period_start", "countryRegionId", "countryRegionName", "is_aggregate", "value", "missing_reason"],
-        )
-        spec = TimeSeriesSpec(
-            spec_type="petroleum_liquids_production",
-            name="Total petroleum and other liquids production",
-            unit_value="kilooil_barrel/day",
-            dtype="float64",
-        )
-        ids = pc.unique(international["countryRegionId"]).to_pylist()
-        for region_id in ids:
-            rows = international.filter(pc.equal(international["countryRegionId"], region_id))
-            region_name = rows["countryRegionName"][0].as_py()
-            aggregate = bool(rows["is_aggregate"][0].as_py())
-            signal = _irregular(
-                pc.cast(rows["value"], pa.float64()).to_numpy(zero_copy_only=False),
-                _us(rows["period_start"]),
-                spec=spec,
-                name=f"eia_intl_{region_id}",
-                annotations=_common(
-                    "EIA",
-                    f"international/{region_id}",
-                    "monthly",
-                    "thousand barrels per day",
-                    LAG_MONTHS["eia_international"],
-                    geography=str(region_id),
-                    geography_name=str(region_name),
-                    aggregate="true" if aggregate else "false",
-                    product="Total petroleum and other liquids",
-                ),
-            )
-            if signal is not None:
-                signals.append(signal)
-        return tuple(signals)
-
-    def _jodi_signals(self, path: Path) -> tuple[Signal, ...]:
-        """Build one signal per (area, flow) of JODI crude oil, in the flow's own unit."""
-        table = _read(path, ["ref_area", "period_start", "flow_breakdown", "unit_measure", "value"])
-        signals: list[Signal] = []
-        for flow, (flow_name, unit_code, unit) in JODI_FLOWS.items():
-            rows = table.filter(pc.and_(pc.equal(table["flow_breakdown"], flow), pc.equal(table["unit_measure"], unit_code)))
-            spec = TimeSeriesSpec(spec_type=f"crude_{flow_name}", name=f"Crude oil {flow_name.replace('_', ' ')}", unit_value=unit, dtype="float64")
-            for area in pc.unique(rows["ref_area"]).to_pylist():
-                area_rows = rows.filter(pc.equal(rows["ref_area"], area))
-                signal = _irregular(
-                    pc.cast(area_rows["value"], pa.float64()).to_numpy(zero_copy_only=False),
-                    _us(area_rows["period_start"]),
-                    spec=spec,
-                    name=f"jodi_{area}_{flow}",
-                    annotations=_common(
-                        "JODI",
-                        f"CRUDEOIL/{flow}/{unit_code}/{area}",
-                        "monthly",
-                        "thousand barrels" if unit_code == "KBBL" else "thousand barrels per day",
-                        LAG_MONTHS["jodi"],
-                        geography=str(area),
-                        product="CRUDEOIL",
-                        flow=flow,
-                    ),
-                )
-                if signal is not None:
-                    signals.append(signal)
-        return tuple(signals)
-
-    def _cftc_signals(self, path: Path) -> tuple[Signal, ...]:
-        """Build one signal per positioning column of the WTI Commitments of Traders report."""
-        table = _sorted_by(_read(path), "date")
-        offsets = _us(table["date"])
-        signals: list[Signal] = []
-        for column in CFTC_COLUMNS:
-            if column not in table.column_names:
-                continue
-            signal = _irregular(
-                pc.cast(table[column], pa.float64()).to_numpy(zero_copy_only=False),
-                offsets,
-                spec=TimeSeriesSpec(spec_type=f"cot_{column}", name=f"COT {column.replace('_', ' ')}", unit_value="dimensionless", dtype="float64"),
-                name=f"cftc_067651_{column}",
-                annotations=_common("CFTC", f"067651/{column}", "weekly (Tuesday as-of)", "contracts", LAG_MONTHS["cftc"], market="WTI crude oil, NYMEX, code 067651"),
-            )
-            if signal is not None:
-                signals.append(signal)
-        return tuple(signals)
-
-    def _frb_signals(self, path: Path) -> tuple[Signal, ...]:
-        """Build the broad dollar index signals, DTWEXBGS and its predecessor DTWEXM."""
-        table = _read(path, ["series_id", "date", "value"])
-        signals: list[Signal] = []
-        for series_id, spec_type, label in (
-            ("DTWEXBGS", "dollar_index_broad", "Nominal broad US dollar index, Jan 2006 = 100"),
-            ("DTWEXM", "dollar_index_major", "Trade-weighted US dollar index, major currencies, Mar 1973 = 100"),
-        ):
-            rows = table.filter(pc.equal(table["series_id"], series_id))
-            signal = _irregular(
-                pc.cast(rows["value"], pa.float64()).to_numpy(zero_copy_only=False),
-                _us(rows["date"]),
-                spec=TimeSeriesSpec(spec_type=spec_type, name=label, unit_value="dimensionless", dtype="float64"),
-                name=f"frb_{series_id}",
-                annotations=_common("FRB", series_id, "daily (business days)", "index", LAG_MONTHS["frb"]),
-            )
-            if signal is not None:
-                signals.append(signal)
-        return tuple(signals)
-
-    def _gpr_signals(self, path: Path) -> tuple[Signal, ...]:
-        """Build the geopolitical risk index and its threats and acts components."""
-        table = _sorted_by(_read(path, ["month", "gpr", "gpr_threats", "gpr_acts"]), "month")
-        offsets = _us(table["month"])
-        signals: list[Signal] = []
-        for column, label in (("gpr", "Geopolitical risk index"), ("gpr_threats", "Geopolitical threats index"), ("gpr_acts", "Geopolitical acts index")):
-            signal = _irregular(
-                pc.cast(table[column], pa.float64()).to_numpy(zero_copy_only=False),
-                offsets,
-                spec=TimeSeriesSpec(spec_type=column, name=label, unit_value="dimensionless", dtype="float64"),
-                name=f"gpr_{column}",
-                annotations=_common("GPR", column, "monthly", "index (1985-2019 = 100)", LAG_MONTHS["gpr"]),
-            )
-            if signal is not None:
-                signals.append(signal)
-        return tuple(signals)
-
-    def _steo_records(self, path: Path) -> list[Record]:
-        """Build one Record per STEO publication month with its forward WTI forecast path."""
-        table = _read(path, ["pub_year", "pub_month", "target_month_start", "horizon_months", "wti"])
-        spec = TimeSeriesSpec(spec_type="wti_forecast", name="STEO WTI spot price forecast (USD per barrel)", unit_value=None, dtype="float64")
-        pub_key = pc.add(pc.multiply(pc.cast(table["pub_year"], pa.int64()), 100), pc.cast(table["pub_month"], pa.int64()))
-        table = table.append_column("pub_key", pub_key)
-        records: list[Record] = []
-        for key in sorted(pc.unique(table["pub_key"]).to_pylist()):
-            rows = table.filter(pc.equal(table["pub_key"], key))
-            year, month = divmod(int(key), 100)
-            signal = _irregular(
-                pc.cast(rows["wti"], pa.float64()).to_numpy(zero_copy_only=False),
-                _us(rows["target_month_start"]),
-                spec=spec,
-                name="wti_forecast",
-                annotations=_common("EIA", f"STEO/{year}-{month:02d}/WTIPUUS", "monthly", "USD per barrel", 0, information_cutoff=f"end of {year}-{month - 1:02d}" if month > 1 else f"end of {year - 1}-12"),
-            )
-            if signal is None:
-                continue
-            record = Record(
-                sources=(Source(name=f"EIA STEO {year}-{month:02d}", signals=(signal,)),),
-                start_time=ORIGIN,
-                metadata={"kind": "steo_vintage", "pub_month": f"{year}-{month:02d}", "forward_months": int(len(rows))},
-            )
-            records.append(record)
-        return records
 
 
 CONNECTOR = OilFundamentalsConnector
