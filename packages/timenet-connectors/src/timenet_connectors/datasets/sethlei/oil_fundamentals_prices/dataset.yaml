@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# The open sethlei/oil-fundamentals panel plus the six price series EIA republishes under licence
+# from Refinitiv (LSEG) and CME: WTI Cushing and Brent Europe spot (daily) and NYMEX WTI contracts
+# 1-4 (daily, to 2024-04-05). The connector fetches those six series from EIA's API v2 at build
+# time with the user's own free EIA API key (EIA_TOKEN; register at the access_url). Nothing
+# licensed is redistributed: every user obtains the prices from EIA under EIA's terms.
+#
+# The child builds ONE new combined panel Record on the shared 1920-01-01 origin with fresh copies of
+# every parent signal plus the price signals and a derived monthly WTI mean (calendar-month
+# unweighted mean of the daily close, complete months only, computed as EIA computes its published
+# monthly figure). It imports the 268 STEO vintage records unchanged. It adds two task families:
+# T1, WTI monthly mean 1/3/6/12 months ahead from the sealed panel; T2, the same target for each
+# STEO vintage and horizon with EIA's own forecast as an input annotation, so the question "can a
+# model improve on the government forecaster, given the forecaster" is answerable from the data.
+#
+# Reproducibility: each series is fetched over a FIXED window and the sha256 of its canonical rows
+# (period, value as served) is pinned in pins.json. EIA revises history; a mismatch fails the build
+# unless OIL_PRICES_ACCEPT_REVISIONS=1, in which case the new hashes are recorded in the dataset.
+yaml_schema_version: 1
+dataset_id: sethlei/oil-fundamentals-prices
+dataset_version: 1.0.0
+name: Oil fundamentals panel with prices
+description: >-
+  The sethlei/oil-fundamentals panel (EIA survey data, JODI-Oil crude flows, CFTC positioning, the
+  Federal Reserve Board dollar index, the geopolitical risk index, 268 STEO forecast vintages) plus
+  WTI Cushing and Brent Europe daily spot prices and NYMEX WTI contracts 1-4 (to 2024-04-05), which
+  the connector fetches from EIA's API v2 with the user's own free EIA API key because EIA
+  republishes them under licence from Refinitiv (LSEG) and CME. One combined panel Record on a
+  shared 1920 origin. Two scalar task families over a target-month split (train to 2018, validation
+  2019-2021, test 2022-2026): WTI monthly mean 1, 3, 6 and 12 months ahead from the sealed panel,
+  and the same target for every STEO vintage and horizon with EIA's own forecast given as input.
+  Inputs are latest-revised values; the stored scope is sealed at the slowest publication lag.
+license: OTHER
+license_url: https://huggingface.co/datasets/sethlei/oil-fundamentals/blob/main/SOURCES.md
+source_url: https://api.eia.gov/v2/
+citation: >-
+  Prices: Refinitiv, an LSEG business, and CME Group (NYMEX), as published by the U.S. Energy
+  Information Administration and fetched by the user under EIA's terms. EIA Short-Term Energy
+  Outlook archives. Fundamentals: see sethlei/oil-fundamentals.
+access: credentialed
+access_url: https://www.eia.gov/opendata/register.php
+parents:
+  fundamentals: sethlei/oil-fundamentals@1.0.0
+domains:
+  - energy
+  - economics
+  - finance
+tags:
+  - oil
+  - commodities
+  - prices
+  - forecasting
+  - steo
+  - eia
+  - credentialed
