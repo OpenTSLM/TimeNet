@@ -9,6 +9,11 @@
 
 - ``prepare`` sets the versions, writes the release notes, and opens the release PR. The PR body
   has the notes between ``<!-- release-notes:<package> -->`` markers, so you can edit them there.
+- ``released`` finds the packages whose version the merged release PR changed.
+- ``smoke`` imports each built wheel and sdist in an isolated environment. It makes sure that each
+  file records the commit that it was built from.
+- ``github-release`` creates the tag and the GitHub release of each released package. It reads the
+  notes from the merged PR and attaches the files in ``dist/``.
 
 PyGithub makes the GitHub calls and GitPython makes the git calls. Only ``uv`` and git-cliff run as
 subprocesses, because they have no Python API. The option ``--dry-run`` does not push and does not
@@ -22,11 +27,12 @@ import os
 from pathlib import Path
 import re
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the commands are fixed argument vectors
+import tomllib
 from typing import NoReturn
 
 from connector_notes import commits, notes as connector_notes, repo
 from git import Repo
-from github import Auth, Github
+from github import Auth, Github, UnknownObjectException
 from github.Repository import Repository
 
 
@@ -34,6 +40,7 @@ PACKAGES = ("timenet", "timenet-connectors")
 CONNECTORS = "packages/timenet-connectors/pyproject.toml"
 FLOOR = re.compile(r'"timenet\[build\]>=[^"]*"')
 VERSION = re.compile(r"\d+\.\d+\.\d+")
+NOTES = re.compile(r"<!-- release-notes:(?P<package>[\w-]+) -->\n(?P<text>.*?)\n<!-- /release-notes -->", re.S)
 EXPLAIN = (
     "Merge this PR to tag each package below and to create its GitHub release. The release notes are\n"
     "the text between the `release-notes` markers. Edit the notes here before you merge. The same run\n"
@@ -221,6 +228,106 @@ def prepare(package: str, requested: str, *, dry_run: bool) -> None:
     open_pr(branch, title, f"{EXPLAIN}\n---\n\n{warning}{sections}", dry_run=dry_run)
 
 
+def released() -> None:
+    """Find the packages whose version the merged release PR changed. Write them to the outputs."""
+    git = repo()
+    found = {}
+    for package in PACKAGES:
+        version = version_of(package)
+        before = (git.commit("HEAD^").tree / f"packages/{package}/pyproject.toml").data_stream.read().decode()
+        if version == tomllib.loads(before)["project"]["version"]:
+            continue
+        if not VERSION.fullmatch(version):
+            fail(f"{package} is at {version}, not X.Y.Z.")
+        found[package] = version
+    if not found:
+        fail("This PR changed no package version.")
+    append("GITHUB_OUTPUT", "released=" + " ".join(f"{name}={version}" for name, version in found.items()) + "\n")
+
+
+def merged_notes(remote: Repository, sha: str) -> dict[str, str]:
+    """Read the release notes from the body of the merged release PR.
+
+    Returns:
+        The notes of each package.
+    """
+    for pull in remote.get_commit(sha).get_pulls():
+        if pull.merged and pull.head.ref.startswith("release/"):
+            return {
+                match["package"]: match["text"] for match in NOTES.finditer((pull.body or "").replace("\r\n", "\n"))
+            }
+    fail(f"No merged release PR holds {sha}.")
+
+
+def github_release(entries: dict[str, str]) -> None:
+    """Create the tag and the GitHub release of each package. Attach its files from ``dist/``.
+
+    A re-run creates only what is missing.
+    """
+    git = repo()
+    sha = git.head.commit.hexsha
+    remote = github()
+    notes = merged_notes(remote, sha)
+    for package, version in entries.items():
+        tag = f"{package}-v{version}"
+        if package not in notes:
+            fail(f"The release PR has no notes for {package}.")
+        try:
+            release = remote.get_release(tag)
+            if remote.get_git_ref(f"tags/{tag}").object.sha != sha:
+                fail(f"{tag} exists on another commit.")
+        except UnknownObjectException:
+            release = remote.create_git_release(tag, f"{package} {version}", notes[package], target_commitish=sha)
+        attached = {asset.name for asset in release.get_assets()}
+        stem = package.replace("-", "_")
+        files = [*Path("dist").glob(f"{stem}-{version}-*.whl"), *Path("dist").glob(f"{stem}-{version}.tar.gz")]
+        for file in files:
+            if file.name not in attached:
+                release.upload_asset(str(file))
+        indexes = f"[TestPyPI](https://test.pypi.org/project/{package}/{version}/), [PyPI](https://pypi.org/project/{package}/{version}/)"
+        append("GITHUB_STEP_SUMMARY", f"- {package} {version}: {release.html_url} ({indexes} once uploaded)\n")
+
+
+SMOKE = """
+import {module}
+from timenet.manifest import GitSource
+from timenet.provenance import PackageSnapshot
+commit = PackageSnapshot.read({dist!r}).source
+expected = GitSource(sha={sha!r}, contains_local_changes=False)
+assert commit == expected, (commit, expected)
+print('smoke ok:', {module}.__name__, commit)
+"""
+
+
+def smoke() -> None:
+    """Import each built wheel and sdist. Make sure that each file records this commit, clean.
+
+    timenet-connectors uses the timenet wheel from the same run, if there is one. If there is none,
+    timenet comes from the index. Then timenet must be on the index already.
+    """
+    sha = repo().head.commit.hexsha
+    stems = {package: package.replace("-", "_") for package in PACKAGES}
+    core_wheels = sorted(Path("dist").glob(f"{stems[PACKAGES[0]]}-*.whl"))
+    for package, stem in stems.items():
+        extras = core_wheels if package == PACKAGES[1] else []
+        for artifact in sorted(Path("dist").glob(f"{stem}-*")):
+            command = ["uv", "run", "--isolated", "--no-project"]
+            for file in (*extras, artifact):
+                command += ["--with", str(file)]
+            print(f"::group::{artifact.name}")
+            print(run(*command, "python", "-c", SMOKE.format(module=stem, dist=package, sha=sha)))
+            print("::endgroup::")
+
+
+def parse(text: str) -> dict[str, str]:
+    """Read ``package=version`` pairs.
+
+    Returns:
+        The versions by package.
+    """
+    return dict(pair.split("=") for pair in text.split())
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -228,5 +335,15 @@ if __name__ == "__main__":
     prepare_parser.add_argument("--package", choices=["both", *PACKAGES], required=True)
     prepare_parser.add_argument("--version", default="")
     prepare_parser.add_argument("--dry-run", action="store_true")
+    commands.add_parser("released")
+    commands.add_parser("smoke")
+    commands.add_parser("github-release").add_argument("--released", required=True)
     args = parser.parse_args()
-    prepare(args.package, args.version, dry_run=args.dry_run)
+    if args.command == "prepare":
+        prepare(args.package, args.version, dry_run=args.dry_run)
+    elif args.command == "released":
+        released()
+    elif args.command == "smoke":
+        smoke()
+    else:
+        github_release(parse(args.released))
