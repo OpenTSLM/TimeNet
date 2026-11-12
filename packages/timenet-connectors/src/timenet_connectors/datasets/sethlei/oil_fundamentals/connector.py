@@ -510,7 +510,7 @@ class OilFundamentalsConnector(BaseHuggingFaceConnector):
     """Connector for the ``sethlei/oil-fundamentals`` panel (Hub repo ``sethlei/oil-fundamentals``)."""
 
     HF_REPO = "sethlei/oil-fundamentals"
-    SOURCE_REVISION = "1e2d54c92f010abdac25101aaef9ee60854aa971"
+    SOURCE_REVISION = "f0a8c82103c17a1e76f518721d59d1654a316bfd"
     SOURCE_FILES: ClassVar[Mapping[str, str]] = {
         "stocks": "data/eia_us_crude_stocks_weekly.parquet",
         "production": "data/eia_us_crude_production_monthly.parquet",

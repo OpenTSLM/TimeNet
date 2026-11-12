@@ -32,7 +32,7 @@ description: >-
 license: OTHER
 license_url: https://huggingface.co/datasets/sethlei/oil-fundamentals/blob/main/SOURCES.md
 source_url: https://huggingface.co/datasets/sethlei/oil-fundamentals
-source_revision: 1e2d54c92f010abdac25101aaef9ee60854aa971
+source_revision: f0a8c82103c17a1e76f518721d59d1654a316bfd
 citation: >-
   U.S. Energy Information Administration (weekly petroleum status, monthly crude production,
   international energy statistics, Short-Term Energy Outlook archives), accessed 2026-11-11.
