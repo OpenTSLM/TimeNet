@@ -268,10 +268,11 @@ release, the call copies only the payload sources that it lacks.
 A download never builds. For a release that only `InstalledConnectors()` provides, it raises
 `TimeNetNotBuiltError`.
 
-Unless you set `force=True`, the call uses a complete local copy without comparison. If the local
-release is missing or damaged, or you set `force=True`, the call needs to copy the release. Before
-the copy, the call compares any existing local manifest with the release it copies. If the files or
-card differ, the call raises `TimeNetVersionConflictError`.
+By default, the call uses a complete release in the local registry that matches the requested
+dataset ID and version. If the local release is missing or damaged (a listed file is missing or has
+another size), or you set `force=True`, the call copies the release from the next lookup source
+that has it. If the local registry holds that version with other files or another card, the copy
+raises `TimeNetVersionConflictError`.
 
 `progress=` takes a function that receives the progress events of `timenet.progress`. For each
 release that the call copies, the function receives `StepStarted`, then `BytesMoved` events as the

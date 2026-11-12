@@ -35,8 +35,8 @@ version that a source of the client provides.
 import timenet
 
 client = timenet.TimeNet()
-client.load("chengsenwang/tsqa")          # the newest version of the first source
-client.load("chengsenwang/tsqa@latest")   # the highest version of all sources
+client.load("chengsenwang/tsqa")          # newest version of the first source
+client.load("chengsenwang/tsqa@latest")   # highest version of all sources
 client.load("chengsenwang/tsqa@1.2.0")    # a pinned, immutable snapshot
 ```
 

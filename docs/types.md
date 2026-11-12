@@ -216,7 +216,7 @@ Record's known origin. Relative spans also work when its absolute timestamp is u
 | Field | Required | Description |
 | --- | --- | --- |
 | `dataset_id` | yes | One `org/name` identifier. |
-| `dataset_version` | yes | Semantic version of the compiled TimeNet release. |
+| `dataset_version` | yes | Semantic version of the built TimeNet dataset. |
 | `name` | yes | Display name. |
 | `description` | yes | Short dataset description. |
 | `license` | yes | Known SPDX-style license value, `OTHER`, or `NONE`. |

@@ -38,6 +38,8 @@ agreement and sign in before you pull a record. TimeNet does not remove that ste
 
 ## Redistribution
 
-TimeNet's hosted registry serves built TimeF releases whose cards and all ancestor cards declare
-`access: open`. Each dataset keeps the license its source grants. If you redistribute a converted
-dataset, keep its original license with it.
+The hosted TimeNet registry serves built datasets only when the dataset and every ancestor in its
+lineage declare open access. For every other dataset, a connector downloads the raw source data
+from the original source and builds the dataset on your machine. In both cases, the data keeps the
+license that its source grants. If you redistribute a converted dataset, keep its original license
+with it.

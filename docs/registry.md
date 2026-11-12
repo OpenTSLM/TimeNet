@@ -108,8 +108,7 @@ out, with a `CatalogWarning` that names it. If no source of the list has a catal
 `TimeNetNoCatalogError`.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
-disk, at `<root>/chengsenwang/tsqa/<version>/`. `list_datasets` finds releases only at
-`<root>/<org>/<name>/<version>/manifest.json`. Use lowercase ids to avoid casing clashes on
+disk, at `<root>/chengsenwang/tsqa/<version>/`. Use lowercase ids to avoid casing clashes on
 case-insensitive filesystems.
 
 ### Payload sources
