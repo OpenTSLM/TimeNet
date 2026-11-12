@@ -33,6 +33,9 @@ uv tool install timenet-connectors
 timenet-build build timenet/hello-world
 ```
 
+The build creates an isolated environment for the connector. This step can require downloads of
+Python packages.
+
 The build lands in the local registry at `~/.timenet/registry/timenet/hello-world/1.0.0/`. Load it
 with Python:
 

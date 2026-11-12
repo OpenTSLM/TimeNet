@@ -38,6 +38,6 @@ agreement and sign in before you pull a record. TimeNet does not remove that ste
 
 ## Redistribution
 
-TimeNet does not vendor dataset bytes. It fetches each dataset from its `source_url`, so you get the
-data under the license the source grants. If you redistribute a converted dataset, keep its original
-license with it.
+TimeNet's hosted registry serves built TimeF releases whose cards and all ancestor cards declare
+`access: open`. Each dataset keeps the license its source grants. If you redistribute a converted
+dataset, keep its original license with it.

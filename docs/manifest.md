@@ -109,9 +109,9 @@ early development, and no TimeNet reads them.
 | `to_dict()` / `to_json()` | Canonical serialization (all keys present, explicit nulls). |
 | `model_validate(data)` / `model_validate_json(text)` | Parse, tolerating missing optional blocks. |
 
-`model_validate` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema`
-and `counts` default to empty. Unknown fields are rejected. A malformed block raises Pydantic's
-`ValidationError` with its native field locations and error details.
+`model_validate` requires `timef_format_version`, `dataset_id`, `metadata`, `files`, and
+`build_env`. `schema` and `counts` default to empty. The parser rejects unknown fields. A malformed
+block raises Pydantic's `ValidationError` with its native field locations and error details.
 
 Registries read a stored manifest with `read_manifest(path)` or `parse_manifest(text, where)` from
 `timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`. A manifest of an

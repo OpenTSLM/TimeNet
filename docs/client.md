@@ -257,7 +257,7 @@ uses the ID that the child gives the object.
 returns the release directory there:
 
 ```python
-path = client.download("chengsenwang/tsqa@1.0.0")
+path = client.download("chengsenwang/tsqa@1.2.0")
 ```
 
 The release resolves as in `open()`. The call copies the release and each payload source that the
@@ -268,9 +268,10 @@ release, the call copies only the payload sources that it lacks.
 A download never builds. For a release that only `InstalledConnectors()` provides, it raises
 `TimeNetNotBuiltError`.
 
-A published version cannot change. So if the local registry holds the release with other files or
-another card than the registry that the call copies from, the call raises
-`TimeNetVersionConflictError`.
+Unless you set `force=True`, the call uses a complete local copy without comparison. If the local
+release is missing or damaged, or you set `force=True`, the call needs to copy the release. Before
+the copy, the call compares any existing local manifest with the release it copies. If the files or
+card differ, the call raises `TimeNetVersionConflictError`.
 
 `progress=` takes a function that receives the progress events of `timenet.progress`. For each
 release that the call copies, the function receives `StepStarted`, then `BytesMoved` events as the
@@ -317,7 +318,7 @@ from a registry, or `timenet.build(release, force=True)` if it was built.
 Append `@<version>` to a dataset ID:
 
 ```python
-client.get_manifest("chengsenwang/tsqa@1.0.0")
+client.get_manifest("chengsenwang/tsqa@1.2.0")
 client.load("chengsenwang/tsqa@latest")
 ```
 
