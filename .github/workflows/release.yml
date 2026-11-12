@@ -5,9 +5,12 @@ name: Release
 #   1. Run this workflow on main and select the package. It opens a release PR that sets the
 #      versions. The PR body has the release notes between release-notes markers. Edit the notes
 #      there. The release uses the text in the merged PR.
-#   2. Merge the release PR. The same workflow then builds and tests the wheel and the sdist of each
-#      package. It creates the tag and the GitHub release with the built files attached.
-#      The upload to TestPyPI and PyPI is still done by publish.yml.
+#   2. Merge the release PR. The same workflow then does these steps:
+#      - It builds and tests the wheel and the sdist of each package.
+#      - It creates the tag and the GitHub release.
+#      - It waits for your approval in the pypi environment, then uploads to TestPyPI.
+#      - It waits for your approval again, then uploads to PyPI.
+#      The upload steps send the built files. They do not build.
 # If you release both packages, the timenet floor of timenet-connectors goes up. If you release one
 # package, the release PR warns when the other package has changes that the release leaves out.
 # The release PR fixes the versions. If main needs a bigger version bump before you merge, close
@@ -19,6 +22,8 @@ name: Release
 # - A GitHub App with write access to contents and pull requests, installed on this repository.
 #   Set its id in the RELEASE_APP_ID variable and its key in the RELEASE_APP_PRIVATE_KEY secret.
 #   The repository settings block PRs from GITHUB_TOKEN, and those PRs do not start CI.
+# - A trusted publisher on PyPI and TestPyPI for each package: workflow release.yml, environment
+#   pypi.
 
 on:
   workflow_dispatch:
@@ -117,8 +122,49 @@ jobs:
           done
       - name: Smoke test built artifacts
         run: uv run .github/scripts/release.py smoke
+      - name: Keep the built files for the publish jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          overwrite: true
       - name: Tag and create the GitHub releases
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASED: ${{ steps.released.outputs.released }}
         run: uv run .github/scripts/release.py github-release --released "$RELEASED"
+
+  publish-testpypi:
+    # Wait for approval in the pypi environment. Upload the files that the release job built.
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to TestPyPI
+        run: uv publish --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ dist/*
+
+  publish-pypi:
+    # Start after TestPyPI has the same files. Wait for approval in the pypi environment.
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        run: uv publish --check-url https://pypi.org/simple/ dist/*
