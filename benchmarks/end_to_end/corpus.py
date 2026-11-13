@@ -193,21 +193,21 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
     dataset.add_task(
         task=ClassificationTask(
             inputs=(vibration,),
-            targets=("outer-race-fault",),
+            targets=(CONDITION["outer-race-fault"],),
             label_set=CONDITION,
         ),
     )
     dataset.add_task(
         task=ClassificationTask(
             inputs=(ecg,),
-            targets=("atrial-fibrillation",),
+            targets=(RHYTHM["atrial-fibrillation"],),
             label_set=RHYTHM,
         ),
     )
     dataset.add_task(
         task=ClassificationTask(
             inputs=(sleep,),
-            targets=("N2",),
+            targets=(SLEEP_STAGE["N2"],),
             label_set=SLEEP_STAGE,
             scope=TimeInterval.seconds(30.0, 60.0),
         ),
@@ -336,7 +336,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record,),
-                targets=("above-zero" if offset > 0 else "below-zero",),
+                targets=(MEAN_SIGN["above-zero" if offset > 0 else "below-zero"],),
                 label_set=MEAN_SIGN,
             ),
         )

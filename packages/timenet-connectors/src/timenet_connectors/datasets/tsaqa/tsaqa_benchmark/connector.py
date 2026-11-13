@@ -721,7 +721,7 @@ def _task(
         return ClassificationTask(
             inputs=inputs,
             prompt=row.prompt,
-            targets=(row.answer,),
+            targets=(_TRUE_OR_FALSE_LABEL_SET[row.answer],),
             split=_SPLITS[row.split],
             input_annotations=input_annotations,
             label_set=_TRUE_OR_FALSE_LABEL_SET,

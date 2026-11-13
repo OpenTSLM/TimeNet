@@ -53,7 +53,7 @@ TEST_LABELS = LabelSet(
 
 def _classification_task(record: Record, label: str, **kwargs: Any) -> ClassificationTask:
     """Build a classification task for tests that need a task but do not test labels."""
-    return ClassificationTask(inputs=(record,), targets=(label,), label_set=TEST_LABELS, **kwargs)
+    return ClassificationTask(inputs=(record,), targets=(TEST_LABELS[label],), label_set=TEST_LABELS, **kwargs)
 
 
 def _metadata():
@@ -107,7 +107,7 @@ def test_add_task_multiple_records(make_series):
     ds = _dataset()
     s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s1, s2), targets=("x",)))
+    task = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s1, s2), targets=(TEST_LABELS["x"],)))
     assert task.inputs == (s1, s2)
 
 
@@ -124,7 +124,7 @@ def test_task_time_span_requires_one_input_record(make_series, scope_ids):
         label_set=TEST_LABELS,
         input_modalities=frozenset({InputModality.TIME_SERIES}),
         inputs=(left, right),
-        targets=("event",),
+        targets=(TEST_LABELS["event"],),
         scope=TimeInterval.seconds(0, 0.004, time_series=scope),
     )
     if scope_ids == "first":
@@ -155,7 +155,7 @@ def test_from_tasks_on_constructor_registers(make_series):
 def test_add_task_rejects_a_from_tasks_parent_that_is_not_registered(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    orphan = ClassificationTask(label_set=TEST_LABELS, targets=("a",))  # never added to the dataset
+    orphan = ClassificationTask(label_set=TEST_LABELS, targets=(TEST_LABELS["a"],))  # never added to the dataset
     qa = AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(orphan,))
     with pytest.raises(TimeFValidationError, match="derives from a task that is not registered"):
         ds.add_task(task=qa)

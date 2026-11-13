@@ -50,10 +50,12 @@ from timenet.types import (
     Annotation,
     ArrayHandle,
     InputModality,
+    Label,
     LabelSet,
     MissingValues,
     Task,
     TaskType,
+    TextHandle,
     TimeInterval,
     TimeOrigin,
     TimePoint,
@@ -382,6 +384,34 @@ def _required(value: _T | None, what: str) -> _T:
     if value is None:
         raise TimeFFormatError(f"control.duckdb is missing {what}")
     return value
+
+
+def _stored_labels(task_id: int, label_set: LabelSet, targets: tuple[object, ...]) -> tuple[Label | TextHandle, ...]:
+    """Map the stored target names of a classification task to the labels of its label set.
+
+    Names stored outside the catalog remain text handles, because the catalog holds only their
+    placeholder.
+
+    Returns:
+        Label objects and text handles, in target order.
+
+    Raises:
+        TimeFFormatError: If a stored target is not text, or its name is not in the label set.
+    """
+    labels: list[Label | TextHandle] = []
+    for target in targets:
+        if isinstance(target, TextHandle):
+            labels.append(target)
+        elif isinstance(target, str):
+            try:
+                labels.append(label_set[target])
+            except TimeFNotFoundError as exc:
+                raise TimeFFormatError(f"classification task {task_id!r}: {exc}") from exc
+        else:
+            raise TimeFFormatError(
+                f"classification task {task_id!r} has a target that is not text: {type(target).__name__}"
+            )
+    return tuple(labels)
 
 
 def _decode_json(value: str | None, *, default: Any = None) -> Any:
@@ -2556,7 +2586,10 @@ class _TaskBuilder:
                 **decode_task_payload(task_type, row.payload_columns),
             }
             if task_type is TaskType.CLASSIFICATION:
-                kwargs["label_set"] = reader._label_set(row.task_id, row.label_set)
+                label_set = reader._label_set(row.task_id, row.label_set)
+                kwargs["label_set"] = label_set
+                if kwargs["targets"] is not None:
+                    kwargs["targets"] = _stored_labels(row.task_id, label_set, kwargs["targets"])
             elif row.label_set is not None:
                 raise TimeFFormatError(
                     f"{task_type} task {row.task_id!r} has a label set, but only a classification task can have one"

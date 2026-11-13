@@ -342,7 +342,7 @@ def test_a_record_import_extends_a_partial_copy_in_place(tmp_path):
     # a task can scope a span to it.
     assert signal_b.id == 2
     scope = TimeInterval.seconds(2.0, 2.5, time_series=(signal_b,))
-    child.add_task(task=ClassificationTask(label_set=ORDER, inputs=(record,), targets=("late",), scope=scope))
+    child.add_task(task=ClassificationTask(label_set=ORDER, inputs=(record,), targets=(ORDER["late"],), scope=scope))
     aux = next(source for source in root.sources if source.name == "aux")
     assert {source.name for source in root.sources} == {"leads", "aux"}
     assert _keys(record) == ["age", "early", "late"]
@@ -1403,7 +1403,7 @@ def _tasks_tree():
     dataset.annotate(Annotation(key="unused-note", value="not referenced"))
     label = ClassificationTask(
         inputs=(rec,),
-        targets=("normal",),
+        targets=(SCP["normal"],),
         label_set=SCP,
         split=Split.TRAIN,
         input_annotations=(_annotation(rec, "age"),),
@@ -2140,7 +2140,7 @@ def _every_task_class():
     artifact = _annotation(signal_a, "artifact")
     classify = ClassificationTask(
         inputs=(rec,),
-        targets=("normal",),
+        targets=(SCP["normal"],),
         label_set=SCP,
         split=Split.TRAIN,
         input_annotations=(_annotation(rec, "age"), _annotation(sources["aux"], "aux-note"), note),
