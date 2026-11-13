@@ -42,10 +42,7 @@ _PAMAP2_CHANNELS = (
     ("gyroscope", "z"),
     ("magnetometer", "x"),
 )
-# Literal pins, so moving to another repo or commit is a deliberate test edit.
 _DATASET_ANNOTATIONS = {
-    "source_repository": "BASH-Lab/SensorCaps",
-    "source_revision": "4242e07feaacb0ee3aff86182a62914fa7abacef",
     "declared_sampling_rate_hz": DECLARED_SAMPLING_RATE_HZ,
     "source_sampling_rate_hz": 20,
     "source_window_samples": 120,

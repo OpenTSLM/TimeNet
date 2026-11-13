@@ -280,8 +280,6 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         """
         dataset = TimeFDataset(metadata=self.metadata())
         for key, value in (
-            ("source_repository", self.HF_REPO),
-            ("source_revision", self.SOURCE_REVISION),
             ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
             ("source_sampling_rate_hz", _SOURCE_SAMPLING_RATE_HZ),
             ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
