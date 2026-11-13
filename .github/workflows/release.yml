@@ -1,0 +1,124 @@
+name: Release
+
+# Release timenet, timenet-connectors, or both. Each package has its own version and its own tag,
+# <package>-vX.Y.Z. The steps with logic are in .github/scripts/release.py.
+#   1. Run this workflow on main and select the package. It opens a release PR that sets the
+#      versions. The PR body has the release notes between release-notes markers. Edit the notes
+#      there. The release uses the text in the merged PR.
+#   2. Merge the release PR. The same workflow then builds and tests the wheel and the sdist of each
+#      package. It creates the tag and the GitHub release with the built files attached.
+#      The upload to TestPyPI and PyPI is still done by publish.yml.
+# If you release both packages, the timenet floor of timenet-connectors goes up. If you release one
+# package, the release PR warns when the other package has changes that the release leaves out.
+# The release PR fixes the versions. If main needs a bigger version bump before you merge, close
+# the PR and run the workflow again.
+# Only admins and maintainers can start a release, merge the release PR, or re-run a job. You can
+# re-run each job. Steps that already happened do not run again.
+#
+# Prerequisites:
+# - A GitHub App with write access to contents and pull requests, installed on this repository.
+#   Set its id in the RELEASE_APP_ID variable and its key in the RELEASE_APP_PRIVATE_KEY secret.
+#   The repository settings block PRs from GITHUB_TOKEN, and those PRs do not start CI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to release
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - timenet
+          - timenet-connectors
+      version:
+        description: Version to release, for example 0.12.0. Leave empty to compute it from the commits.
+        required: false
+        type: string
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GIT_CLIFF: git-cliff==2.14.2
+
+jobs:
+  authorize:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore(release):'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Allow only admins and maintainers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          role=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .role_name)
+          if [ "$role" != admin ] && [ "$role" != maintain ]; then
+            echo "::error title=Not allowed::$ACTOR has the $role role. Only admins and maintainers can release."
+            exit 1
+          fi
+
+  prepare:
+    needs: authorize
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard to main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error title=Invalid branch::Start a release from main."
+          exit 1
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Set the versions, write the notes and open the release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PACKAGE: ${{ inputs.package }}
+          REQUESTED: ${{ inputs.version }}
+        run: uv run .github/scripts/release.py prepare --package "$PACKAGE" --version "$REQUESTED"
+
+  release:
+    needs: authorize
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Find the packages this PR released
+        id: released
+        run: uv run .github/scripts/release.py released
+      - name: Build
+        env:
+          RELEASED: ${{ steps.released.outputs.released }}
+        run: |
+          for entry in $RELEASED; do
+            uv run scripts/build_dists.py --package "${entry%=*}"
+          done
+      - name: Smoke test built artifacts
+        run: uv run .github/scripts/release.py smoke
+      - name: Tag and create the GitHub releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASED: ${{ steps.released.outputs.released }}
+        run: uv run .github/scripts/release.py github-release --released "$RELEASED"
