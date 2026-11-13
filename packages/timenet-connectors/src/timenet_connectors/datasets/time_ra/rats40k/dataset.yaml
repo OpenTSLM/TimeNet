@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: time-ra/rats40k
+dataset_version: 1.0.0
+name: RATS40K
+description: >-
+  Cross-domain time-series anomaly diagnosis: 39,574 univariate and
+  multivariate series (32,994 train, 6,580 test), each posed as one anomaly
+  category classification task with the authors' evaluation prompt and a
+  generated diagnostic explanation as rationale. Gated: requires an approved
+  Hugging Face account.
+license: Apache-2.0
+source_url: https://huggingface.co/datasets/Time-RA/RATs40K
+access: credentialed
+access_url: https://huggingface.co/datasets/Time-RA/RATs40K
+citation: >-
+  Yang et al. TIME-RA: Towards Time Series Reasoning for Anomaly Diagnosis
+  with LLM Feedback. https://arxiv.org/abs/2507.15066
+domains:
+  - cardiology
+  - health
+  - observability
+  - environment
+  - finance
+  - transport
+  - activity
+tags:
+  - anomaly-detection
+  - classification
+  - diagnostic-reasoning
+  - generated-supervision
+  - huggingface
