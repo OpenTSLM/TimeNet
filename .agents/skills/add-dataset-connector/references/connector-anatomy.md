@@ -77,6 +77,11 @@ commit. Set:
 - `SOURCE_REVISION`: a 40-character commit, not a branch, so every rebuild reads the same files.
 - `SOURCE_FILES`: part name -> file path in the repo.
 
+The base fills the card's `source_url` and `source_revision` from `HF_REPO` and `SOURCE_REVISION`, so
+the card does not need them. Keep `source_url` in the card anyway: the docs catalog and
+`get_card()` read the card file without the connector. A card value that differs from the connector
+fails the build. Do not copy the repo or revision into dataset annotations.
+
 `download` is inherited and returns one `HubFileRef(path, part)` per file. Declare
 `huggingface_hub>=1.1` in the connector's `requirements.txt`, and set `HF_TOKEN` for gated or
 private datasets. The base checks the refs before your `convert` runs: they must be nonempty and

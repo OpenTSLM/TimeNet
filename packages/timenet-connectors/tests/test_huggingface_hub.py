@@ -210,3 +210,35 @@ def test_a_declared_file_or_pattern_without_a_match_fails(monkeypatch, tmp_path)
     _fake_hub(monkeypatch, tmp_path, files=("qa.csv", "README.md"))
     with pytest.raises(TimeNetDownloadError, match=rf"org/repo@{_SHA} has no data/\*\.parquet$"):
         asyncio.run(_Patterned().download_async(tmp_path / "cache"))
+
+
+_TSQA_CARD = Path(__file__).parents[1] / "src/timenet_connectors/datasets/chengsenwang/tsqa/dataset.yaml"
+
+
+def _card(tmp_path: Path, **fields: str) -> Path:
+    lines = [line for line in _TSQA_CARD.read_text().splitlines() if not line.startswith("source_")]
+    path = tmp_path / "dataset.yaml"
+    path.write_text("\n".join([*lines, *(f'{key}: "{value}"' for key, value in fields.items())]) + "\n")
+    return path
+
+
+def test_metadata_takes_the_source_from_the_connector(tmp_path):
+    connector = type("_Carded", (_Pinned,), {"CARD": _card(tmp_path)})()
+    metadata = connector.metadata()
+    assert metadata.source_url == "https://huggingface.co/datasets/org/repo"
+    assert metadata.source_revision == _SHA
+
+
+def test_metadata_accepts_a_card_that_repeats_the_source(tmp_path):
+    card = _card(tmp_path, source_url="https://huggingface.co/datasets/org/repo", source_revision=_SHA)
+    assert type("_Carded", (_Pinned,), {"CARD": card})().metadata().source_revision == _SHA
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("source_url", "https://huggingface.co/datasets/org/other"), ("source_revision", "1" * 40)],
+)
+def test_metadata_rejects_a_card_source_that_differs(tmp_path, field, value):
+    connector = type("_Carded", (_Pinned,), {"CARD": _card(tmp_path, **{field: value})})()
+    with pytest.raises(TimeFValidationError, match=f"card sets {field}"):
+        connector.metadata()

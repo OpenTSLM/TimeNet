@@ -775,8 +775,6 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         records = [_records(row, loader) for row in rows]
 
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (("source_repository", self.HF_REPO), ("source_revision", self.SOURCE_REVISION)):
-            dataset.annotate(Annotation(key=key, value=value))
         # The model reads the published task and question_type, so each distinct value is a dataset annotation.
         labels = {
             label: dataset.annotate(Annotation(key=label[0], value=label[1]))
