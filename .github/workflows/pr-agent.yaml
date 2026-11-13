@@ -1,0 +1,86 @@
+name: PR-Agent review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  pr_agent:
+    # Skip bots and draft PRs. Comment commands (/review, /improve, ...) work on any PR.
+    if: ${{ github.event.sender.type != 'Bot' && github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+    # A PR in a stack gets its overview from the stack review (pr-agent-stack.yaml), so the
+    # per-PR run only posts inline suggestions for it.
+    - name: Detect stack
+      id: stack
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        BASE: ${{ github.event.pull_request.base.ref }}
+        HEAD: ${{ github.event.pull_request.head.ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        stacked=false
+        if [ -n "$BASE" ]; then
+          children=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base "$HEAD" --json number --jq length)
+          if [ "$BASE" != "$DEFAULT_BRANCH" ] || [ "$children" -gt 0 ]; then stacked=true; fi
+        fi
+        echo "stacked=$stacked" >> "$GITHUB_OUTPUT"
+    # The instructions come from the default branch, so a PR cannot rewrite its own reviewer.
+    - name: Checkout review instructions
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        sparse-checkout: .github/pr-review-instructions.md
+        path: trusted
+    - name: Load review instructions
+      run: |
+        file=trusted/.github/pr-review-instructions.md
+        if [ ! -f "$file" ]; then echo "::warning::$file is missing on the default branch"; exit 0; fi
+        { echo "REVIEW_INSTRUCTIONS<<EOF_INSTRUCTIONS"; cat "$file"; echo "EOF_INSTRUCTIONS"; } >> "$GITHUB_ENV"
+    - name: Run PR-Agent
+      uses: The-PR-Agent/pr-agent@v0.50.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        # Kimi on Nebius (BYOK). LiteLLM does not know this id, so the context window is set
+        # explicitly.
+        CONFIG.MODEL: openrouter/moonshotai/kimi-k3.1-pro
+        CONFIG.FALLBACK_MODELS: '[]'
+        CONFIG.CUSTOM_MODEL_MAX_TOKENS: 128000
+        CONFIG.MAX_MODEL_TOKENS: 120000
+        OPENROUTER.PROVIDER_ONLY: '["nebius"]'
+        OPENROUTER.ALLOW_FALLBACKS: "false"
+        # Split reviews that do not fit one call into chunks.
+        PR_REVIEWER.ENABLE_LARGE_PR_CHUNKING: "true"
+        PR_REVIEWER.MAX_NUMBER_OF_CALLS: 6
+        # Kimi reasons before answering. Cap the reasoning and the answer, and allow slow calls,
+        # so /improve and its self-reflection step do not fail silently.
+        CONFIG.REASONING_EFFORT: low
+        CONFIG.AI_TIMEOUT: 900
+        OPENROUTER.MAX_TOKENS: 16000
+        # Review summary plus inline code suggestions. Run /describe in a PR comment when wanted.
+        github_action_config.auto_review: ${{ steps.stack.outputs.stacked == 'true' && 'false' || 'true' }}
+        github_action_config.auto_describe: "false"
+        github_action_config.auto_improve: "true"
+        # Never set labels on the PR.
+        PR_REVIEWER.ENABLE_REVIEW_LABELS_SECURITY: "false"
+        PR_REVIEWER.ENABLE_REVIEW_LABELS_EFFORT: "false"
+        PR_DESCRIPTION.PUBLISH_LABELS: "false"
+        # Post each suggestion as an inline comment with an "Apply suggestion" button.
+        PR_CODE_SUGGESTIONS.COMMITTABLE_CODE_SUGGESTIONS: "true"
+        PR_CODE_SUGGESTIONS.PERSISTENT_COMMENT: "false"
+        # No "no suggestions" comment.
+        PR_CODE_SUGGESTIONS.PUBLISH_OUTPUT_NO_SUGGESTIONS: "false"
+        # Review prompt from .github/pr-review-instructions.md.
+        PR_REVIEWER.EXTRA_INSTRUCTIONS: ${{ env.REVIEW_INSTRUCTIONS }}
+        PR_CODE_SUGGESTIONS.EXTRA_INSTRUCTIONS: ${{ env.REVIEW_INSTRUCTIONS }}
