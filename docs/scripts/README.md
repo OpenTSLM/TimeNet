@@ -14,9 +14,9 @@ concepts change:
 uv run docs/scripts/gen_concept_figures.py
 ```
 
-The script is a self-contained `uv` script (matplotlib + numpy declared inline). All randomness is
-seeded, so re-running produces byte-stable output. Set `FIG_PNG_DIR=/some/dir` to also drop PNG copies
-there for eyeballing; the committed artifacts are SVG only.
+The script is a self-contained `uv` script (matplotlib + numpy declared inline). Set
+`FIG_PNG_DIR=/some/dir` to also drop PNG copies there for eyeballing; the committed artifacts are
+SVG only.
 
 Figures produced: `dataset-example`, `time-series-example`, `annotation-static`, `annotation-point`,
 `annotation-interval`, `cross-sensor`, and `task-classification`, `task-classification-scoped`,

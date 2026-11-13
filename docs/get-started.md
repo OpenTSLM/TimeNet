@@ -50,7 +50,8 @@ Build the offline `timenet/hello-world` dataset:
 timenet-build build timenet/hello-world
 ```
 
-The command needs no network access. It writes this version into a local registry:
+The dataset is synthetic, so the connector downloads no data. The build writes this version into a
+local registry:
 
 ```text
 ~/.timenet/registry/timenet/hello-world/1.0.0/

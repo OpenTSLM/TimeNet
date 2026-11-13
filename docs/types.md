@@ -43,8 +43,8 @@ another object, use the object itself. For example, a span holds Signal objects.
 
 Only a few APIs use Record IDs:
 
-- `TimeFReader.record_ids()`, and the `record_ids` argument of `iter_records()`, `task_table()`,
-  and `target_table()`.
+- `TimeFReader.record_ids()`, and the `record_ids` argument of `iter_records()`,
+  `read_task_table()`, and `read_target_table()`.
 - `remove_records()` and `edit_version()` in `timenet.dataset.edit`.
 
 IDs are unique per kind within one dataset, and they stay the same across edits. Two datasets can
@@ -108,7 +108,7 @@ vibration = TimeSeriesSpec(
 | `categories` | Allowed labels for an enum specification. |
 | `value_shape` | Shape of one timestep, without the time dimension. |
 | `dimension_names` | Optional names for every dimension in `value_shape`. |
-| `missing` | Why complete timesteps can be missing, and the largest share a series may miss, or `None` when none can be. |
+| `missing` | Why complete timesteps can be missing. `None` forbids missing timesteps. |
 | `modality` | Input kind used for Task inference. Defaults to `TIME_SERIES`; also accepts `IMAGE`, `AUDIO`, or `TEXT`. |
 
 The full logical shape is `(n_steps, *value_shape)`. Parquet stores scalar values. Use the Zarr
@@ -216,7 +216,7 @@ Record's known origin. Relative spans also work when its absolute timestamp is u
 | Field | Required | Description |
 | --- | --- | --- |
 | `dataset_id` | yes | One `org/name` identifier. |
-| `dataset_version` | yes | Semantic version of the source dataset. |
+| `dataset_version` | yes | Semantic version of the built TimeNet dataset. |
 | `name` | yes | Display name. |
 | `description` | yes | Short dataset description. |
 | `license` | yes | Known SPDX-style license value, `OTHER`, or `NONE`. |

@@ -9,7 +9,7 @@ tags:
 # Datasets
 
 A dataset is a versioned collection of [records](records.md). Its address is `org/name@version`, for
-example `chengsenwang/tsqa@1.0.0`. The id is a HuggingFace-style `org/name` pair. Dataset metadata
+example `chengsenwang/tsqa@1.2.0`. The id is a HuggingFace-style `org/name` pair. Dataset metadata
 separates the TimeNet release from the original source:
 
 | Field | Meaning | Example |
@@ -35,9 +35,9 @@ version that a source of the client provides.
 import timenet
 
 client = timenet.TimeNet()
-client.load("chengsenwang/tsqa")          # the newest version of the first source
-client.load("chengsenwang/tsqa@latest")   # the highest version of all sources
-client.load("chengsenwang/tsqa@1.0.0")    # a pinned, immutable snapshot
+client.load("chengsenwang/tsqa")          # newest version of the first source
+client.load("chengsenwang/tsqa@latest")   # highest version of all sources
+client.load("chengsenwang/tsqa@1.2.0")    # a pinned, immutable snapshot
 ```
 
 Immutability makes **full data lineage** possible downstream. Every batch a model trains on traces

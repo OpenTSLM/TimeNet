@@ -19,7 +19,7 @@ By default, the command uses the hosted TimeNet registry:
 ```bash
 timenet list
 timenet search --query ecg --domain cardiology --limit 10
-timenet info chengsenwang/tsqa@1.0.0   # pin a version
+timenet info chengsenwang/tsqa@1.2.0   # pin a version
 timenet download chengsenwang/tsqa
 ```
 
@@ -102,7 +102,7 @@ version of the first source that serves the dataset, so a copy in the local regi
 `@latest` reads the highest version of all sources:
 
 ```bash
-timenet info chengsenwang/tsqa@1.0.0     # pinned
+timenet info chengsenwang/tsqa@1.2.0     # pinned
 timenet download chengsenwang/tsqa       # newest of the first source
 timenet info chengsenwang/tsqa@latest    # highest of all sources
 ```

@@ -43,8 +43,11 @@ The two stages stay separate. This lets the engine drive
 | `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
 | `compose(raw_refs, context)` | local work | Build a child dataset from the references and the opened parent releases. The default calls `convert(raw_refs)`. |
 
-You must implement `convert`. Unless the dataset card declares parent releases, it is the only
-required method. If the card declares parent releases, you implement `compose` instead, as
+A connector must implement `download` or `download_async`. It must also implement `convert` or
+`compose`. If either pair has no implementation, Python raises `TypeError` during connector
+creation.
+
+If the card declares parents, you must implement `compose`, as
 [Compose a child dataset](#compose-a-child-dataset) describes. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
 define `async download_async(cache_dir)` to fetch artifacts at the same time. Implement only one of

@@ -192,8 +192,11 @@ When you read a version, TimeNet builds new Source objects from these rows. The 
 annotations and metadata. Signal values stay lazy until you read them.
 
 ```python
+from timenet.reader import TimeFReader
+
 version = dataset.write(path="./registry")
-(stored,) = TimeFDataset.open(path=version).records
+with TimeFReader.open(version) as reader:
+    (stored,) = reader.read().records
 strap, stored_watch = stored.sources
 print(strap.name, [a.key for a in strap.annotations])
 print(stored_watch.metadata, stored_watch.sources[0].name)
