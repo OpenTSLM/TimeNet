@@ -215,6 +215,25 @@ class _StepRange(NamedTuple):
     """All time offsets of an irregular series if they were read to find the range, so callers need not reread them."""
 
 
+@dataclass(frozen=True, kw_only=True)
+class SignalDefinition:
+    """Metadata and a lazy loader for one signal.
+
+    Fields have the same meanings as the arguments to :meth:`Signal.from_loader`.
+    Constructing a definition does not read values or time offsets.
+    """
+
+    spec: TimeSeriesSpec
+    time_axis: TimeAxis
+    name: str
+    loader: ArrayHandle | Callable[[], pa.Array]
+    n_values: int
+    null_count: int | None = None
+    time_offsets_loader: ArrayHandle | Callable[[], pa.Array] | None = None
+    annotations: tuple[Annotation, ...] = ()
+    metadata: JsonMapping | None = None
+
+
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
 class Signal(SupportsAnnotate):
     """Reference to one logical stream of time-series data, with optional windowing and lazy values.
@@ -308,19 +327,52 @@ class Signal(SupportsAnnotate):
         Returns:
             A signal backed by ``loader`` without reading it.
         """
-        instance = cls.__new__(cls)
-        instance._initialize(
+        definition = SignalDefinition(
             spec=spec,
             time_axis=time_axis,
             name=name,
-            values=_array_handle(loader),
+            loader=loader,
             n_values=n_values,
             null_count=null_count,
-            time_offsets=None if time_offsets_loader is None else _array_handle(time_offsets_loader),
+            time_offsets_loader=time_offsets_loader,
             annotations=annotations,
             metadata=metadata,
         )
+        return cls._from_definition(definition)
+
+    @classmethod
+    def _from_definition(cls, definition: SignalDefinition) -> "Signal":
+        """Construct a lazy signal using the definition's complete metadata.
+
+        Returns:
+            The signal without reading its values.
+        """
+        instance = cls.__new__(cls)
+        offsets = definition.time_offsets_loader
+        instance._initialize(
+            spec=definition.spec,
+            time_axis=definition.time_axis,
+            name=definition.name,
+            values=_array_handle(definition.loader),
+            n_values=definition.n_values,
+            null_count=definition.null_count,
+            time_offsets=None if offsets is None else _array_handle(offsets),
+            annotations=definition.annotations,
+            metadata=definition.metadata,
+        )
         return instance
+
+    @classmethod
+    def from_loaders(cls, *, channels: Iterable[SignalDefinition]) -> tuple["Signal", ...]:
+        """Build signals from lazy loaders, preserving the given order.
+
+        Each definition follows :meth:`from_loader`. Loaders can share a physical read,
+        but this constructor does not cache or read their values.
+
+        Returns:
+            One signal per definition, in the order supplied.
+        """
+        return tuple(cls._from_definition(channel) for channel in channels)
 
     def _initialize(  # ruff: ignore[too-many-arguments] - shared eager and lazy field initialization
         self,
