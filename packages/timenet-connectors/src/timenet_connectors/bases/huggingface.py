@@ -2,8 +2,8 @@
 
 Subclasses set ``HF_REPO``, ``SOURCE_REVISION``, and ``SOURCE_FILES``, ship a ``dataset.yaml`` card
 beside the connector, and implement ``convert()`` over the :class:`HubFileRef` list ``download()``
-returns. The base checks that list before the subclass's ``convert()`` runs. It also fills the card's
-``source_url`` and ``source_revision`` from ``HF_REPO`` and ``SOURCE_REVISION``.
+returns. The base checks that list before the subclass's ``convert()`` runs. It also fills
+``source_url`` and ``source_revision`` in the dataset metadata from ``HF_REPO`` and ``SOURCE_REVISION``.
 :mod:`timenet_connectors.sources.huggingface_hub` describes how the files download. For the Hub's
 parquet conversion, pin the commit ``refs/convert/parquet`` points to.
 """
@@ -73,7 +73,7 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
             cls.convert = checked
 
     def metadata(self) -> DatasetMetadata:
-        """Return the card, with ``source_url`` and ``source_revision`` taken from :attr:`HF_REPO` and :attr:`SOURCE_REVISION`.
+        """Return the card, with ``source_url`` and ``source_revision`` from :attr:`HF_REPO` and :attr:`SOURCE_REVISION`.
 
         The card can omit both fields. If it sets one, the value must match the connector.
 
