@@ -129,10 +129,9 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     published = _published()
     with TimeFReader(open_local_version(registry.root / "tsaqa/tsaqa-benchmark/1.0.0")) as reader:
         restored = reader.read()
-        assert {a.key: a.value for a in restored.annotations if a.key not in {"task", "question_type"}} == {
-            "source_repository": "TSAQA/TSAQA-Benchmark",
-            "source_revision": "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
-        }
+        assert all(a.key in {"task", "question_type"} for a in restored.annotations)
+        assert restored.metadata.source_url == "https://huggingface.co/datasets/TSAQA/TSAQA-Benchmark"
+        assert restored.metadata.source_revision == "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd"
         labels = [(a.key, a.value) for a in restored.annotations if a.key in {"task", "question_type"}]
         expected = {("task", row["task"]) for row in published.values()}
         expected |= {("question_type", row["question_type"]) for row in published.values()}
