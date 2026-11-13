@@ -92,6 +92,9 @@ dataset. Sources, axes, and annotations have no id. Put upstream identifiers in 
 not by an id. A span takes Signal objects, for example
 `TimeInterval.seconds(0.0, 1.0, time_series=(signal,))`.
 
+For metadata that many tasks reference, use `dataset.annotate_shared(annotation)` and pass the
+returned occurrence to the tasks. It also works inside a re-iterable task stream.
+
 ### 7. Verify
 - Add a fixture-based test in `<org>/<name>/tests/`, mirroring the one at
   `datasets/chengsenwang/tsqa/tests/test_connector.py`: check in a tiny sample of the raw shape and call

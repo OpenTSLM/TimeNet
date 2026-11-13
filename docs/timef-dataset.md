@@ -210,7 +210,8 @@ and a Source or Signal that another Record owns. It then gives the Record and it
 validation error leaves the dataset unchanged.
 
 For a large corpus, `set_task_stream()` accepts a re-iterable task source. The writer validates and
-inserts that stream once without retaining every Task in memory.
+inserts that stream once without retaining every Task in memory. The stream can attach shared
+dataset annotations while it produces tasks, and the writer includes them in the release.
 
 ## Annotations
 
@@ -234,6 +235,30 @@ lead_i.annotate(
     )
 )
 ```
+
+### Shared dataset annotations
+
+Use `dataset.annotate_shared(annotation)` for metadata that many tasks reference, such as a
+question type or answer options. It returns the first equivalent occurrence already attached to
+the dataset, or attaches a new one. Pass that returned occurrence to the task:
+
+```python
+question_type = dataset.annotate_shared(
+    Annotation(key="question_type", value=row.question_type)
+)
+task = AnswerTask(
+    inputs=(record,),
+    targets=(row.answer,),
+    input_annotations=(question_type,),
+)
+```
+
+Matching includes all content and occurrence fields, and compares text by value. Existing, loaded,
+and imported annotations count; dataset annotations cannot have time spans. Ordinary `annotate()`
+always creates a new occurrence.
+
+A task stream can share annotations on every pass. Compared text stays in memory with the annotation,
+so use sharing for short, repeated metadata. Lazy text loaders must return consistent content.
 
 ## Schema and persistence
 
