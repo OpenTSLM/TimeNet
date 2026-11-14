@@ -29,6 +29,19 @@ description: >-
   meters per second squared, because the question states that 10 represents 1g; the Daphnet values
   are in milli-g, as the question states. Each question becomes a classification task whose target
   is the released label. The file repeats 38 question-and-answer pairs.
+
+  The two forecasting-and-imputation files have 42,557 forecasting and 38,657 imputation questions
+  about series from web traffic, health, nature, finance, energy, and transport. Of the forecasting
+  questions, 37,390 print a series of 64 to 256 values and ask for its next 8 to 32 values; each
+  becomes a forecasting task whose input Record holds the printed series and whose target Record
+  holds the released predictions. The other 5,167 come from Time-MMD: a text about a market, an
+  epidemic, gasoline prices, or traffic, sometimes with a list of recent values, and a question
+  that asks for a prediction in words. Each becomes an answer task whose target is the released
+  answer text; the 1,989 that print a list of values give it as a Record. Each imputation question
+  prints a series of 64 to 256 values with 'X' in place of 4 to 12 of them, and the answer prints
+  the complete series. Each becomes an editing task whose input Record holds the printed series
+  with a missing value at each 'X', and whose target Record holds the complete series. The two
+  files repeat 8 question-and-answer pairs, and 5 pairs are in both files.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/Time-MQA/TSQA
 citation: >-

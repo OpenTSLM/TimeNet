@@ -43,6 +43,15 @@ def test_a_cell_keeps_raw_quotes_and_line_breaks_in_its_texts(tmp_path):
     assert (row.application_domain, row.task_type) == ("AIOps", "anomaly detection")
 
 
+def test_a_gap_marker_counts_only_when_gaps_are_allowed():
+    text = "The input Time Series are [1.5, 'X', -2.0]."
+
+    assert find_printed_series(text) == ()
+    (series,) = find_printed_series(text, with_gaps=True)
+    assert series.values == (1.5, None, -2.0)
+    assert series.has_gaps
+
+
 def test_only_bracketed_lists_of_decimal_numbers_are_printed_series():
     text = "Fill [?, ?, ?] in [note 1] of [7.84e-05, -386, 2.5]. Compare [] with [0.0, 1.0]."
 
