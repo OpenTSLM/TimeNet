@@ -1,0 +1,10 @@
+yaml_schema_version: 1
+dataset_id: utwente/shoaib
+dataset_version: 1.0.0
+name: Shoaib Sensors Activity Recognition Dataset
+description: Five simultaneous Samsung Galaxy SII positions with original timestamp tokens and motion sensors.
+license: other
+license_url: https://www.utwente.nl/en/eemcs/ps/research/dataset/
+domains: [activity, motion]
+tags: [activity-recognition, smartphone, accelerometer, gyroscope, magnetometer]
+source_url: https://www.utwente.nl/en/eemcs/ps/dataset-folder/sensors-activity-recognition-dataset-shoaib.rar
