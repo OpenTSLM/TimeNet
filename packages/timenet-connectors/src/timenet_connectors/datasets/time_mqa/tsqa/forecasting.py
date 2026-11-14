@@ -1,11 +1,8 @@
-"""The forecasting family: the next values of a printed series, or a prediction in words.
+"""Parse forecasting questions and create series forecasting or free-answer tasks.
 
-Most forecasting questions print a series and ask for its next N values; the answer prints those
-values. Such a row becomes two Records, the history and the future, and one ForecastingTask whose
-target is the future Record. The other forecasting questions come from Time-MMD: a text about a
-market, an epidemic, gasoline prices, or traffic, sometimes with a list of recent values, and a
-question that asks for a prediction in words. Such a row is a free-answer row: one AnswerTask whose
-target is the released answer text, with a Record for each list of values the question prints.
+A question that asks for the next values of its printed series becomes a forecasting task from a
+history record to a future record. A Time-MMD question, which asks for a prediction in words,
+becomes a free-answer task.
 """
 
 from dataclasses import dataclass
@@ -23,7 +20,7 @@ _PREDICTIONS = re.compile(r"Based on the given information, the predictions are 
 
 
 def parse_forecasting_row(row: ReleaseRow) -> TaskRow:
-    """Parse a forecasting row as a series forecast if it asks for the next values, else as a free-answer row.
+    """Parse a forecasting row as a series forecast or a free-answer row.
 
     Returns:
         The parsed row.
@@ -35,7 +32,7 @@ def parse_forecasting_row(row: ReleaseRow) -> TaskRow:
 
 @dataclass(frozen=True)
 class SeriesForecastingRow:
-    """A forecasting row that prints a series and asks for its next values."""
+    """A forecasting row with a series and its future values."""
 
     row: ReleaseRow
     history: PrintedSeries
@@ -43,14 +40,13 @@ class SeriesForecastingRow:
 
     @classmethod
     def from_release_row(cls, row: ReleaseRow) -> Self:
-        """Parse a row that asks for the next values of its printed series.
+        """Parse a row that asks for the next values of a series.
 
         Returns:
             The parsed row.
 
         Raises:
-            TimeNetConnectorError: If the question does not print one series, the answer does not print
-                the predictions, or it prints another number of values than the question asks for.
+            TimeNetConnectorError: If the series or predictions are invalid, or the prediction count is wrong.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through the ReleaseRow methods
         history = row.only_printed_series_of_question()
         row.match_of_answer_template(_PREDICTIONS)
@@ -61,7 +57,7 @@ class SeriesForecastingRow:
         return cls(row=row, history=history, future=future)
 
     def add_records_and_task_to(self, dataset: TimeFDataset) -> ForecastingTask:
-        """Add the history and the future Records, and the task that asks for the future from the history.
+        """Add the history and future records and the forecasting task to the dataset.
 
         Returns:
             The added task.
@@ -79,10 +75,10 @@ class SeriesForecastingRow:
 
 
 def _horizon_of_question(row: ReleaseRow) -> int:
-    """Return the number of values that the question asks for.
+    """Return the number of future values requested by the question.
 
     Returns:
-        The horizon.
+        The number of values.
 
     Raises:
         TimeNetConnectorError: If the question does not ask for the next values.
