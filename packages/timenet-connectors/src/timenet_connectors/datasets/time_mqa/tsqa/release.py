@@ -37,6 +37,7 @@ class TaskFamily(StrEnum):
     """The task families of the release, each named as the ``task_type`` column writes it."""
 
     ANOMALY_DETECTION = "anomaly detection"
+    CLASSIFICATION = "classification"
 
 
 @unique
@@ -44,6 +45,7 @@ class ReleasePart(StrEnum):
     """The CSV files of the release, named as the parts of the connector."""
 
     ANOMALY_DETECTION = "anomaly_detection"
+    CLASSIFICATION = "classification"
 
     @property
     def filename(self) -> str:
@@ -80,9 +82,11 @@ class ReleasePart(StrEnum):
 
 _FILENAMES: Mapping[ReleasePart, str] = {
     ReleasePart.ANOMALY_DETECTION: "Anomaly_Detection/anomaly_detection.csv",
+    ReleasePart.CLASSIFICATION: "Classification/classification.csv",
 }
 _FAMILIES: Mapping[ReleasePart, frozenset[TaskFamily]] = {
     ReleasePart.ANOMALY_DETECTION: frozenset({TaskFamily.ANOMALY_DETECTION}),
+    ReleasePart.CLASSIFICATION: frozenset({TaskFamily.CLASSIFICATION}),
 }
 _COLUMNS = ("application_domain", "task_type", "QA_list")
 SOURCE_FILES: Mapping[str, str] = {part.value: part.filename for part in ReleasePart}
