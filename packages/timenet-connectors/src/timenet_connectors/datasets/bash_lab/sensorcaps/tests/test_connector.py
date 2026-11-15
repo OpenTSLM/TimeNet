@@ -233,6 +233,8 @@ def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, t
         records = list(reader.iter_records())
         _assert_records_and_tasks(records, list(reader.iter_tasks(inputs=records)))
         assert _annotations(restored) == _DATASET_ANNOTATIONS
+        assert restored.metadata.source_url == "https://huggingface.co/datasets/BASH-Lab/SensorCaps"
+        assert restored.metadata.source_revision == "4242e07feaacb0ee3aff86182a62914fa7abacef"
         reader.verify()
 
 
