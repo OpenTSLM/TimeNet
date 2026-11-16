@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["GitPython>=3.1"]
+# dependencies = ["GitPython>=3.1", "PyYAML>=6"]
 #
 # [tool.ty.rules]
 # unresolved-import = "ignore"
@@ -28,6 +28,7 @@ from functools import cache
 import re
 
 from git import Repo
+import yaml
 
 
 PACKAGE = "packages/timenet-connectors"
@@ -89,13 +90,11 @@ def connectors(ref: str) -> dict[str, tuple[str, str]]:
         return found
     for folder in (folder for org in datasets.trees for folder in org.trees):
         try:
-            text = (folder / "dataset.yaml").data_stream.read().decode()
+            card = yaml.safe_load((folder / "dataset.yaml").data_stream)
         except KeyError:
             continue
-        dataset_id = re.search(r"^dataset_id:\s*(\S+)", text, re.M)
-        name = re.search(r"^name:\s*(.+)$", text, re.M)
-        key = dataset_id[1] if dataset_id else "/".join(folder.path.split("/")[-2:])
-        found[key] = (folder.path, name[1].strip() if name else key)
+        key = card.get("dataset_id") or "/".join(folder.path.split("/")[-2:])
+        found[key] = (folder.path, card.get("name") or key)
     return found
 
 
