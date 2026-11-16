@@ -66,6 +66,9 @@ rationales remain `None` when absent; numeric and boolean values remain native P
 `read_values(values)` does the same for each item, such as a task's targets, and returns a tuple, or
 `None` for `None`.
 
+Inline text in `control.duckdb` (up to 4,096 JSON-encoded bytes) always reads back loaded, as
+[Types](types.md) describes.
+
 Text read from a release uses the same handle types. Unless the read loads text, packed text
 stays in its payload file until `read()` or a comparison of content needs it, and its handle keeps
 nothing: `is_loaded` is false, and each read goes to the payload again. Schema derivation and
@@ -96,6 +99,7 @@ on any of them read nothing.
 Without `record_ids=`, it yields every Record in the order of `record_ids()`. With `record_ids=`,
 it yields the Records with these int IDs, in the order that you give. It makes sure that every
 requested ID exists before it yields the first Record.
+Pass `with_annotations=False` to skip building annotations on the Records and their descendants.
 
 Tasks have four useful read paths:
 
@@ -197,14 +201,6 @@ same = reader.get(
 The reader translates the parent's ID to the local copy through the catalog, then reads the values
 from whichever release stores them.
 
-An ID that names nothing, an unknown alias or parent, and a stored object of another kind, such as
-`get(AnswerTask, ...)` on a classification task, raise `TimeFNotFoundError`, which subclasses both
-`TimeFValidationError` and `LookupError`. An edit such as `remove_records` can remove the copy of a
-parent object. The parent ID of that object then names nothing, because the edit drops that import.
-`get_many` raises it, naming every missing ID, before it returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID
-that is not a positive int64, a single string passed to `get_many`, and a `parent` that is neither a
-`ParentAlias` nor a `DatasetRef` raise `TimeFValidationError`.
-
 ## Loading values at read time
 
 `read()`, `iter_records()`, `read_tasks()`, `iter_tasks()`, `get()`, and `get_many()` take a
@@ -276,25 +272,29 @@ the chunks that intersect the requested range.
 
 Scalar values use Arrow arrays. Multidimensional values use `pa.FixedShapeTensorArray`.
 `to_numpy()` preserves the declared dtype and trailing shape. The reader caches open Parquet files
-and decoded Zarr chunks until it closes.
+and decoded row groups, and opened Zarr arrays and decoded chunks, until it closes.
+The Zarr chunk cache evicts the least recently used chunks first.
 
 ## API
 
 | Member | Description |
 | --- | --- |
+| `TimeFReader.open(path, sources_root=...)` | Open a local version directory. |
+| `close()` | Release open files and caches. The reader stays reusable. |
+| `record_ids()` | Return every Record ID in read order, without building Records. |
 | `read(load=...)` | Create the complete `TimeFDataset`, loading the values the plan names. |
-| `iter_records(record_ids=..., load=..., batch_size=...)` | Yield Records in bounded batches. Load the values that the plan names. |
-| `read_tasks(inputs=..., split=..., load=...)` | Build the matching tasks, or every task, in one pass. |
-| `iter_tasks(inputs=..., split=..., load=..., batch_size=...)` | Yield the matching tasks in bounded batches. |
+| `iter_records(record_ids=..., with_annotations=True, load=..., batch_size=...)` | Yield Records in bounded batches. Load the values that the plan names. |
+| `read_tasks(inputs=..., split=..., required_modalities=..., supported_modalities=..., load=...)` | Build the matching tasks, or every task, in one pass. |
+| `iter_tasks(inputs=..., split=..., required_modalities=..., supported_modalities=..., load=..., batch_size=...)` | Yield the matching tasks in bounded batches. |
 | `get(kind, id, parent=..., load=...)` | Read one Record, Signal, or task by ID. |
 | `get_many(kind, ids, parent=..., load=...)` | Read objects of one kind by ID, in order, in one batch. |
-| `read_task_table()` | Return one row per task. |
-| `read_target_table()` | Return the ordered task targets. |
-| `read_annotation_table()` | Return one row per annotation occurrence. |
+| `read_task_table(record_ids=..., split=..., required_modalities=..., supported_modalities=...)` | Return one row per task. |
+| `read_target_table(record_ids=..., split=..., required_modalities=..., supported_modalities=...)` | Return the ordered task targets. |
+| `read_annotation_table(object_type=...)` | Return one row per annotation occurrence. |
 | `verify()` | Hash every file the release reads, its own and its pinned payload source files. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |
-| `values_backend` | Return the selected values backend. |
+| `values_backend` | Return the selected values backend as a `ValuesBackend` member. |
 
 ## Opening a version
 
@@ -341,7 +341,7 @@ releases that source reuses.
 
 | Problem | Error | The message names |
 | --- | --- | --- |
-| A payload source is missing | `TimeNetDatasetNotFoundError` | The source and the root searched |
+| A payload source is missing | `TimeNetMissingParentError`, a `TimeNetDatasetNotFoundError` | The source and the root searched. `TimeFReader.open()` adds a hint to pass `sources_root=` or download the dataset version with its payload sources. |
 | A payload source differs from its pins | `TimeFFormatError` | The source and the first differing file |
 | A file is missing or has another size | `TimeNetFileError` | The file, its expected size, and its actual size |
 

@@ -54,6 +54,15 @@ A replace is not isolated from readers that already opened the old release, or f
 reuse its payloads. An open reader loses the files it has not read yet, and a release that reuses
 the old release's payloads fails to open, because its pins no longer match.
 
+`write()` stages every artifact except the manifest. `close()` writes the manifest and publishes the
+version, while `abort()` removes the staging directory. The context manager ensures that either
+`close()` is called on success, or `abort()` on any error.
+
+`pinned_by=` maps dataset versions that already read files of this version to their file pins.
+If a rebuilt file differs from a pin, `close()` raises `TimeFFormatError` and publishes nothing.
+`write()` fills `payload_sources` with the dataset versions whose payloads it reused and their file
+pins.
+
 ## Write stages
 
 The writer performs these operations:
@@ -105,11 +114,14 @@ differing payload source.
 | `compression` | Parquet codec or Zarr Blosc inner codec. |
 | `compression_level` | Optional backend compression level. |
 | `data_page_size` | Optional Parquet data-page target. |
-| `value_encoding` | Parquet values-column encoding, or `"auto"`. |
+| `value_encoding` | Choose the Parquet values-column encoding per spec type from the data, or force `"dictionary"`, `"byte_stream_split"`, or `"plain"`. |
 
-Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve missing
-timesteps. Irregular-axis time offsets live in packed Parquet payloads under `payloads/`, not in
-either values backend.
+In a build, the connector's `values_backend` attribute chooses the backend, as
+[Connectors](connectors.md) describes.
+
+Multidimensional Signals use Zarr. Parquet only supports scalar Signals. Both backends preserve
+missing timesteps. Irregular-axis time offsets live in packed Parquet payloads under `payloads/`,
+not in either values backend.
 
 ## Validation
 
@@ -117,6 +129,8 @@ The writer fails before publication when it finds an invalid state, including:
 
 - duplicate Record, Signal, or Task IDs;
 - one annotation occurrence object attached to more than one object;
+- a Record without Sources;
+- objects imported under a parent alias without a parent card;
 - a recursive Source cycle;
 - a Signal attached to more than one Source;
 - one irregular axis object shared by Signals with different time offsets;
@@ -153,10 +167,10 @@ the same axis object. Each occurrence object gets one row.
 
 ## Task streams
 
-A dataset can provide a re-iterable task source with `set_task_stream()`. The writer consumes the
-validated stream once while it inserts task rows and object relationships. It keeps the deferred
-dependency edges, not every Task object. So the writer does not materialize a large task corpus in
-Python.
+A dataset can provide a re-iterable task source with `set_task_stream(task_types, source)`.
+The writer consumes the validated stream once while it inserts task rows and object relationships.
+It keeps the deferred dependency edges, not every Task object. So the writer does not materialize a
+large task corpus in Python.
 
 ## Progress
 

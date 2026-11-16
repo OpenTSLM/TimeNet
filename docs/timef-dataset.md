@@ -32,6 +32,8 @@ the rules.
 
 A `Signal` is one named stream. Pass `data` to the constructor for eager values. Use
 `Signal.from_loader()` with `loader` and `n_values` for lazy values.
+`Signal.from_values(values, spec=..., name=..., time_axis=...)` also builds a Signal from eager
+values.
 
 ```python
 from timenet.dataset import Signal
@@ -56,11 +58,18 @@ lead_i = Signal(
 | `data` | array-like | Eager values. Mutually exclusive with `loader`. |
 | `loader` | `ArrayHandle` or callable | Lazy values, passed to `Signal.from_loader()`. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
+| `null_count` | `int \| None` | Number of missing timesteps. Eager data has a known count. `from_loader()` accepts an optional count. Slices have `None`. The writer rejects a count that differs from the values. |
+| `span_us` | `tuple[int, int] \| None` | Half-open microsecond window, or `None` for an ordinal Signal. |
+| `is_ordinal` | `bool` | Whether the Signal counts steps without a timeline. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
 | `metadata` | `JsonMapping` | Optional JSON-compatible metadata. |
 
 Read values through `to_arrow()`, `to_numpy()`, and `read_steps()`. These accessors apply the
 spec: `to_numpy()` rejects nulls, and tensor values keep their trailing shape.
+
+`step_range(span)` returns a step range for `read_steps()`. `is_selected_by(span)` tests the scope,
+and `overlaps_with(span)` tests for values inside a time span. `slice(span, clip=False)` cuts a lazy
+window. See [Cut a window](data-model/time-series.md#cut-a-window).
 
 A Signal keeps its values behind an internal `ArrayHandle` from `timenet.types`, which library code
 such as the writer reads directly. The constructor holds eager data in memory. Numeric and boolean
@@ -144,12 +153,17 @@ record = Record(
 | `metadata` | `JsonMapping` | Optional session metadata. |
 | `start_time` | `TimeOrigin` | Common relative zero with an optional absolute timestamp. |
 | `time_span` | `TimeInterval \| None` | Optional overall session interval. |
+| `has_absolute_time` | `bool` | Whether the Record has a known absolute timestamp. |
 
 `record.signals` flattens every Signal in the hierarchy. `walk_sources()` and `walk_signals()` expose
 the same deterministic traversal used by the writer.
+`walk_annotations()` yields annotations on the Record, its Sources, and its Signals.
 
 Call `record.annotate(annotation)` to attach an occurrence. `time_point()` and `time_interval()`
 convert wall-clock values against the Record origin. They require a known absolute timestamp.
+
+`add_annotations(annotations)` attaches several annotations, all together or
+none at all.
 
 Store subject identifiers as a list-valued record annotation. Omit it for a record with no subjects:
 
@@ -189,8 +203,9 @@ normalized ID relationships and restores the objects when it reads the dataset.
 A Task may name its `split`: `train`, `validation`, or `test`. `get_train()`, `get_validation()`,
 and `get_test()` return the Tasks of one split. `get_splits(Split.TRAIN, Split.VALIDATION)` selects
 their union in dataset order without changing assignments. `get_all()` returns every Task;
-`iter_tasks(split=...)` filters a stream by one split or an iterable of splits.
-See [Tasks](data-model/tasks.md#splits).
+`iter_tasks(split=..., required_modalities=..., supported_modalities=...)` filters a stream by split
+and input modalities. `get_split(split)` returns one split.
+See also [Task splits](data-model/tasks.md#splits).
 
 ## Building a dataset
 
@@ -208,9 +223,11 @@ dataset.add_task(task=task)
 and a Source or Signal that another Record owns. It then gives the Record and its Signals their IDs.
 `add_task()` validates referenced objects, the answer representation, and temporal scopes. A
 validation error leaves the dataset unchanged.
+`add_tasks(tasks=...)` registers several tasks, all together or none at all.
 
-For a large corpus, `set_task_stream()` accepts a re-iterable task source. The writer validates and
-inserts that stream once without retaining every Task in memory.
+`set_task_stream(task_types, source)` lets a dataset hand its tasks to the writer as a stream
+instead of holding them all in memory. Use it for datasets with far more tasks than records, such as
+many questions over a few recordings.
 
 ## Annotations
 
@@ -219,6 +236,10 @@ content is immutable and reusable. Every call to `annotate()` creates a separate
 long payload can be stored once while its occurrences carry independent placement, confidence, and
 provenance. `Annotation` is final: reuse content through a constant, or a builder function for
 content that varies, as [Annotations](data-model/annotations.md#reuse-content) shows.
+Note that a dataset annotation cannot have a span.
+
+Annotation values can use `LazyText` or `LazyTextList` from `timenet.types` to read text on request,
+as [Types](types.md) describes.
 
 ```python
 from timenet.types import Annotation, TimePoint
@@ -262,16 +283,15 @@ with TimeFReader.open(version_path) as reader:
 ```
 
 The stored version contains `manifest.json`, an immutable `control.duckdb`, and a Parquet or Zarr
-values plane. See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer.md) for the physical
-layout.
+values plane. Some versions also hold packed text and irregular time offsets under `payloads/`.
+See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer.md) for the physical layout.
 
 See the [API reference for `timenet.dataset`](api/timenet.dataset.md) for the full symbol listing.
 
 ## Importing from a parent
 
-A child dataset copies objects from a parent release with `import_from()`. A parent release is one
-version of another dataset. The child must declare the parent in `metadata.parents`, under a parent
-alias. A parent alias is the name that the child gives the parent.
+A child dataset copies objects from a parent dataset with `import_from()`. The child must declare
+the parent in `metadata.parents`, under a parent alias.
 
 ```python
 from timenet.reader import TimeFReader
@@ -282,9 +302,10 @@ copy = imported.records[12]
 ```
 
 The unit of import is an object with an ID. Records, Signals, and tasks have IDs. An import makes
-sure that each selected object, and each object that it needs, is in the child. If the child holds a
-copy of the object, the import uses that copy as it is, with the edits of the child. Otherwise, the
-import copies the object under a new ID. This includes an object that the child removed.
+sure that each selected object, and each object that it refers to, is added to the child. If the
+child already holds a copy of the object, the import uses that copy as it is, with the edits of the
+child. Otherwise, the import copies the object under a new ID. This includes an object that the
+child removed.
 
 Sources and annotations have no IDs. They come only with the Records and Signals that they belong
 to. An import can also add them to a copy that the child holds, as [Later imports](#later-imports)
@@ -292,8 +313,8 @@ describes.
 
 ### The parent
 
-Pass a reader of the parent release. The child must declare that exact release. A card declares each
-release under one alias only, and the import uses that alias. An alias imports one release only.
+The first argument of `import_from()` is a `TimeFReader` that is open on the parent release, as
+in the example above. Its version must be the version that `metadata.parents` declares.
 
 Each import records the parent in the child. `parent_cards` holds a copy of the card of each
 parent, by parent alias. `lineage` holds the card of each ancestor release. An ancestor release is a
