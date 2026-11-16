@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# Context is Key (CiK) holds 355 forecasting instances: 71 task types with 5 seeds each. An
+# instance gives a numerical history, a text context, and the future values to forecast. The
+# authors designed each task so that a good forecast needs the text.
+#
+# Each instance becomes two records and one test task. The first record holds the history and the
+# second holds the future values. Each record has one signal, named as the source names its column.
+# The task is a ForecastingTask with the history record as its input and the future record as its
+# target. Both records share one time origin, so the future values sit after the history on the
+# same timeline.
+#
+# The prompt of a task is the background, the scenario, and the constraints of the instance, in
+# this order, with empty parts left out and a blank line between parts. The task metadata keeps the
+# three parts separately, so a consumer can ablate one kind of context. It also keeps the fields
+# that the benchmark's metric (RCRPS) needs: region_of_interest, metric_scaling, the constraint
+# fields, seasonal_period, and weight.
+#
+# The source stores naive timestamps in three formats: "2024-07-01T00:00:00.000",
+# "2006-10-08 23:50", and "2022-07" for monthly series. The dataset reads them as UTC and reads a
+# month as its first day. The texts use the same clock. A signal with a constant step has a regular
+# axis. A monthly series always has an irregular axis, because months differ in length.
+#
+# Values are float64. The unit of a series appears only in its background text, so the spec is
+# dimensionless.
+#
+# The connector reads the `test` file of the Hub repo. The `ICML2025` file is the version the paper
+# reports on. The two differ in the scenario text of 15 instances.
+yaml_schema_version: 1
+dataset_id: servicenow/context-is-key
+dataset_version: 1.0.0
+name: Context is Key
+description: >-
+  355 forecasting instances (71 task types, 5 seeds each) from 7 domains, in which a text
+  context is needed to forecast well. Each instance is a ForecastingTask from a history record to a
+  record of future values, with the background, scenario, and constraints as the prompt. The
+  dataset is a benchmark: every task is in the test split.
+license: Apache-2.0
+source_url: https://huggingface.co/datasets/ServiceNow/context-is-key
+citation: >-
+  Williams, A. R., Ashok, A., Marcotte, É., Zantedeschi, V., Subramanian, J., Riachi, R.,
+  Requeima, J., Lacoste, A., Rish, I., Chapados, N., and Drouin, A. (2025). Context is Key: A
+  Benchmark for Forecasting with Essential Textual Information. ICML 2025.
+  https://arxiv.org/abs/2410.18959
+access: open
+domains:
+  - general
+tags:
+  - forecasting
+  - context-aided-forecasting
+  - benchmark
+  - text-context
+  - huggingface
