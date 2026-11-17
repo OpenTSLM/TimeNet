@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 from pydantic import ConfigDict, ValidationError
 import pytest
 
-from timenet.errors import TimeNetConnectorError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet_connectors.sources.readers import (
     CsvDataReader,
     DataRow,
@@ -83,6 +83,15 @@ def test_csv_reads_a_cell_up_to_the_set_field_size_limit(tmp_path):
         list(CsvDataReader(path, Row).iter_rows())
     CsvDataReader.set_field_size_limit(len(long_name))
     assert list(CsvDataReader(path, Row).iter_rows()) == [Row(name=long_name, count=1)]
+
+
+@pytest.mark.usefixtures("restore_csv_field_limit")
+@pytest.mark.parametrize("chars", [0, -5])
+def test_csv_field_size_limit_must_be_positive(chars):
+    previous = csv.field_size_limit()
+    with pytest.raises(TimeFValidationError, match=f"field size limit must be at least 1 character, got {chars}"):
+        CsvDataReader.set_field_size_limit(chars)
+    assert csv.field_size_limit() == previous
 
 
 def test_csv_checks_expected_header_even_without_rows(tmp_path):

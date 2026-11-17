@@ -5,7 +5,7 @@ import csv
 from pathlib import Path
 from typing import TypeGuard
 
-from timenet.errors import TimeNetConnectorError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataReader, RowT
 
 
@@ -32,7 +32,13 @@ class CsvDataReader(DataReader[RowT]):
 
         Args:
             chars: The largest cell to accept, in characters.
+
+        Raises:
+            TimeFValidationError: If ``chars`` is less than 1.
         """
+        # The csv module accepts zero or a negative limit, and then rejects every nonempty cell.
+        if chars < 1:
+            raise TimeFValidationError(f"the field size limit must be at least 1 character, got {chars}")
         csv.field_size_limit(chars)
 
     def iter_rows(self) -> Generator[RowT, None, None]:
