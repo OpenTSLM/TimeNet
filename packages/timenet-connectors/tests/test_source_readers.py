@@ -1,4 +1,5 @@
 from contextlib import closing
+import csv
 import json
 from pathlib import Path
 
@@ -63,6 +64,35 @@ def test_csv_rejects_ambiguous_rows(tmp_path, content, message):
     path.write_text(content)
     with pytest.raises(TimeNetConnectorError, match=message):
         list(CsvDataReader(path, Row).iter_rows())
+
+
+@pytest.fixture
+def restore_csv_field_limit():
+    # The limit of the csv module is process-wide, so restore it for the tests that run after.
+    previous = csv.field_size_limit()
+    yield
+    csv.field_size_limit(previous)
+
+
+@pytest.mark.usefixtures("restore_csv_field_limit")
+def test_csv_reads_a_cell_up_to_max_field_chars(tmp_path):
+    long_name = "x" * (csv.field_size_limit() + 1)
+    path = tmp_path / "source.csv"
+    path.write_text(f"name,count\n{long_name},1\n")
+    with pytest.raises(TimeNetConnectorError, match="field larger than field limit"):
+        list(CsvDataReader(path, Row).iter_rows())
+    reader = CsvDataReader(path, Row, max_field_chars=len(long_name))
+    assert list(reader.iter_rows()) == [Row(name=long_name, count=1)]
+
+
+@pytest.mark.usefixtures("restore_csv_field_limit")
+def test_csv_max_field_chars_never_lowers_the_process_limit(tmp_path):
+    # Another reader may be in the middle of a file with long cells, so a small maximum must not cut it off.
+    previous = csv.field_size_limit()
+    path = tmp_path / "source.csv"
+    path.write_text("name,count\nfirst,1\n")
+    list(CsvDataReader(path, Row, max_field_chars=10).iter_rows())
+    assert csv.field_size_limit() == previous
 
 
 def test_csv_checks_expected_header_even_without_rows(tmp_path):
