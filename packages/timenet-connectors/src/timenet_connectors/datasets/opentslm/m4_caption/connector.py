@@ -146,6 +146,8 @@ class M4CaptionSeries:
             annotations=(frequency,),
             metadata={"m4_id": self.m4_id},
         )
+        # The task has no prompt. By convention, an AnswerTask without a prompt is an unprompted
+        # caption or description.
         task = AnswerTask(inputs=(record,), targets=(self.caption,), split=self.split)
         return record, task
 
