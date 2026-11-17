@@ -31,7 +31,7 @@ M4_CAPTION_URL = "https://polybox.ethz.ch/index.php/s/MT3y9WdEebT8wfj/download/M
 M4_CAPTION_SHA256 = "4acb748d94d7287fe58dbb5c3cf6314ea259010b7720f42506739269dec54edf"
 RELEASE_FOLDER = "M4TimeSeriesCaptionDataset"
 """The folder in the archive that holds the CSV files."""
-MAX_SERIES_CHARS = 1_000_000
+MAX_SERIES_CHARS = 200_000
 """The largest series cell that the connector reads, in characters. The largest cell of the release
 holds a daily series of 9,919 values in 169,126 characters."""
 SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
