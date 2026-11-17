@@ -216,10 +216,8 @@ class M4CaptionRelease:
         """
         series_path = self.directory / f"m4_series_{frequency}.csv"
         captions_path = self.directory / f"m4_captions_{frequency}.csv"
-        series_reader = CsvDataReader(
-            series_path, _SeriesRow, expected_columns=("id", "series"), max_field_chars=MAX_SERIES_CHARS
-        )
-        series_rows = list(series_reader.iter_rows())
+        CsvDataReader.raise_field_size_limit(MAX_SERIES_CHARS)
+        series_rows = list(CsvDataReader(series_path, _SeriesRow, expected_columns=("id", "series")).iter_rows())
         caption_rows = list(CsvDataReader(captions_path, _CaptionRow, expected_columns=("id", "caption")).iter_rows())
         if len(series_rows) != len(caption_rows):
             raise TimeNetConnectorError(
