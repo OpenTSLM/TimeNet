@@ -1,387 +1,409 @@
-"""Convert native CAPTURE-24 participant CSV.GZ files into lazy TimeF records."""
+"""The CAPTURE-24 connector: wrist accelerometry of 151 participants over about a day each.
 
-from __future__ import annotations
+One record is one participant file, ``P<nnn>.csv.gz``. Its rows hold a local timestamp, the
+three acceleration axes in g at 100 Hz, and the activity annotation of that row. The release
+resamples every file to 100 Hz, so the timestamps step by exactly 10 ms. Eight files jump forward
+once: six where the recording stops for hours, and P016 and P017 where the local clock moves an
+hour ahead. A segment is a stretch of rows 10 ms apart. Each one becomes a child source with a
+regular axis that starts at the time offset its first timestamp states, and nothing fills a gap.
+The connector keeps the first timestamp of the file. The rest of the time column holds nothing
+more.
+
+The annotation column holds one text per row. It is blank where nobody annotated the
+participant. Each run of equal non-blank rows inside one segment becomes one span annotation on
+the record and one ``ClassificationTask`` scoped to that run. Blank rows get neither.
+
+The target of each task is the annotation text of the release, such as
+``7030 sleeping;MET 0.95``. ``annotation-label-dictionary.csv`` maps each text to six coarser
+label schemes, such as ``label:Walmsley2020``. The dataset keeps that table as one annotation,
+so whoever trains picks the scheme.
+"""
 
 from collections.abc import Callable
 import csv
 from dataclasses import dataclass
 import gzip
-import hashlib
+from itertools import pairwise
 import json
 from pathlib import Path
-import shutil
-import tempfile
-import zipfile
-import zlib
+import threading
 
 import numpy as np
 import pyarrow as pa
+from pyarrow import csv as pa_csv
+import pyarrow.compute as pc
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError
-from timenet.types import Annotation, ClassificationTask, TimeInterval, TimeSeriesSpec, ureg
-from timenet_connectors.download import Artifact, download_files
+from timenet.errors import TimeFFormatError, TimeNetDownloadError
+from timenet.types import Annotation, ClassificationTask, Label, LabelSet, TimeInterval, TimeSeriesSpec, ureg
+from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
+# The release on the Oxford University Research Archive, as one zip.
 CAPTURE24_URL = "https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001/files/rpr76f381b"
-ARCHIVE_FILENAME = "capture24.zip"
-ARCHIVE_SHA256 = "69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2"
-_ROOT = "capture24"
-_CSV_FIELDS = ("time", "x", "y", "z", "annotation")
-_PARTICIPANT_FIELDS = ("pid", "age", "sex")
-_METADATA_FILES = {"metadata.csv", "annotation-label-dictionary.csv"}
-_SYMLINK_MODE = 0o120000
-_DICTIONARY_MAP_COUNT = 6
-_PARTICIPANT_COUNT = 151
-_AXIS = RegularAxis.from_rate_hz(100)
-_SPECS = {
-    "acceleration": TimeSeriesSpec(
-        spec_type="acceleration",
-        name="Acceleration",
-        unit_value=ureg.standard_gravity,
-        dtype="float64",
-    ),
-    "text": TimeSeriesSpec(
-        spec_type="source_text",
-        name="Source text",
-        unit_value=ureg.dimensionless,
-        dtype="str",
-    ),
-}
-_SOURCE_METADATA: dict[str, object] = {"data_source_type": "wearable", "provider": "University of Oxford"}
+CAPTURE24_SHA256 = "69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2"
+
+METADATA_FILE = "metadata.csv"
+DICTIONARY_FILE = "annotation-label-dictionary.csv"
+PARTICIPANT_COUNT = 151
+
+PARTICIPANT_COLUMNS = ("time", "x", "y", "z", "annotation")
+METADATA_COLUMNS = ("pid", "age", "sex")
+AXES = ("x", "y", "z")
+
+# The key of the dictionary column that holds the annotation text.
+_ANNOTATION_COLUMN = "annotation"
+
+SAMPLE_RATE_HZ = 100
+SAMPLE_PERIOD_US = 10_000
+
+ACCELERATION = TimeSeriesSpec(
+    spec_type="accelerometer",
+    name="Accelerometer",
+    unit_value=ureg.standard_gravity,
+    dtype="float64",
+)
+
+ANNOTATION_KEY = "annotation"
 
 
 @dataclass(frozen=True)
-class Capture24Participant:
-    """One safely extracted participant recording and its source metadata."""
+class Capture24Source:
+    """The extracted release: the participant files and the two tables beside them."""
 
-    path: Path
-    participant_id: str
-    age: str
-    sex: str
-    annotation_dictionary: dict[str, dict[str, str]]
+    root: Path
 
 
-@dataclass
-class _ParticipantCache:
-    """Materialize at most one participant's parsed native columns on first use."""
+@dataclass(frozen=True)
+class ParticipantScoring:
+    """What one participant file states besides the acceleration.
 
-    path: Path | None = None
-    values: dict[str, object] | None = None
+    ``segments`` holds one ``(first_row, end_row, offset_us)`` entry for each stretch of rows
+    10 ms apart. ``runs`` holds one ``(label, start_us, end_us)`` entry for each run of equal
+    non-blank annotations inside one segment. Every end is exclusive, and every time is from the
+    first timestamp of the file.
+    """
 
-    def load(self, path: Path) -> dict[str, object]:
-        """Return validated source columns, parsing the compressed CSV once.
-
-        Raises:
-            TimeFFormatError: If acceleration values are invalid.
-        """
-        if self.path != path:
-            self.path = path
-            self.values = None
-        if self.values is None:
-            rows = _csv_rows(path)
-            try:
-                acceleration = {key: np.asarray([row[key] for row in rows], dtype=np.float64) for key in "xyz"}
-            except (KeyError, ValueError) as exc:
-                raise TimeFFormatError(f"{path}: invalid acceleration value") from exc
-            if any(not np.isfinite(values).all() for values in acceleration.values()):
-                raise TimeFFormatError(f"{path}: non-finite acceleration value")
-            self.values = {
-                **acceleration,
-                "time": [row["time"] for row in rows],
-                "annotation": [row["annotation"] for row in rows],
-            }
-        return self.values
+    n_values: int
+    start_local: str
+    segments: tuple[tuple[int, int, int], ...]
+    runs: tuple[tuple[str, int, int], ...]
 
 
-_PARTICIPANT_CACHE = _ParticipantCache()
-
-
-def _sha256(path: Path) -> str:
-    """Return the streaming SHA-256 digest of a source artifact."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _csv_rows(path: Path) -> list[dict[str, str]]:
-    """Read validated participant source rows.
+def read_label_dictionary(path: Path) -> dict[str, dict[str, str]]:
+    """Read the table that maps each annotation text to its label in each scheme.
 
     Returns:
-        The native rows in source order.
+        The label of each scheme, keyed by annotation text, in file order.
 
     Raises:
-        TimeFFormatError: If the native CSV header is malformed or empty.
+        TimeFFormatError: If the table has no scheme column, a blank cell, or an annotation twice.
     """
-    with gzip.open(path, "rt", newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    if not rows or set(rows[0]) != set(_CSV_FIELDS):
-        raise TimeFFormatError(f"{path}: expected exactly {', '.join(_CSV_FIELDS)}")
-    return rows
-
-
-def _selected_members(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
-    """Return safe participant and metadata members from the official ZIP.
-
-    Raises:
-        TimeFFormatError: If the selected archive layout is unsafe or incomplete.
-    """
-    selected: dict[str, zipfile.ZipInfo] = {}
-    for info in archive.infolist():
-        name = Path(info.filename)
-        allowed = name.name in _METADATA_FILES or (name.name.startswith("P") and name.suffixes == [".csv", ".gz"])
-        if info.is_dir() or name.is_absolute() or ".." in name.parts or name.parent.as_posix() != _ROOT:
-            continue
-        if not allowed:
-            continue
-        if info.filename in selected or (info.external_attr >> 16) & 0o170000 == _SYMLINK_MODE:
-            raise TimeFFormatError(f"unsafe CAPTURE-24 archive member: {info.filename}")
-        selected[info.filename] = info
-    required = {f"{_ROOT}/{name}" for name in _METADATA_FILES}
-    if not required <= set(selected) or not any(Path(name).name.startswith("P") for name in selected):
-        raise TimeFFormatError("CAPTURE-24 archive lacks participant or metadata files")
-    return selected
-
-
-def _member_crc(path: Path) -> tuple[int, int]:
-    """Return an extracted member's CRC32 and byte count."""
-    checksum = count = 0
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            checksum = zlib.crc32(block, checksum)
-            count += len(block)
-    return checksum & 0xFFFFFFFF, count
-
-
-def _validate_cache(root: Path, members: dict[str, zipfile.ZipInfo]) -> None:
-    """Reject a changed, extra, missing, or symlinked cached extraction.
-
-    Raises:
-        TimeFFormatError: If the cache differs from the pinned ZIP members.
-    """
-    if root.is_symlink() or any(path.is_symlink() for path in root.rglob("*")):
-        raise TimeFFormatError("CAPTURE-24 extraction contains a symlink")
-    actual = {path.relative_to(root.parent).as_posix(): path for path in root.rglob("*") if path.is_file()}
-    if set(actual) != set(members):
-        raise TimeFFormatError("CAPTURE-24 extraction differs from pinned ZIP members")
-    for name, info in members.items():
-        if _member_crc(actual[name]) != (info.CRC, info.file_size):
-            raise TimeFFormatError(f"CAPTURE-24 extraction changed: {name}")
-
-
-def _safe_extract(archive_path: Path, cache_dir: Path) -> Path:
-    """Extract the selected pinned ZIP members only once.
-
-    Returns:
-        The validated extraction root.
-
-    Raises:
-        TimeFFormatError: If the archive or existing cache is unsafe or changed.
-    """
-    with zipfile.ZipFile(archive_path) as archive:
-        members = _selected_members(archive)
-    root = cache_dir / _ROOT
-    if root.exists():
-        _validate_cache(root, members)
-        return root
-    staging = Path(tempfile.mkdtemp(prefix=".capture24-", dir=cache_dir))
-    try:
-        with zipfile.ZipFile(archive_path) as archive:
-            for name, info in members.items():
-                target = staging / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info) as source, target.open("xb") as output:
-                    shutil.copyfileobj(source, output, length=1 << 20)
-                if _member_crc(target) != (info.CRC, info.file_size):
-                    raise TimeFFormatError(f"CAPTURE-24 member changed while extracting: {name}")
-        (staging / _ROOT).replace(root)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-    return root
-
-
-def _annotation_runs(rows: list[dict[str, str]]) -> list[tuple[str, int, int]]:
-    """Return contiguous source annotation intervals as sample offsets."""
-    runs: list[tuple[str, int, int]] = []
-    start = 0
-    label = rows[0]["annotation"]
-    for index, row in enumerate(rows[1:], 1):
-        if row["annotation"] != label:
-            runs.append((label, start, index))
-            start = index
-            label = row["annotation"]
-    runs.append((label, start, len(rows)))
-    return runs
-
-
-def _summary(path: Path) -> tuple[int, list[tuple[str, int, int]]]:
-    """Stream a participant once to count samples and annotation boundaries.
-
-    Returns:
-        The source row count and its contiguous annotation intervals.
-
-    Raises:
-        TimeFFormatError: If the source CSV header is invalid or contains no rows.
-    """
-    with gzip.open(path, "rt", newline="", encoding="utf-8") as handle:
+    with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        if reader.fieldnames is None or set(reader.fieldnames) != set(_CSV_FIELDS):
-            raise TimeFFormatError(f"{path}: expected exactly {', '.join(_CSV_FIELDS)}")
-        first = next(reader, None)
-        if first is None:
-            raise TimeFFormatError(f"{path}: expected at least one source row")
-        label = first["annotation"]
-        start = 0
-        count = 1
-        runs: list[tuple[str, int, int]] = []
+        fields = tuple(reader.fieldnames or ())
+        schemes = fields[1:]
+        if fields[:1] != (_ANNOTATION_COLUMN,) or not schemes or not all(s.startswith("label:") for s in schemes):
+            raise TimeFFormatError(f"{path.name}: expected an annotation column and label:* columns, got {fields}")
+        dictionary: dict[str, dict[str, str]] = {}
         for row in reader:
-            if row["annotation"] != label:
-                runs.append((label, start, count))
-                start = count
-                label = row["annotation"]
-            count += 1
-    runs.append((label, start, count))
-    return count, runs
+            text = row[_ANNOTATION_COLUMN]
+            if not text or any(not row[scheme] for scheme in schemes):
+                raise TimeFFormatError(f"{path.name}: the row for {text!r} has a blank cell")
+            if text in dictionary:
+                raise TimeFFormatError(f"{path.name}: states {text!r} twice")
+            dictionary[text] = {scheme: row[scheme] for scheme in schemes}
+    if not dictionary:
+        raise TimeFFormatError(f"{path.name}: holds no annotation")
+    return dictionary
 
 
-def _participant_refs(root: Path) -> list[Capture24Participant]:
-    """Build participant references from source metadata and all dictionary mappings.
+def read_participants(path: Path) -> dict[str, tuple[str, str]]:
+    """Read the age group and the sex of each participant.
 
     Returns:
-        One source reference per participant CSV.GZ.
+        ``(age, sex)`` keyed by participant id.
 
     Raises:
-        TimeFFormatError: If metadata or all six source dictionary mappings are absent.
+        TimeFFormatError: If the header differs, a cell is blank, or a participant appears twice.
     """
-    with (root / "metadata.csv").open(newline="", encoding="utf-8") as handle:
-        metadata = {row["pid"]: row for row in csv.DictReader(handle)}
-    with (root / "annotation-label-dictionary.csv").open(newline="", encoding="utf-8") as handle:
-        dictionaries = {
-            row["annotation"]: {key: value for key, value in row.items() if key != "annotation"}
-            for row in csv.DictReader(handle)
-        }
-    if not metadata or not dictionaries or any(len(value) != _DICTIONARY_MAP_COUNT for value in dictionaries.values()):
-        raise TimeFFormatError("CAPTURE-24 metadata or six-column annotation dictionary is incomplete")
-    refs = []
-    for path in sorted(root.glob("P*.csv.gz")):
-        participant_id = path.name.removesuffix(".csv.gz")
-        row = metadata.get(participant_id)
-        if row is None or set(row) != set(_PARTICIPANT_FIELDS):
-            raise TimeFFormatError(f"CAPTURE-24 missing native metadata for {participant_id}")
-        refs.append(Capture24Participant(path, participant_id, row["age"], row["sex"], dictionaries))
-    if len(refs) != _PARTICIPANT_COUNT:
-        raise TimeFFormatError(
-            f"CAPTURE-24 extraction contains {len(refs)} participant CSV files; expected {_PARTICIPANT_COUNT}"
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if tuple(reader.fieldnames or ()) != METADATA_COLUMNS:
+            raise TimeFFormatError(f"{path.name}: expected the columns {METADATA_COLUMNS}, got {reader.fieldnames}")
+        participants: dict[str, tuple[str, str]] = {}
+        for row in reader:
+            pid, age, sex = (row[column] for column in METADATA_COLUMNS)
+            if not pid or not age or not sex:
+                raise TimeFFormatError(f"{path.name}: the row for {pid!r} has a blank cell")
+            if pid in participants:
+                raise TimeFFormatError(f"{path.name}: states {pid!r} twice")
+            participants[pid] = (age, sex)
+    return participants
+
+
+def _check_header(path: Path) -> None:
+    """Check that a participant file has the columns of the release, in order.
+
+    Raises:
+        TimeFFormatError: If the header differs.
+    """
+    with gzip.open(path, "rt", newline="", encoding="utf-8") as handle:
+        header = tuple(next(csv.reader(handle), ()))
+    if header != PARTICIPANT_COLUMNS:
+        raise TimeFFormatError(f"{path.name}: expected the columns {PARTICIPANT_COLUMNS}, got {header}")
+
+
+def _read_columns(path: Path, columns: dict[str, pa.DataType]) -> pa.Table:
+    """Read some columns of a participant file. Only a blank cell reads as null.
+
+    Returns:
+        The columns, in the types given.
+
+    Raises:
+        TimeFFormatError: If a cell does not parse as its type.
+    """
+    try:
+        return pa_csv.read_csv(
+            path,
+            convert_options=pa_csv.ConvertOptions(
+                include_columns=list(columns),
+                column_types=columns,
+                null_values=[""],
+                strings_can_be_null=True,
+            ),
         )
-    return refs
+    except pa.ArrowInvalid as exc:
+        raise TimeFFormatError(f"{path.name}: {exc}") from exc
 
 
-class Capture24Connector(BaseConnector[Capture24Participant]):
-    """Connector for CAPTURE-24's whole-participant native wrist recordings."""
+def _read_offsets(path: Path, text: pa.ChunkedArray) -> np.ndarray:
+    """Give the time offset of each row from the first, and check that rows are 10 ms or more apart.
 
-    async def download_async(self, cache_dir: Path) -> list[Capture24Participant]:  # noqa: PLR6301
-        """Fetch the pinned archive and return validated native participant references.
+    Returns:
+        The offsets in microseconds.
+
+    Raises:
+        TimeFFormatError: If a timestamp is blank or does not parse, or two are less than 10 ms apart.
+    """
+    try:
+        stamps = pc.cast(text, pa.timestamp("us")).to_numpy().astype(np.int64)
+    except (pa.ArrowInvalid, ValueError) as exc:
+        raise TimeFFormatError(f"{path.name}: a timestamp is blank or does not parse") from exc
+    offsets = stamps - stamps[0]
+    short = np.flatnonzero(np.diff(offsets) < SAMPLE_PERIOD_US)
+    if short.size:
+        row = int(short[0]) + 1
+        raise TimeFFormatError(
+            f"{path.name}: row {row} is at {text[row]}, less than {SAMPLE_PERIOD_US} us after {text[row - 1]}"
+        )
+    return offsets
+
+
+def _read_runs(path: Path, annotation: pa.ChunkedArray, labels: LabelSet) -> tuple[list[str], np.ndarray]:
+    """Give the annotation texts of a file and the code of each row, which is -1 where it is blank.
+
+    Returns:
+        The texts, and one index into them for each row.
+
+    Raises:
+        TimeFFormatError: If an annotation is not in the label dictionary.
+    """
+    encoded = annotation.combine_chunks().dictionary_encode()
+    texts = encoded.dictionary.to_pylist()
+    unknown = sorted(set(texts) - set(labels.names))
+    if unknown:
+        raise TimeFFormatError(f"{path.name}: annotations not in {DICTIONARY_FILE}: {unknown}")
+    return texts, pc.fill_null(encoded.indices, -1).to_numpy()
+
+
+def read_scoring(path: Path, labels: LabelSet) -> ParticipantScoring:
+    """Read the time and annotation columns of a participant file. The axes stay unread.
+
+    Args:
+        path: The ``P<nnn>.csv.gz`` file.
+        labels: The annotation texts the release defines.
+
+    Returns:
+        The number of rows, the first timestamp, the segments, and the annotated runs.
+
+    Raises:
+        TimeFFormatError: If the file has no row.
+    """
+    _check_header(path)
+    table = _read_columns(path, {"time": pa.string(), "annotation": pa.string()})
+    n_values = table.num_rows
+    if n_values == 0:
+        raise TimeFFormatError(f"{path.name}: holds no row")
+    offsets = _read_offsets(path, table.column("time"))
+    texts, codes = _read_runs(path, table.column("annotation"), labels)
+
+    breaks = np.flatnonzero(np.diff(offsets) > SAMPLE_PERIOD_US) + 1
+    segments = tuple(
+        (start, end, int(offsets[start])) for start, end in pairwise(np.concatenate(([0], breaks, [n_values])).tolist())
+    )
+    # A run ends where the annotation changes or a segment does.
+    bounds = np.union1d(np.flatnonzero(np.diff(codes)) + 1, breaks)
+    runs = tuple(
+        (texts[codes[start]], int(offsets[start]), int(offsets[end - 1]) + SAMPLE_PERIOD_US)
+        for start, end in pairwise(np.concatenate(([0], bounds, [n_values])).tolist())
+        if codes[start] >= 0
+    )
+    return ParticipantScoring(n_values=n_values, start_local=str(table.column("time")[0]), segments=segments, runs=runs)
+
+
+class _AxisReader:
+    """Read the three axes of one participant file, and keep the last file read.
+
+    The writer reads ``x``, ``y`` and ``z`` of a record one after the other. One parse of the
+    file serves all three.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._path: Path | None = None
+        self._table: pa.Table | None = None
+
+    def loader(self, path: Path, axis: str, n_values: int, rows: tuple[int, int]) -> Callable[[], pa.Array]:
+        """Give a loader for one axis of one segment of a participant file.
+
+        Args:
+            path: The participant file.
+            axis: ``x``, ``y`` or ``z``.
+            n_values: The number of rows of the whole file.
+            rows: The first row of the segment and the row after its last.
 
         Returns:
-            One reference per participant CSV.GZ source file.
+            A callable that reads the axis of the segment as float64.
+        """
+        first, end = rows
+        return lambda: self._read(path, n_values).column(axis).slice(first, end - first).combine_chunks()
+
+    def _read(self, path: Path, n_values: int) -> pa.Table:
+        """Parse the axes of a file, or give the parse already held.
+
+        Returns:
+            The three axes.
 
         Raises:
-            TimeFFormatError: If archive or extraction integrity validation fails.
+            TimeFFormatError: If the row count changed since ``convert``, or a value is blank or
+                not finite.
         """
-        cache_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240
-        archive = cache_dir / ARCHIVE_FILENAME
-        if archive.exists() and _sha256(archive) != ARCHIVE_SHA256:
-            raise TimeFFormatError(f"cached CAPTURE-24 archive hash mismatch: {archive}")
-        if not archive.exists():
-            await download_files([Artifact(CAPTURE24_URL, archive, sha256=ARCHIVE_SHA256)], skip_existing=False)
-        if _sha256(archive) != ARCHIVE_SHA256:
-            raise TimeFFormatError(f"downloaded CAPTURE-24 archive hash mismatch: {archive}")
-        return _participant_refs(_safe_extract(archive, cache_dir))
+        with self._lock:
+            if self._path != path or self._table is None:
+                table = _read_columns(path, dict.fromkeys(AXES, pa.float64()))
+                if table.num_rows != n_values:
+                    raise TimeFFormatError(f"{path.name}: holds {table.num_rows} rows, {n_values} when converted")
+                for axis in AXES:
+                    values = table.column(axis)
+                    if values.null_count or not np.isfinite(values.to_numpy()).all():
+                        raise TimeFFormatError(f"{path.name}: axis {axis} holds a blank or non-finite value")
+                self._path, self._table = path, table
+            return self._table
 
-    def convert(self, raw_refs: list[Capture24Participant]) -> TimeFDataset:
-        """Build one whole-participant record retaining native source columns and labels.
+
+class Capture24Connector(BaseConnector[Capture24Source]):
+    """Connector for CAPTURE-24 (``oxwearables/capture24``)."""
+
+    async def download_async(self, cache_dir: Path) -> list[Capture24Source]:  # ruff: ignore[no-self-use]
+        """Download and extract the release archive once.
+
+        Args:
+            cache_dir: The directory for the archive and its extracted contents.
 
         Returns:
-            A dataset with three acceleration and two text columns per participant.
+            One handle to the extracted release.
+
+        Raises:
+            TimeNetDownloadError: If the release does not hold the two tables and 151 participant files.
         """
+        root = find_dir_containing(
+            await ensure_archive(CAPTURE24_URL, cache_dir, filename="capture24.zip", sha256=CAPTURE24_SHA256),
+            METADATA_FILE,
+        )
+        participants = sorted(root.glob("P*.csv.gz"))
+        if not (root / DICTIONARY_FILE).is_file() or len(participants) != PARTICIPANT_COUNT:
+            raise TimeNetDownloadError(
+                f"CAPTURE-24 at {root}: expected {DICTIONARY_FILE} and {PARTICIPANT_COUNT} participant files, "
+                f"found {len(participants)}"
+            )
+        return [Capture24Source(root=root)]
+
+    def convert(self, raw_refs: list[Capture24Source]) -> TimeFDataset:
+        """Build one record for each participant file, and one task for each annotated run.
+
+        Args:
+            raw_refs: The one handle from :meth:`download_async`.
+
+        Returns:
+            The populated dataset.
+
+        Raises:
+            TimeFFormatError: If a participant file has no row in ``metadata.csv``.
+        """
+        root = raw_refs[0].root
+        dictionary = read_label_dictionary(root / DICTIONARY_FILE)
+        participants = read_participants(root / METADATA_FILE)
+        labels = LabelSet(name=ANNOTATION_KEY, labels=tuple(Label(name=text) for text in dictionary))
+        axes = _AxisReader()
+
         dataset = TimeFDataset(metadata=self.metadata())
-        for ref in raw_refs:
-            count, runs = _summary(ref.path)
-            record_id = f"capture24-{ref.participant_id}"
-
-            def loader(key: str, source_path: Path = ref.path) -> Callable[[], pa.Array]:
-                return lambda: pa.array(
-                    _PARTICIPANT_CACHE.load(source_path)[key],
-                    type=pa.float64() if key in {"x", "y", "z"} else pa.string(),
-                )
-
-            signals = tuple(
-                Signal.from_loader(
-                    spec=_SPECS["acceleration"],
-                    name=key,
-                    time_axis=_AXIS,
-                    loader=loader(key),
-                    source_id=ref.path.name,
-                    id=f"{record_id}-{key}",
-                    n_values=count,
-                )
-                for key in ("x", "y", "z")
-            ) + tuple(
-                Signal.from_loader(
-                    spec=_SPECS["text"],
-                    name=key,
-                    time_axis=_AXIS,
-                    loader=loader(key),
-                    source_id=ref.path.name,
-                    id=f"{record_id}-{key}",
-                    n_values=count,
-                )
-                for key in ("time", "annotation")
+        dataset.annotate(
+            Annotation(
+                key="annotation_label_dictionary",
+                value=json.dumps(dictionary, ensure_ascii=False),
+                description=f"{DICTIONARY_FILE} as JSON: the label of each scheme, keyed by annotation text.",
             )
-            record = Record(
-                record_id=record_id,
-                subject_ids=(ref.participant_id,),
-                sources=(
-                    Source(
-                        id=f"{record_id}-source",
-                        name="Axivity AX3",
-                        signals=signals,
-                        metadata=_SOURCE_METADATA.copy(),
+        )
+        for path in sorted(root.glob("P*.csv.gz")):
+            participant_id = path.name.removesuffix(".csv.gz")
+            if participant_id not in participants:
+                raise TimeFFormatError(f"{path.name}: {participant_id} has no row in {METADATA_FILE}")
+            age, sex = participants[participant_id]
+            scoring = read_scoring(path, labels)
+
+            segments = tuple(
+                Source(
+                    name=f"segment {number}",
+                    signals=tuple(
+                        Signal.from_loader(
+                            spec=ACCELERATION,
+                            name=axis,
+                            time_axis=RegularAxis.from_rate_hz(SAMPLE_RATE_HZ, offset_us=offset_us),
+                            loader=axes.loader(path, axis, scoring.n_values, (first, end)),
+                            n_values=end - first,
+                            null_count=0,
+                        )
+                        for axis in AXES
                     ),
-                ),
+                )
+                for number, (first, end, offset_us) in enumerate(scoring.segments, start=1)
             )
-            dataset.add_record(record=record)
+            record = dataset.add_record(
+                record=Record(
+                    sources=(Source(name="Axivity AX3", sources=segments),),
+                    metadata={"participant_id": participant_id},
+                )
+            )
             record.add_annotations(
                 (
-                    Annotation(key="age", value=ref.age, id=f"{record_id}-age"),
-                    Annotation(key="sex", value=ref.sex, id=f"{record_id}-sex"),
+                    Annotation(key="subject_ids", value=[participant_id]),
+                    Annotation(key="age", value=age, description="The age group in years."),
+                    Annotation(key="sex", value=sex),
                     Annotation(
-                        key="annotation_label_dictionary",
-                        value=json.dumps(
-                            ref.annotation_dictionary,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                            ensure_ascii=True,
-                        ),
-                        id=f"{record_id}-dictionary",
-                    ),
-                    Annotation(
-                        key="timestamp_timezone", value="naive_source_text", id=f"{record_id}-timestamp-timezone"
+                        key="recording_start_local",
+                        value=scoring.start_local,
+                        description="The first timestamp of the file, a local wall clock with no zone.",
                     ),
                 )
             )
-            for index, (label, start, end) in enumerate(runs):
+            for label, start_us, end_us in scoring.runs:
+                span = TimeInterval.micros(start_us, end_us)
+                record.annotate(Annotation(key=ANNOTATION_KEY, value=label, span=span))
                 dataset.add_task(
-                    task=ClassificationTask(
-                        inputs=(record,),
-                        targets=(label,),
-                        scope=TimeInterval.seconds(start / 100, end / 100),
-                        id=f"{record_id}-annotation-{index}",
-                    ),
+                    task=ClassificationTask(inputs=(record,), targets=(label,), label_set=labels, scope=span)
                 )
         return dataset
 

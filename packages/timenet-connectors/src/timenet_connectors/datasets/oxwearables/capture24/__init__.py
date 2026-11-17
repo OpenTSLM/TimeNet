@@ -1,6 +1,7 @@
-"""Capture-24 connector."""
+"""The CAPTURE-24 connector package: the connector implementation and the dataset card."""
 
-from timenet_connectors.datasets.oxwearables.capture24.connector import CONNECTOR, Capture24Connector
-
-
-__all__ = ["CONNECTOR", "Capture24Connector"]
+from timenet_connectors.datasets.oxwearables.capture24.connector import (
+    CONNECTOR as CONNECTOR,
+    Capture24Connector as Capture24Connector,
+    Capture24Source as Capture24Source,
+)
