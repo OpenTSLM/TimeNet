@@ -7,7 +7,7 @@ import pytest
 
 from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry
+from timenet.registry import LocalRegistry, open_local_version
 from timenet.types.text import read_value
 from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector
 
@@ -339,8 +339,8 @@ def test_label_sets_are_in_string_order(label_set):
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     original = Capture24Connector().convert([_release(tmp_path)])
     registry = LocalRegistry(tmp_path / "registry")
-    registry.store(original)
-    with TimeFReader(registry.open_version("oxwearables/capture24", "1.0.0")) as reader:
+    registry.put_dataset(original)
+    with TimeFReader(open_local_version(registry.root / "oxwearables/capture24/1.0.0")) as reader:
         restored = reader.read()
         assert _output(restored) == _EXPECTED
         _assert_values(restored)
@@ -356,7 +356,7 @@ def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
 
     monkeypatch.setattr(connector, "_read_acceleration", spy)
     original = Capture24Connector().convert([_release(tmp_path)])
-    LocalRegistry(tmp_path / "registry").store(original)
+    LocalRegistry(tmp_path / "registry").put_dataset(original)
     assert reads == ["P001.csv.gz", "P100.csv.gz", "P101.csv.gz"]
 
 
