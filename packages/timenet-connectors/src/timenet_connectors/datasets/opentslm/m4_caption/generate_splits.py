@@ -52,9 +52,6 @@ def load_samples(archive: zipfile.ZipFile) -> list[dict[str, str]]:
         captions_df = captions_df[captions_df["id"].isin(common_ids)].reset_index(drop=True)
         merged_df = series_df.merge(captions_df, on="id", how="inner")
         for _, row in merged_df.iterrows():
-            # The loader skips a row whose series does not parse, so parse each one. The split depends
-            # only on the number and order of the rows, so the samples here hold no values.
-            json.loads(row["series"])
             all_samples.append({"id": row["id"], "frequency": frequency})
     return all_samples
 
