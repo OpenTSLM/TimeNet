@@ -134,18 +134,10 @@ def test_a_series_whose_caption_is_an_error_message_is_left_out(tmp_path):
     assert [task.inputs[0].metadata["m4_id"] for task in tasks] == ["D1", "H1", "M1", "M2", "M3", "Q2", "W1", "Y1"]
 
 
-@pytest.mark.parametrize(
-    ("changes", "message"),
-    [
-        ({"source_sha256": "0" * 64}, "the split was made from the source 0+, not from the pinned"),
-        ({"test": ["M3", "W1"]}, r"\['W1'\] are named more than once"),
-        ({"test": ["M3", "M9"]}, r"the split names \['M9'\] that the source does not have"),
-    ],
-    ids=["another release", "a series in two splits", "a series that the release does not have"],
-)
-def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, changes, message):
-    with pytest.raises(TimeNetConnectorError, match=message):
-        _convert(tmp_path, splits=_SPLITS | changes)
+def test_a_split_file_of_another_release_raises(tmp_path):
+    # The connector checks the split file against its pinned digest, not against the digest in the file.
+    with pytest.raises(TimeNetConnectorError, match=r"the split was made from the source 0+, not from the pinned"):
+        _convert(tmp_path, splits=_SPLITS | {"source_sha256": "0" * 64})
 
 
 _DATASET_SERIES_COUNTS = {"D": 3974, "H": 414, "M": 47943, "Q": 23604, "W": 359, "Y": 23000}

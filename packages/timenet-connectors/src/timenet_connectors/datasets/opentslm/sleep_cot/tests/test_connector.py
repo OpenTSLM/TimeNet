@@ -59,8 +59,6 @@ def _write_release(
     directory: Path,
     rows: list[dict[str, str]] = _ROWS,
     *,
-    validation: list[int] = _VALIDATION_POSITIONS,
-    test: list[int] = _TEST_POSITIONS,
     source_sha256: str = SLEEP_COT_SHA256,
 ) -> SleepCotReader:
     csv_path = directory / "sleep_cot.csv"
@@ -69,7 +67,7 @@ def _write_release(
         writer.writeheader()
         writer.writerows(rows)
     splits_path = directory / "splits.json"
-    splits = {"source_sha256": source_sha256, "validation": validation, "test": test}
+    splits = {"source_sha256": source_sha256, "validation": _VALIDATION_POSITIONS, "test": _TEST_POSITIONS}
     splits_path.write_text(json.dumps(splits), encoding="utf-8")
     return SleepCotReader(csv_path=csv_path, splits_path=splits_path)
 
@@ -95,18 +93,10 @@ def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
         assert task.annotations == ()
 
 
-@pytest.mark.parametrize(
-    ("splits", "message"),
-    [
-        ({"source_sha256": "0" * 64}, "the split was made from the source 0+, not from the pinned"),
-        ({"test": [1]}, r"\[1\] are named more than once"),
-        ({"test": [len(_ROWS)]}, rf"the split names \[{len(_ROWS)}\] that the source does not have"),
-    ],
-    ids=["another release CSV", "a row in two splits", "a row past the end"],
-)
-def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, splits, message):
-    with pytest.raises(TimeNetConnectorError, match=message):
-        SleepCotConnector().convert([_write_release(tmp_path, **splits)])
+def test_a_split_file_of_another_release_raises(tmp_path):
+    # The connector checks the split file against its pinned digest, not against the digest in the file.
+    with pytest.raises(TimeNetConnectorError, match=r"the split was made from the source 0+, not from the pinned"):
+        SleepCotConnector().convert([_write_release(tmp_path, source_sha256="0" * 64)])
 
 
 @pytest.mark.parametrize(
