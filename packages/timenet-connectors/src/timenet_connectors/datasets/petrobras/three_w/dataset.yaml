@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the petrobras/three-w connector.
+#
+# Source: 3W v2.0.0 at commit c86cc7c70063646910be7292de8a54a6fb2a8399 of github.com/petrobras/3W.
+# One record per instance (one Parquet file). Signals are archival raw: every variable at 1 Hz in
+# the unit dataset.ini states, gaps kept as nulls. A variable empty for a whole instance becomes no
+# signal; a variable holding one value for a whole instance carries `constant_value`.
+#
+# Splits are TimeNet-generated, not official: real instances are split by well (stratified by event
+# type, grouped by well, 3/1/1 folds), so no well appears in two partitions. Severe slugging (3) and
+# quick restriction in PCK (6) have real instances from only two wells each, so they can be missing
+# from validation or test. Simulated and hand-drawn instances always go to training.
+#
+# The `state` signal keeps the integer codes of the release (0-8); 3W does not document their meaning
+# in the dataset files.
+yaml_schema_version: 1
+dataset_id: petrobras/three-w
+dataset_version: 1.0.0
+name: 3W
+description: >-
+  Rare undesirable events in offshore oil wells from Petrobras (3W v2.0.0): 1,119 real instances
+  from 40 wells plus 1,089 simulated and 20 hand-drawn ones, with 27 process variables at 1 Hz and
+  per-second labels for normal operation and the transient and steady phases of nine event types.
+license: CC-BY-4.0
+domains:
+  - industrial
+  - energy
+tags:
+  - oil-and-gas
+  - fault-detection
+  - anomaly-detection
+  - multivariate
+  - petrobras
+source_url: https://github.com/petrobras/3W
