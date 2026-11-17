@@ -48,10 +48,7 @@ _SeriesValue = Annotated[StrictFloat, AllowInfNan(False)]
 
 
 class M4Frequency(StrEnum):
-    """An M4 frequency. The members are in the order that OpenTSLM's loader reads them.
-
-    The value is the name in the release file names and in the ``frequency`` annotation.
-    """
+    """An M4 frequency. The members are in the order that OpenTSLM's loader reads them."""
 
     DAILY = "Daily"
     HOURLY = "Hourly"

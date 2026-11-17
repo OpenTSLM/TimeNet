@@ -11,10 +11,9 @@
 
 The release does not store the split. OpenTSLM's loader makes it at load time with the datasets library
 and a fixed seed, so the split depends on the versions of datasets and NumPy. Instead of pinning these
-libraries in the connector, this script ran the calls of the loader once, with the library versions of
-the OpenTSLM uv.lock, and wrote the validation and test series to splits.json.xz. The connector reads
-that file. xz keeps the file small, and Python reads it with the lzma module of the standard library.
-The script is here for reference, so you can see how the file was made.
+libraries in the connector, this script reproduces the behavior of the OpenTSLM release. It ran once,
+with the library versions of the OpenTSLM uv.lock, and wrote the validation and test series to splits.json.xz.
+The connector reads that file. The script is kept here for reference.
 
 Run it once with the release archive, from this directory::
 

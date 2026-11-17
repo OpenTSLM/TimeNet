@@ -12,15 +12,14 @@ description: >-
   horizon. There are 4,227 daily, 414 hourly, 48,000 monthly, 24,000 quarterly, 359 weekly and
   23,000 yearly series, with 13 to 9,919 values each. The OpenTSLM paper gives 64 to 512 values, but
   the Polybox release has the full length. The Polybox release has no timestamps and states no unit.
-  The M4 series come from the micro, industry, macro, finance, demographic and other domains, so
-  the values have mixed units. Each record states the M4 id, such as M1, and the M4 frequency. The
-  Polybox release has no split column, so the dataset gives each series the split of OpenTSLM's
-  loader. That loader merges all frequencies and makes a random 80/10/10 split with the datasets
-  library.
+  The M4 series come from the micro, industry, macro, finance, demographic and other domains. Each
+  record states the M4 id, such as M1, and the M4 frequency. The Polybox release has no split
+  column, so the dataset gives each series the split of OpenTSLM's loader. That loader merges all
+  frequencies and makes a random 80/10/10 split with the datasets library.
 
   The Polybox release also holds m4_series.csv, a copy of the weekly series, and m4_captions.csv,
   with 40 other captions of weekly series. OpenTSLM does not use these two files, and the dataset
-  does not keep them.
+  does not include them.
 
   The M4 organizers at the University of Nicosia state no license for the M4 data. OpenTSLM
   releases the captions under MIT.
