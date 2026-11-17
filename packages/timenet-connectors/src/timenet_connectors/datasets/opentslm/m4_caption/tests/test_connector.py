@@ -1,5 +1,6 @@
 import csv
 import json
+import lzma
 from pathlib import Path
 
 import numpy as np
@@ -14,9 +15,11 @@ from timenet.testing import assert_datasets_equal
 from timenet.types import AnswerTask, Split
 from timenet.types.text import read_value
 from timenet_connectors.datasets.opentslm.m4_caption.connector import (
+    M4_CAPTION_SHA256,
+    SPLITS_PATH,
     M4CaptionConnector,
     M4CaptionRelease,
-    OpenTSLMSplit,
+    M4CaptionSplits,
 )
 
 
@@ -30,9 +33,9 @@ _SERIES_IDS = {
 }
 """Ten series in the order that OpenTSLM's loader reads the frequencies."""
 
-_OPENTSLM_SPLIT = {"M3": Split.TEST, "W1": Split.VALIDATION}
-"""The split that create_combined_dataset of OpenTSLM gives these ten series. It was taken from a run of
-datasets 4.4.1, the version in the OpenTSLM uv.lock. Every other series is in the train split."""
+_SPLITS = {"source_sha256": M4_CAPTION_SHA256, "validation": ["W1"], "test": ["M3"]}
+"""A split file for the ten series. Every series that it does not name is in the train split."""
+_EXPECTED_SPLIT = {"M3": Split.TEST, "W1": Split.VALIDATION}
 
 _FLOAT32_VALUES = [1089.199951171875, 1078.9100341796875, 8000.0, 195.92799377441406]
 """Values as the release writes them: M4 values rounded to float32, printed with every digit."""
@@ -61,14 +64,14 @@ def _write_csv(path: Path, columns: tuple[str, str], rows: list[tuple[str, str]]
 
 
 def _expected_split(m4_id: str) -> Split:
-    return _OPENTSLM_SPLIT.get(m4_id, Split.TRAIN)
+    return _EXPECTED_SPLIT.get(m4_id, Split.TRAIN)
 
 
 def _write_release(
     directory: Path,
     *,
     series_rows: dict[str, list[tuple[str, str]]] | None = None,
-    split_sha256: str | None = None,
+    splits: dict[str, str | list[str]] = _SPLITS,
 ) -> M4CaptionRelease:
     # Like the archive, the files sit in a folder of their own, beside the files that the loader skips.
     root = directory / "M4TimeSeriesCaptionDataset"
@@ -81,10 +84,9 @@ def _write_release(
         )
         _write_csv(root / f"m4_captions_{frequency}.csv", ("id", "caption"), caption_rows)
     _write_csv(root / "m4_captions.csv", ("id", "caption"), [("series-W1", "A caption that OpenTSLM never used.")])
-    all_ids = [m4_id for m4_ids in _SERIES_IDS.values() for m4_id in m4_ids]
-    if split_sha256 is None:
-        split_sha256 = OpenTSLMSplit.digest(all_ids, [_expected_split(m4_id) for m4_id in all_ids])
-    return M4CaptionRelease(directory=root, split=OpenTSLMSplit(sha256=split_sha256))
+    splits_path = directory / "splits.json.xz"
+    splits_path.write_bytes(lzma.compress(json.dumps(splits).encode()))
+    return M4CaptionRelease(directory=root, splits_path=splits_path)
 
 
 def _convert(directory: Path, **changes) -> TimeFDataset:
@@ -114,9 +116,25 @@ def test_each_series_becomes_a_record_and_a_caption_task(tmp_path):
         assert task.split == _expected_split(m4_id)
 
 
-def test_a_split_that_differs_from_the_pinned_digest_raises(tmp_path):
-    with pytest.raises(TimeNetConnectorError, match=r"the OpenTSLM split .* does not match the pinned digest"):
-        _convert(tmp_path, split_sha256="0" * 64)
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"source_sha256": "0" * 64}, "the split was made from the release 0+, not from the pinned"),
+        ({"test": ["M3", "W1"]}, r"series \['W1'\] are named more than once"),
+        ({"test": ["M3", "M9"]}, r"names series \['M9'\] that the release does not have"),
+    ],
+    ids=["another release", "a series in two splits", "a series that the release does not have"],
+)
+def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, changes, message):
+    with pytest.raises(TimeNetConnectorError, match=message):
+        _convert(tmp_path, splits=_SPLITS | changes)
+
+
+def test_the_frozen_split_holds_the_opentslm_split_of_the_pinned_release():
+    splits = M4CaptionSplits.read_from_file(SPLITS_PATH)
+    assert splits.source_sha256 == M4_CAPTION_SHA256
+    # The 80/10/10 split of 100,000 series that the OpenTSLM paper reports.
+    assert (len(splits.validation), len(splits.test)) == (10_000, 10_000)
 
 
 @pytest.mark.parametrize(

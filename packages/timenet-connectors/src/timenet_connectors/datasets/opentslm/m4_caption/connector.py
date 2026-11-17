@@ -2,19 +2,20 @@
 
 The OpenTSLM release holds the train part of all 100,000 M4 series, one CSV of series and one CSV of
 captions for each of the six M4 frequencies. Each series becomes one Record and one AnswerTask. The
-target is the caption. The release has no split, so the connector computes the split of OpenTSLM's
-loader and checks it against a pinned digest.
+target is the caption. The release has no split, so the connector reads the split of OpenTSLM's
+loader from splits.json.xz, which generate_splits.py wrote.
 """
 
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-import hashlib
-from math import ceil
+import lzma
 from pathlib import Path
 import re
+from typing import Self
 
 import numpy as np
-from pydantic import FiniteFloat, Json
+from pydantic import BaseModel, ConfigDict, FiniteFloat, Json, ValidationError, model_validator
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -30,12 +31,12 @@ M4_CAPTION_SHA256 = "4acb748d94d7287fe58dbb5c3cf6314ea259010b7720f42506739269dec
 RELEASE_FOLDER = "M4TimeSeriesCaptionDataset"
 """The folder in the archive that holds the CSV files."""
 FREQUENCIES = ("Daily", "Hourly", "Monthly", "Quarterly", "Weekly", "Yearly")
-"""The M4 frequencies, in the order that OpenTSLM's loader reads them. The split depends on this order."""
+"""The M4 frequencies, in the order that OpenTSLM's loader reads them."""
 MAX_SERIES_CHARS = 1_000_000
 """The largest series cell that the connector reads, in characters. The largest cell of the release
 holds a daily series of 9,919 values in 169,126 characters."""
-OPENTSLM_SPLIT_SHA256 = "370cc2580bcdb912e13a546c1a84f3d52d7e2098db07cfe2873ffde8270f5256"
-"""The digest of the split that OpenTSLM's loader gives the release, as generate_splits.py computed it."""
+SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
+"""The split of OpenTSLM's loader for the release, as generate_splits.py wrote it."""
 
 # The release states no unit, and the M4 series come from many domains.
 M4_SERIES = TimeSeriesSpec(spec_type="m4_series", name="M4 series", unit_value=None, dtype="float32")
@@ -123,74 +124,74 @@ class M4CaptionSeries:
         return AnswerTask(inputs=(record,), targets=(self.caption,), split=split)
 
 
-@dataclass(frozen=True)
-class OpenTSLMSplit:
-    """The 80/10/10 split of ``create_combined_dataset`` in OpenTSLM's M4 loader.
+class M4CaptionSplits(BaseModel):
+    """The validation and test series of OpenTSLM's split, by M4 id.
 
-    The loader calls ``train_test_split`` of the datasets library twice, without stratification. That
-    function shuffles the rows with ``numpy.random.default_rng(seed).permutation``: the first rows of the
-    permutation are the test part and the rest are the train part. NumPy does not promise the same
-    permutation in every version, so the split is checked against a digest.
+    The release has no split. generate_splits.py ran the calls of OpenTSLM's loader once and wrote this
+    split to splits.json.xz. Every series that the file does not name is in the train split.
     """
 
-    sha256: str
-    """The digest that :meth:`digest` must give for the split."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    @staticmethod
-    def digest(m4_ids: Sequence[str], splits: Sequence[Split]) -> str:
-        """Compute the digest of a split.
+    source_sha256: str
+    """SHA-256 digest of the release archive that the split was made from."""
+    validation: tuple[str, ...]
+    test: tuple[str, ...]
 
-        The digest is the SHA-256 of one line per series, in order. Each line is the M4 id, a tab, the
-        split, and a newline.
+    @model_validator(mode="after")
+    def _each_series_in_one_split(self) -> Self:
+        repeated = sorted(m4_id for m4_id, count in Counter(self.m4_ids).items() if count > 1)
+        if repeated:
+            raise ValueError(f"series {repeated} are named more than once")
+        return self
+
+    @property
+    def m4_ids(self) -> tuple[str, ...]:
+        """The validation and test series together."""
+        return (*self.validation, *self.test)
+
+    @classmethod
+    def read_from_file(cls, path: Path) -> Self:
+        """Read the split from an xz-compressed JSON file.
 
         Returns:
-            The digest in hexadecimal.
-        """
-        lines = "".join(f"{m4_id}\t{split}\n" for m4_id, split in zip(m4_ids, splits, strict=True))
-        return hashlib.sha256(lines.encode()).hexdigest()
-
-    def assign_splits(self, m4_ids: Sequence[str]) -> list[Split]:
-        """Assign the split of OpenTSLM's loader to each series, in the order of the loader.
-
-        Returns:
-            The split of each series.
+            The split.
 
         Raises:
-            TimeNetConnectorError: If the split does not match the pinned digest.
+            TimeNetConnectorError: If the file does not hold a valid split.
         """
-        splits = [Split.TRAIN] * len(m4_ids)
-        all_positions = np.arange(len(m4_ids))
-        train_and_validation = self._split_off(all_positions, splits, Split.TEST, seed=42, size=0.1)
-        # The loader keeps the share of the validation part at 10 percent of all series.
-        self._split_off(train_and_validation, splits, Split.VALIDATION, seed=43, size=0.1 / (1.0 - 0.1))
-        if self.digest(m4_ids, splits) != self.sha256:
-            raise TimeNetConnectorError(
-                f"the OpenTSLM split of {len(m4_ids)} series does not match the pinned digest {self.sha256}"
-            )
-        return splits
+        try:
+            return cls.model_validate_json(lzma.decompress(path.read_bytes()))
+        except (lzma.LZMAError, ValidationError) as exc:
+            raise TimeNetConnectorError(f"{path.name} does not hold a valid split: {exc}") from exc
 
-    @staticmethod
-    def _split_off(positions: np.ndarray, splits: list[Split], split: Split, *, seed: int, size: float) -> np.ndarray:
-        """Do one ``train_test_split`` call of the datasets library on the series at ``positions``.
-
-        The series of the part that the call names "test" get ``split``.
+    def assign_split_to_each_series(self, m4_ids: Sequence[str]) -> list[Split]:
+        """Assign a split to each series of the pinned release.
 
         Returns:
-            The positions of the part that the call names "train", in the order of the permutation.
+            The split of each series, in the order of ``m4_ids``.
+
+        Raises:
+            TimeNetConnectorError: If the split was made from another release, or names a series that
+                the release does not have.
         """
-        permutation = np.random.default_rng(seed).permutation(len(positions))
-        n_split = ceil(size * len(positions))
-        for position in positions[permutation[:n_split]]:
-            splits[position] = split
-        return positions[permutation[n_split:]]
+        if self.source_sha256 != M4_CAPTION_SHA256:
+            raise TimeNetConnectorError(
+                f"the split was made from the release {self.source_sha256}, not from the pinned {M4_CAPTION_SHA256}"
+            )
+        unknown = sorted(set(self.m4_ids) - set(m4_ids))
+        if unknown:
+            raise TimeNetConnectorError(f"the split names series {unknown} that the release does not have")
+        split_of = dict.fromkeys(self.validation, Split.VALIDATION) | dict.fromkeys(self.test, Split.TEST)
+        return [split_of.get(m4_id, Split.TRAIN) for m4_id in m4_ids]
 
 
 @dataclass(frozen=True)
 class M4CaptionRelease:
-    """The extracted release and the split that its series must get."""
+    """The extracted release and the file that holds the split of its series."""
 
     directory: Path
-    split: OpenTSLMSplit
+    splits_path: Path
 
     def read_series(self) -> Iterator[M4CaptionSeries]:
         """Read every series of the release, in the order of OpenTSLM's loader.
@@ -204,6 +205,14 @@ class M4CaptionRelease:
         """
         for frequency in FREQUENCIES:
             yield from self._read_frequency(frequency)
+
+    def read_splits(self, m4_ids: Sequence[str]) -> list[Split]:
+        """Read the split of each series from the split file.
+
+        Returns:
+            The split of each series, in the order of ``m4_ids``.
+        """
+        return M4CaptionSplits.read_from_file(self.splits_path).assign_split_to_each_series(m4_ids)
 
     def _read_frequency(self, frequency: str) -> Iterator[M4CaptionSeries]:
         """Read the series of one frequency, paired with the caption in the same row of its caption file.
@@ -250,10 +259,10 @@ class M4CaptionConnector(BaseConnector[M4CaptionRelease]):
             cache_dir: The directory that holds the extracted files.
 
         Returns:
-            The extracted release, with the pinned split.
+            The extracted release, with the frozen split of the connector.
         """
         root = await ensure_archive(M4_CAPTION_URL, cache_dir, filename="m4_caption.zip", sha256=M4_CAPTION_SHA256)
-        return [M4CaptionRelease(directory=root / RELEASE_FOLDER, split=OpenTSLMSplit(sha256=OPENTSLM_SPLIT_SHA256))]
+        return [M4CaptionRelease(directory=root / RELEASE_FOLDER, splits_path=SPLITS_PATH)]
 
     def convert(self, raw_refs: list[M4CaptionRelease]) -> TimeFDataset:
         """Create one Record and one AnswerTask for each series.
@@ -266,7 +275,7 @@ class M4CaptionConnector(BaseConnector[M4CaptionRelease]):
         """
         (release,) = raw_refs
         all_series = list(release.read_series())
-        splits = release.split.assign_splits([series.m4_id for series in all_series])
+        splits = release.read_splits([series.m4_id for series in all_series])
         dataset = TimeFDataset(metadata=self.metadata())
         for series, split in zip(all_series, splits, strict=True):
             record = dataset.add_record(record=series.create_record())

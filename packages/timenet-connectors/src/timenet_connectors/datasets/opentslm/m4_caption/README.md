@@ -11,28 +11,35 @@ the M4 frequency as an annotation. The task target is the caption.
 ## Split
 
 The release has no split column. The OpenTSLM loader splits the series at load time with the
-`train_test_split` function of the datasets library. The connector computes the same 80/10/10 split
-with NumPy. If the result does not match `OPENTSLM_SPLIT_SHA256`, the build stops with an error.
-`generate_splits.py` computed that digest with the OpenTSLM code path and the library versions of
-the OpenTSLM `uv.lock`.
+`train_test_split` function of the datasets library, so the split depends on the versions of
+datasets and NumPy. `generate_splits.py` ran the calls of the loader once, with the library versions
+of the OpenTSLM `uv.lock`. It wrote the 10,000 validation and 10,000 test series, by M4 id, to
+`splits.json.xz`. The connector reads that file and puts every other series in the train split.
+
+The file is JSON compressed with xz, about 19 KB. Python reads it with the `lzma` module of the
+standard library. To read it yourself, run `xz -dc splits.json.xz`. The file also states the SHA-256
+of the release archive. If it does not match the pinned archive, the build stops with an error.
 
 ## Relation to the M4 data
 
 Each series of the release is the train part of the M4 series with the same id, from the
 `Dataset/Train` files of the M4-methods repository. The release does not hold the test horizon or
 the series information of `M4-info.csv`. Each value is the float32 rounding of the M4 value. The
-largest relative difference is 6e-8, and in 49,610 of the 100,000 series the values are equal bit
-for bit.
+largest relative difference is 6e-8.
 
 ## Future work: an M4 parent dataset
 
 TimeNet can model this relation with a parent dataset. A connector for M4, for example
 `mcompetitions/m4`, can convert the `Dataset/` folder of M4-methods: the train and test files and
-`M4-info.csv`. M4-Caption can then declare that release under `parents` and import its Records, as
-`physionet/ecg-qa-cot` imports PTB-XL. The caption task then names the train part of each series
-with a `StepInterval` scope.
+`M4-info.csv`. M4-Caption can then declare that release under `parents` and import its Records.
+The caption task then names the train part of each series with a `StepInterval` scope.
 
 With a parent, the 24 million values exist once, and a reader gets the M4 category, horizon and
 test part. The values become the float64 M4 values, not the float32 values that OpenTSLM plotted
-for GPT-4o. The card must document that difference. The connector must also make sure that each
-release series equals the float32 rounding of the parent series.
+for GPT-4o.
+
+## Future work: Change axis types
+
+We currently use ordinal axis for consistency, as some of the frequencies are only regular in
+calendar terms, e.g. "monthly". If [Proposal: calendar axes, value cells and civil-date origins
+](https://github.com/OpenTSLM/TimeNet/issues/555) lands we can reconsider this choice.
