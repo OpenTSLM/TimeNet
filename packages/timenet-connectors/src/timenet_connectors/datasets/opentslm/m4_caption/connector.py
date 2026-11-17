@@ -216,7 +216,7 @@ class M4CaptionRelease:
         """
         series_path = self.directory / f"m4_series_{frequency}.csv"
         captions_path = self.directory / f"m4_captions_{frequency}.csv"
-        CsvDataReader.raise_field_size_limit(MAX_SERIES_CHARS)
+        CsvDataReader.set_field_size_limit(MAX_SERIES_CHARS)
         series_rows = list(CsvDataReader(series_path, _SeriesRow, expected_columns=("id", "series")).iter_rows())
         caption_rows = list(CsvDataReader(captions_path, _CaptionRow, expected_columns=("id", "caption")).iter_rows())
         if len(series_rows) != len(caption_rows):
