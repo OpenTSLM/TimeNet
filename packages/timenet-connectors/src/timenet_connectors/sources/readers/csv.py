@@ -23,19 +23,17 @@ class CsvDataReader(DataReader[RowT]):
         self.expected_columns = expected_columns
 
     @staticmethod
-    def raise_field_size_limit(chars: int) -> None:
+    def set_field_size_limit(chars: int) -> None:
         """Let every CSV reader in this process read cells of up to ``chars`` characters.
 
         The ``csv`` module has one cell limit for the whole process, 131,072 characters by default, and
         it checks the limit while it parses. Call this method before reading a source whose cells are
-        larger, such as a long series in one cell. The method never lowers the limit, because another
-        reader may be in the middle of a file with larger cells.
+        larger, such as a long series in one cell.
 
         Args:
             chars: The largest cell to accept, in characters.
         """
-        if chars > csv.field_size_limit():
-            csv.field_size_limit(chars)
+        csv.field_size_limit(chars)
 
     def iter_rows(self) -> Generator[RowT, None, None]:
         """Yield validated rows parsed from CSV cells.
