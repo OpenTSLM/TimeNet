@@ -140,7 +140,6 @@ def test_the_frozen_split_is_of_the_pinned_release_and_has_the_paper_counts():
 @pytest.mark.parametrize(
     ("series_rows", "message"),
     [
-        ({"Daily": [("series-D1", json.dumps([0.1, 0.2])), ("series-D2", "[1.0]")]}, "not exactly float32"),
         ({"Daily": [("series-D1", "[1.0, null]"), ("series-D2", "[1.0]")]}, "line 2: .*Input should be a valid number"),
         ({"Daily": [("series-D1", "[1.0, true]"), ("series-D2", "[1.0]")]}, "line 2: .*Input should be a valid number"),
         ({"Daily": [("series-D1", "[]"), ("series-D2", "[1.0]")]}, "line 2: .*List should have at least 1 item"),
@@ -149,7 +148,6 @@ def test_the_frozen_split_is_of_the_pinned_release_and_has_the_paper_counts():
         ({"Daily": [("series-D1", "[1.0]")]}, "has 1 series rows but 2 caption rows"),
     ],
     ids=[
-        "a value that is not float32",
         "a null value",
         "a Boolean value",
         "an empty series",

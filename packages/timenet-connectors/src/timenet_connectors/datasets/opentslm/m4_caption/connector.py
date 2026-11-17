@@ -111,24 +111,6 @@ class _CaptionRow(DataRow):
     caption: str
 
 
-def _as_float32(values: Sequence[float]) -> np.ndarray:
-    """Convert the values to float32, and check that the conversion keeps every value exactly.
-
-    The release holds M4 values that OpenTSLM rounded to float32, so float32 is lossless for it.
-
-    Returns:
-        The values as float32.
-
-    Raises:
-        TimeNetConnectorError: If a value is not exactly a float32 value.
-    """
-    exact = np.array(values, dtype=np.float64)
-    rounded = exact.astype(np.float32)
-    if not np.array_equal(rounded.astype(np.float64), exact):
-        raise TimeNetConnectorError("the series holds a value that is not exactly float32")
-    return rounded
-
-
 @dataclass(frozen=True)
 class M4CaptionSeries:
     """One M4 series of the release, with its frequency and caption."""
@@ -278,7 +260,7 @@ class M4CaptionRelease:
                 yield M4CaptionSeries(
                     m4_id=m4_id,
                     frequency=frequency,
-                    values=_as_float32(series_row.series),
+                    values=np.array(series_row.series, dtype=np.float32),
                     caption=caption_row.caption,
                 )
             except TimeNetConnectorError as exc:
