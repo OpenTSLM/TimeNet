@@ -9,8 +9,8 @@ The connector reads the 6.9 GB zip file from the [Oxford Research Archive record
 It uses the SHA-256 digest (`69740c22…40e2`) to identify the expected archive and detect changes.
 The dataset card records the same digest as `source_revision`.
 The data license is CC BY 4.0, and the dataset DOI is [10.5287/bodleian:NGx0JOMP5][doi]. The
-archive's terms also ask each user to keep the participants' data confidential and not to try to
-identify them. The authors' benchmark code is [OxWearables/capture24][code]. It has a separate
+record also asks each user to keep the participants' data confidential and not to try to identify
+them. The authors' benchmark code is [OxWearables/capture24][code]. It has a separate
 academic-use license. The connector reimplements its windowing without copying that code.
 
 The connector is one file, `connector.py`. Its tests build a small fake release, so they need no
