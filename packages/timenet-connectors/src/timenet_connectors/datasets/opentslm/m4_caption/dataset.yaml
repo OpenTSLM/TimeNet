@@ -12,9 +12,8 @@ description: >-
   yearly series, with 13 to 9,919 values each. The OpenTSLM paper gives 64 to 512 values, but the
   release has the full length. The release holds the M4 values rounded to float32, and the dataset
   keeps them in float32 without a change. The release has no timestamps and states no unit. The M4
-  series come
-  from the micro, industry, macro, finance, demographic and other domains, so the values have mixed
-  units. Each record states the M4 id, such as M1, and the M4 frequency. The release has no split
+  series come from the micro, industry, macro, finance, demographic and other domains, so the values
+  have mixed units. Each record states the M4 id, such as M1, and the M4 frequency. The release has no split
   column, so the dataset gives each series the split of OpenTSLM's loader. That loader merges all
   frequencies and makes a random 80/10/10 split with the datasets library.
 

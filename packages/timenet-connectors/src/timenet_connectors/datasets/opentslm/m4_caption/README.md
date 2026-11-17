@@ -38,8 +38,9 @@ With a parent, the 24 million values exist once, and a reader gets the M4 catego
 test part. The values become the float64 M4 values, not the float32 values that OpenTSLM plotted
 for GPT-4o.
 
-## Future work: Change axis types
+## Future work: change axis types
 
-We currently use ordinal axis for consistency, as some of the frequencies are only regular in
-calendar terms, e.g. "monthly". If [Proposal: calendar axes, value cells and civil-date origins
-](https://github.com/OpenTSLM/TimeNet/issues/555) lands we can reconsider this choice.
+We currently use an ordinal axis for consistency, as some of the frequencies are only regular in
+calendar terms, e.g. "monthly". If
+[Proposal: calendar axes, value cells and civil-date origins](https://github.com/OpenTSLM/TimeNet/issues/555)
+lands we can reconsider this choice.

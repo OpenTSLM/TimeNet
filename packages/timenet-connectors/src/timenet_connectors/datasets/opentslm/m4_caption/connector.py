@@ -9,13 +9,14 @@ loader from splits.json.xz, which generate_splits.py wrote.
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 import lzma
 from pathlib import Path
 import re
-from typing import Self
+from typing import Annotated, Self
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, FiniteFloat, Json, ValidationError, model_validator
+from pydantic import AllowInfNan, BaseModel, ConfigDict, Field, Json, StrictFloat, ValidationError, model_validator
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -30,8 +31,6 @@ M4_CAPTION_URL = "https://polybox.ethz.ch/index.php/s/MT3y9WdEebT8wfj/download/M
 M4_CAPTION_SHA256 = "4acb748d94d7287fe58dbb5c3cf6314ea259010b7720f42506739269dec54edf"
 RELEASE_FOLDER = "M4TimeSeriesCaptionDataset"
 """The folder in the archive that holds the CSV files."""
-FREQUENCIES = ("Daily", "Hourly", "Monthly", "Quarterly", "Weekly", "Yearly")
-"""The M4 frequencies, in the order that OpenTSLM's loader reads them."""
 MAX_SERIES_CHARS = 1_000_000
 """The largest series cell that the connector reads, in characters. The largest cell of the release
 holds a daily series of 9,919 values in 169,126 characters."""
@@ -41,15 +40,71 @@ SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
 # The release states no unit, and the M4 series come from many domains.
 M4_SERIES = TimeSeriesSpec(spec_type="m4_series", name="M4 series", unit_value=None, dtype="float32")
 
-_SERIES_ID = re.compile(r"series-(?P<m4_id>(?P<letter>[DHMQWY])[1-9][0-9]*)")
+_SERIES_ID = re.compile(r"series-(?P<m4_id>(?P<letter>[A-Z])[1-9][0-9]*)")
 """A release id: the M4 id, such as M1, after a ``series-`` prefix that OpenTSLM added."""
+
+_SeriesValue = Annotated[StrictFloat, AllowInfNan(False)]
+"""A finite JSON number. Strict, so that a Boolean or a string in the list is an error, not a number."""
+
+
+class M4Frequency(StrEnum):
+    """An M4 frequency. The members are in the order that OpenTSLM's loader reads them.
+
+    The value is the name in the release file names and in the ``frequency`` annotation.
+    """
+
+    DAILY = "Daily"
+    HOURLY = "Hourly"
+    MONTHLY = "Monthly"
+    QUARTERLY = "Quarterly"
+    WEEKLY = "Weekly"
+    YEARLY = "Yearly"
+
+    @property
+    def id_letter(self) -> str:
+        """The letter that starts the M4 id of each series of this frequency, such as M in M1."""
+        return _M4_ID_LETTERS[self]
+
+    @property
+    def series_file(self) -> str:
+        """The name of the release file that holds the series of this frequency."""
+        return f"m4_series_{self}.csv"
+
+    @property
+    def captions_file(self) -> str:
+        """The name of the release file that holds the captions of this frequency."""
+        return f"m4_captions_{self}.csv"
+
+    def parse_m4_id(self, series_id: str) -> str:
+        """Get the M4 id from a release id, and check that it belongs to this frequency.
+
+        Returns:
+            The M4 id, such as ``M1``.
+
+        Raises:
+            TimeNetConnectorError: If the id is not an M4 series id of this frequency.
+        """
+        match = _SERIES_ID.fullmatch(series_id)
+        if match is None or match["letter"] != self.id_letter:
+            raise TimeNetConnectorError(f"{series_id!r} is not a {self} M4 series id")
+        return match["m4_id"]
+
+
+_M4_ID_LETTERS = {
+    M4Frequency.DAILY: "D",
+    M4Frequency.HOURLY: "H",
+    M4Frequency.MONTHLY: "M",
+    M4Frequency.QUARTERLY: "Q",
+    M4Frequency.WEEKLY: "W",
+    M4Frequency.YEARLY: "Y",
+}
 
 
 class _SeriesRow(DataRow):
     """A row of a series file: the release id and the values as a JSON list."""
 
     id: str
-    series: Json[list[FiniteFloat]]
+    series: Json[Annotated[list[_SeriesValue], Field(min_length=1)]]
 
 
 class _CaptionRow(DataRow):
@@ -57,21 +112,6 @@ class _CaptionRow(DataRow):
 
     id: str
     caption: str
-
-
-def _parse_m4_id(series_id: str, frequency: str) -> str:
-    """Get the M4 id from a release id, and check that it belongs to the frequency of its file.
-
-    Returns:
-        The M4 id, such as ``M1``.
-
-    Raises:
-        TimeNetConnectorError: If the id is not an M4 series id of the frequency.
-    """
-    match = _SERIES_ID.fullmatch(series_id)
-    if match is None or match["letter"] != frequency[0]:
-        raise TimeNetConnectorError(f"{series_id!r} is not a {frequency} M4 series id")
-    return match["m4_id"]
 
 
 def _as_float32(values: Sequence[float]) -> np.ndarray:
@@ -97,7 +137,7 @@ class M4CaptionSeries:
     """One M4 series of the release, with its frequency and caption."""
 
     m4_id: str
-    frequency: str
+    frequency: M4Frequency
     values: np.ndarray
     caption: str
 
@@ -108,7 +148,7 @@ class M4CaptionSeries:
             The Record, not yet added to a dataset.
         """
         signal = Signal.from_values(self.values, spec=M4_SERIES, name="value", time_axis=OrdinalAxis())
-        frequency = Annotation(key="frequency", value=self.frequency)
+        frequency = Annotation(key="frequency", value=self.frequency.value)
         return Record(
             sources=(Source(name="M4", signals=(signal,)),),
             annotations=(frequency,),
@@ -203,7 +243,7 @@ class M4CaptionRelease:
         Yields:
             Each series with its caption.
         """
-        for frequency in FREQUENCIES:
+        for frequency in M4Frequency:
             yield from self._read_frequency(frequency)
 
     def read_splits(self, m4_ids: Sequence[str]) -> list[Split]:
@@ -214,7 +254,7 @@ class M4CaptionRelease:
         """
         return M4CaptionSplits.read_from_file(self.splits_path).assign_split_to_each_series(m4_ids)
 
-    def _read_frequency(self, frequency: str) -> Iterator[M4CaptionSeries]:
+    def _read_frequency(self, frequency: M4Frequency) -> Iterator[M4CaptionSeries]:
         """Read the series of one frequency, paired with the caption in the same row of its caption file.
 
         Yields:
@@ -223,9 +263,8 @@ class M4CaptionRelease:
         Raises:
             TimeNetConnectorError: If the files do not pair one to one, or a series row is malformed.
         """
-        series_path = self.directory / f"m4_series_{frequency}.csv"
-        captions_path = self.directory / f"m4_captions_{frequency}.csv"
-        CsvDataReader.set_field_size_limit(MAX_SERIES_CHARS)
+        series_path = self.directory / frequency.series_file
+        captions_path = self.directory / frequency.captions_file
         series_rows = list(CsvDataReader(series_path, _SeriesRow, expected_columns=("id", "series")).iter_rows())
         caption_rows = list(CsvDataReader(captions_path, _CaptionRow, expected_columns=("id", "caption")).iter_rows())
         if len(series_rows) != len(caption_rows):
@@ -234,7 +273,7 @@ class M4CaptionRelease:
             )
         for number, (series_row, caption_row) in enumerate(zip(series_rows, caption_rows, strict=True), start=1):
             try:
-                m4_id = _parse_m4_id(series_row.id, frequency)
+                m4_id = frequency.parse_m4_id(series_row.id)
                 if series_row.id != caption_row.id:
                     raise TimeNetConnectorError(
                         f"series id {series_row.id!r} does not match caption id {caption_row.id!r}"
@@ -274,6 +313,8 @@ class M4CaptionConnector(BaseConnector[M4CaptionRelease]):
             The populated dataset.
         """
         (release,) = raw_refs
+        # A daily series of the release does not fit in the default cell limit of the csv module.
+        CsvDataReader.set_field_size_limit(MAX_SERIES_CHARS)
         all_series = list(release.read_series())
         splits = release.read_splits([series.m4_id for series in all_series])
         dataset = TimeFDataset(metadata=self.metadata())

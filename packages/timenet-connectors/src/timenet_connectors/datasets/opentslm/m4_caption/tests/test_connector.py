@@ -130,7 +130,7 @@ def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, changes, me
         _convert(tmp_path, splits=_SPLITS | changes)
 
 
-def test_the_frozen_split_holds_the_opentslm_split_of_the_pinned_release():
+def test_the_frozen_split_is_of_the_pinned_release_and_has_the_paper_counts():
     splits = M4CaptionSplits.read_from_file(SPLITS_PATH)
     assert splits.source_sha256 == M4_CAPTION_SHA256
     # The 80/10/10 split of 100,000 series that the OpenTSLM paper reports.
@@ -142,7 +142,8 @@ def test_the_frozen_split_holds_the_opentslm_split_of_the_pinned_release():
     [
         ({"Daily": [("series-D1", json.dumps([0.1, 0.2])), ("series-D2", "[1.0]")]}, "not exactly float32"),
         ({"Daily": [("series-D1", "[1.0, null]"), ("series-D2", "[1.0]")]}, "line 2: .*Input should be a valid number"),
-        ({"Daily": [("series-D1", "[1.0, NaN]"), ("series-D2", "[1.0]")]}, "line 2: .*Input should be a finite number"),
+        ({"Daily": [("series-D1", "[1.0, true]"), ("series-D2", "[1.0]")]}, "line 2: .*Input should be a valid number"),
+        ({"Daily": [("series-D1", "[]"), ("series-D2", "[1.0]")]}, "line 2: .*List should have at least 1 item"),
         ({"Daily": [("series-D2", "[1.0]"), ("series-D1", "[1.0]")]}, "series id 'series-D2' does not match"),
         ({"Daily": [("series-M9", "[1.0]"), ("series-D2", "[1.0]")]}, "is not a Daily M4 series id"),
         ({"Daily": [("series-D1", "[1.0]")]}, "has 1 series rows but 2 caption rows"),
@@ -150,14 +151,15 @@ def test_the_frozen_split_holds_the_opentslm_split_of_the_pinned_release():
     ids=[
         "a value that is not float32",
         "a null value",
-        "a NaN value",
+        "a Boolean value",
+        "an empty series",
         "series and captions out of step",
         "an id of another frequency",
         "a series row too few",
     ],
 )
 def test_a_malformed_series_file_raises_with_its_location(tmp_path, series_rows, message):
-    # The CSV reader rejects a null or NaN value itself, and names the line of the file.
+    # The CSV reader rejects a cell that does not hold a list of numbers itself, and names the line of the file.
     with pytest.raises(TimeNetConnectorError, match=rf"(?s)m4_series_Daily\.csv.*{message}"):
         _convert(tmp_path, series_rows=series_rows)
 
