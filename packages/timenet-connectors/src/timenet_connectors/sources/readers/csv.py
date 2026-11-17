@@ -18,21 +18,24 @@ class CsvDataReader(DataReader[RowT]):
         row_type: type[RowT],
         *,
         expected_columns: tuple[str, ...] | None = None,
-        max_field_chars: int | None = None,
     ) -> None:
-        """Set up a reader for one CSV file.
-
-        Args:
-            path: The CSV file.
-            row_type: The schema of each row.
-            expected_columns: The exact header, in order, or ``None`` to accept any header.
-            max_field_chars: The largest cell that the file may hold, in characters, or ``None`` for the
-                limit of the ``csv`` module, which is 131,072 by default. Use it for a source whose cells
-                are known to be larger, such as long series in one cell.
-        """
         super().__init__(path, row_type)
         self.expected_columns = expected_columns
-        self.max_field_chars = max_field_chars
+
+    @staticmethod
+    def raise_field_size_limit(chars: int) -> None:
+        """Let every CSV reader in this process read cells of up to ``chars`` characters.
+
+        The ``csv`` module has one cell limit for the whole process, 131,072 characters by default, and
+        it checks the limit while it parses. Call this method before reading a source whose cells are
+        larger, such as a long series in one cell. The method never lowers the limit, because another
+        reader may be in the middle of a file with larger cells.
+
+        Args:
+            chars: The largest cell to accept, in characters.
+        """
+        if chars > csv.field_size_limit():
+            csv.field_size_limit(chars)
 
     def iter_rows(self) -> Generator[RowT, None, None]:
         """Yield validated rows parsed from CSV cells.
@@ -43,7 +46,6 @@ class CsvDataReader(DataReader[RowT]):
         Raises:
             TimeNetConnectorError: If the file or a row is invalid.
         """
-        self._allow_field_chars()
         try:
             with self.path.open(encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle, strict=True)
@@ -62,15 +64,6 @@ class CsvDataReader(DataReader[RowT]):
                     yield self._validate(cells, f"line {reader.line_num}", strings=True)
         except (OSError, UnicodeError, csv.Error) as exc:
             raise TimeNetConnectorError(f"{self.path}: {exc}") from exc
-
-    def _allow_field_chars(self) -> None:
-        """Raise the cell limit of the ``csv`` module to ``max_field_chars``, if it is lower.
-
-        The ``csv`` module has one limit for the whole process, and it checks the limit while it parses. The
-        reader never lowers it, because another reader may be in the middle of a file with larger cells.
-        """
-        if self.max_field_chars is not None and self.max_field_chars > csv.field_size_limit():
-            csv.field_size_limit(self.max_field_chars)
 
     def _has_expected_columns(self, header: Sequence[str]) -> bool:
         """Return whether the header has exactly the expected columns in order, or no columns are expected."""
