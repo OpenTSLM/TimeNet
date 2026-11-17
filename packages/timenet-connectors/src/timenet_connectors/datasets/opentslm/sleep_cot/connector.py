@@ -6,7 +6,6 @@ ClassificationTask. The target is the sleep stage. The rationale is the GPT-4o t
 the stage.
 """
 
-from collections import Counter
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -14,7 +13,7 @@ import re
 from typing import Self
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError, model_validator
+from pydantic import NonNegativeInt
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -23,6 +22,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
+from timenet_connectors.splitting import FrozenSplits
 
 
 SLEEP_COT_URL = "https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R/download"
@@ -160,70 +160,6 @@ class SleepCotRow:
         )
 
 
-class FrozenSplits(BaseModel):
-    """Validation and test row positions, starting at zero in file order.
-
-    The connector reads the split from splits.json.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    source_sha256: str
-    """SHA-256 digest of the release CSV used to create the split."""
-    validation: tuple[NonNegativeInt, ...]
-    test: tuple[NonNegativeInt, ...]
-
-    @model_validator(mode="after")
-    def _each_row_in_one_split(self) -> Self:
-        repeated = sorted(position for position, count in Counter(self.positions).items() if count > 1)
-        if repeated:
-            raise ValueError(f"rows {repeated} are named more than once")
-        return self
-
-    @property
-    def positions(self) -> tuple[int, ...]:
-        """The validation and test positions together."""
-        return (*self.validation, *self.test)
-
-    @classmethod
-    def read_from_file(cls, path: Path) -> Self:
-        """Read the split from a splits.json file.
-
-        Returns:
-            The split.
-
-        Raises:
-            TimeNetConnectorError: If the file does not hold a valid split.
-        """
-        try:
-            return cls.model_validate_json(path.read_text(encoding="utf-8"))
-        except ValidationError as exc:
-            raise TimeNetConnectorError(f"{path.name} does not hold a valid split: {exc}") from exc
-
-    def assign_split_to_each_row(self, n_rows: int) -> list[Split]:
-        """Assign a split to each row of the pinned release, in file order.
-
-        Returns:
-            The split for each row; rows absent from the file belong to the train split.
-
-        Raises:
-            TimeNetConnectorError: If the CSV digest differs or a row position is past the last row.
-        """
-        if self.source_sha256 != SLEEP_COT_SHA256:
-            raise TimeNetConnectorError(
-                f"the split was made from the CSV {self.source_sha256}, not from the pinned {SLEEP_COT_SHA256}"
-            )
-        last_named_row = max(self.positions)
-        if last_named_row >= n_rows:
-            raise TimeNetConnectorError(f"the split names row {last_named_row}, but the CSV has only {n_rows} rows")
-        splits = [Split.TRAIN] * n_rows
-        for position in self.validation:
-            splits[position] = Split.VALIDATION
-        for position in self.test:
-            splits[position] = Split.TEST
-        return splits
-
-
 @dataclass(frozen=True)
 class SleepCotReader:
     """Reader for the release CSV and the frozen split of its rows."""
@@ -257,7 +193,8 @@ class SleepCotReader:
         Returns:
             The split for each of the n_rows rows, in file order.
         """
-        return FrozenSplits.read_from_file(self.splits_path).assign_split_to_each_row(n_rows)
+        splits = FrozenSplits[NonNegativeInt].read_from_file(self.splits_path)
+        return splits.assign_splits(range(n_rows), source_sha256=SLEEP_COT_SHA256)
 
 
 class SleepCotConnector(BaseConnector[SleepCotReader]):

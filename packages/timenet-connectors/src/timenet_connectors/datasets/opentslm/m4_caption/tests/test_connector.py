@@ -20,8 +20,8 @@ from timenet_connectors.datasets.opentslm.m4_caption.connector import (
     SPLITS_PATH,
     M4CaptionConnector,
     M4CaptionReader,
-    M4CaptionSplits,
 )
+from timenet_connectors.splitting import FrozenSplits
 
 
 _SERIES_IDS = {
@@ -137,9 +137,9 @@ def test_a_series_whose_caption_is_an_error_message_is_left_out(tmp_path):
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"source_sha256": "0" * 64}, "the split was made from the release 0+, not from the pinned"),
-        ({"test": ["M3", "W1"]}, r"series \['W1'\] are named more than once"),
-        ({"test": ["M3", "M9"]}, r"names series \['M9'\] that the release does not have"),
+        ({"source_sha256": "0" * 64}, "the split was made from the source 0+, not from the pinned"),
+        ({"test": ["M3", "W1"]}, r"\['W1'\] are named more than once"),
+        ({"test": ["M3", "M9"]}, r"the split names \['M9'\] that the source does not have"),
     ],
     ids=["another release", "a series in two splits", "a series that the release does not have"],
 )
@@ -154,7 +154,7 @@ dataset leaves out 253 daily, 57 monthly and 396 quarterly series, whose caption
 
 
 def test_the_frozen_split_is_of_the_pinned_release_and_has_a_tenth_of_each_frequency_in_validation_and_test():
-    splits = M4CaptionSplits.read_from_file(SPLITS_PATH)
+    splits = FrozenSplits[str].read_from_file(SPLITS_PATH)
     assert splits.source_sha256 == M4_CAPTION_SHA256
     for m4_ids in (splits.validation, splits.test):
         counts = Counter(m4_id[0] for m4_id in m4_ids)
