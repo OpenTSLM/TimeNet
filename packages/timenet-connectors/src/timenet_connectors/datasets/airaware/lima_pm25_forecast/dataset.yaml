@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: airaware/lima-pm25-forecast
+dataset_version: 0.1.0
+name: Lima hourly PM2.5 forecasting
+description: >-
+  Retrospective forecasting from seven provisional SENAMHI station identities.
+  Predict the next six hourly PM2.5 values from the preceding 24 measured hours.
+  AirAware excludes ambiguous readings and purges windows crossing the fixed
+  chronological splits. Hourly labels are interpreted as UTC. The PM2.5 unit is
+  inferred, and the interval alignment, validation flags, and publication delays
+  of individual readings are unknown.
+license: ODC-By-1.0
+license_url: https://opendatacommons.org/licenses/by/1-0/
+source_url: https://www.datosabiertos.gob.pe/dataset/monitoreo-de-los-contaminantes-del-aire-en-lima-metropolitana-servicio-nacional-de
+source_revision: 896ae8a106fb128460e81b3f58096f6b9c4d582ef28fffa46e5394c5875c40d4
+citation: >-
+  SENAMHI (Servicio Nacional de Meteorología e Hidrología del Perú),
+  Monitoreo de los contaminantes del aire en Lima Metropolitana.
+  Adapted by AirAware Perú as deduplicated hourly forecasting windows.
+domains:
+  - environment
+tags:
+  - forecasting
+  - air-quality
+  - peru
