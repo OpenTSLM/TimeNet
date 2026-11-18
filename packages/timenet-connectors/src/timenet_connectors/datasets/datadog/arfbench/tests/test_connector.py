@@ -118,6 +118,8 @@ def test_questions_with_equal_options_in_any_order_share_a_label_set(release):
     assert isinstance(up_down_task, ClassificationTask) and isinstance(no_yes_task, ClassificationTask)
     assert presence.label_set.name == correlation.label_set.name == no_yes_task.label_set.name
     assert up_down_task.label_set.name != presence.label_set.name
+    assert no_yes_task.metadata["answer_options"] == ["No", "Yes"]
+    assert presence.metadata["answer_options"] == list(presence.label_set.names)
     assert len({task.label_set.name for task in (presence, correlation, up_down_task, no_yes_task)}) == 2
 
 

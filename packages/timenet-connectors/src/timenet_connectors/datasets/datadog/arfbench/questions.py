@@ -207,8 +207,9 @@ class ARFBenchQuestion:
         """Create a test task that asks for the correct answer from the options of the question.
 
         The options are the label set of the task. TimeNet names the set from its content, so
-        questions with the same options, in any order, share one set. The row index in the metadata pairs the
-        series task with the chart task of ``datadog/arfbench-charts``. The interpolation flags
+        questions with the same options, in any order, share one set. The set keeps the first order that it
+        sees. The metadata lists the options of this question in the order of the release. The row index in
+        the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``. The interpolation flags
         describe what an engineer saw. This method does not interpolate.
 
         Returns:
@@ -220,7 +221,7 @@ class ARFBenchQuestion:
             targets=(self.correct_answer,),
             input_modalities=frozenset({InputModality.TEXT, modality}),
             split=Split.TEST,
-            metadata={"question_index": self.index},
+            metadata={"question_index": self.index, "answer_options": list(self.answer_options)},
             label_set=LabelSet(labels=tuple(Label(name=option) for option in self.answer_options)),
         )
         task.annotate(Annotation(key="task_category", value=self.task_category.value))
