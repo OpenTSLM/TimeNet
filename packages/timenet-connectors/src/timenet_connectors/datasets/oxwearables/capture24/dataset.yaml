@@ -17,7 +17,8 @@ name: CAPTURE-24
 description: >-
   About a day of free-living wrist accelerometry from each of 151 participants, at 100 Hz, with
   activity labels from body-camera images and sleep diaries. The Oxford Research Archive record also
-  asks each user to keep the participants' data confidential and not to try to identify them.
+  asks each user to obey privacy law, to protect the confidentiality of the participants and not to
+  try to identify them.
 license: CC-BY-4.0
 domains:
   - activity
