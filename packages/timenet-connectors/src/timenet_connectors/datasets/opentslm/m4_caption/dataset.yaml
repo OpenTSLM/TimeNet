@@ -13,7 +13,9 @@ description: >-
   23,000 yearly series, with 13 to 9,919 values each. The OpenTSLM paper gives 64 to 512 values, but
   the Polybox release has the full length. The Polybox release has no timestamps and states no unit.
   The M4 series come from the micro, industry, macro, finance, demographic and other domains. Each
-  record states the M4 id, such as M1, and the M4 frequency. The Polybox release has no split
+  record states the M4 id, such as M1, and the M4 frequency. Each task asks for the caption with the
+  prompt of OpenTSLM's loader: "Please generate a detailed caption for this time-series, describing
+  it as accurately as possible.". The Polybox release has no split
   column, so the dataset gives each series the split of OpenTSLM's loader. That loader merges all
   frequencies and makes a random 80/10/10 split with the datasets library.
 

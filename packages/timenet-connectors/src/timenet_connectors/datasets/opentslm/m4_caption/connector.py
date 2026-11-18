@@ -2,8 +2,8 @@
 
 The OpenTSLM release holds the train part of all 100,000 M4 series, one CSV of series and one CSV of
 captions for each of the six M4 frequencies. Each series becomes one Record and one AnswerTask. The
-target is the caption. The release has no split, so the connector reads the split of OpenTSLM's
-loader from splits.json.xz, which generate_splits.py wrote.
+target is the caption. The release archive stores no split. OpenTSLM's loader makes one when it loads
+the data, and the connector reads that split from splits.json.xz, which generate_splits.py wrote.
 """
 
 from collections import Counter
@@ -34,6 +34,9 @@ RELEASE_FOLDER = "M4TimeSeriesCaptionDataset"
 SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
 """The split of OpenTSLM's loader for the release, as generate_splits.py wrote it."""
 
+CAPTION_PROMPT = "Please generate a detailed caption for this time-series, describing it as accurately as possible."
+"""The prompt of OpenTSLM's loader, the same for every series: the post-prompt of ``M4QADataset``."""
+
 # The release states no unit, and the M4 series come from many domains.
 M4_SERIES = TimeSeriesSpec(spec_type="m4_series", name="M4 series", unit_value=None, dtype="float32")
 
@@ -58,16 +61,6 @@ class M4Frequency(StrEnum):
     def id_letter(self) -> str:
         """The letter that starts the M4 id of each series of this frequency, such as M in M1."""
         return _M4_ID_LETTERS[self]
-
-    @property
-    def series_file(self) -> str:
-        """The name of the release file that holds the series of this frequency."""
-        return f"m4_series_{self}.csv"
-
-    @property
-    def captions_file(self) -> str:
-        """The name of the release file that holds the captions of this frequency."""
-        return f"m4_captions_{self}.csv"
 
     def parse_m4_id(self, series_id: str) -> str:
         """Get the M4 id from a release id, and check that it belongs to this frequency.
@@ -143,17 +136,16 @@ class M4CaptionSeries:
             annotations=(frequency,),
             metadata={"m4_id": self.m4_id},
         )
-        # The task has no prompt. By convention, an AnswerTask without a prompt is an unprompted
-        # caption or description.
-        task = AnswerTask(inputs=(record,), targets=(self.caption,), split=self.split)
+        task = AnswerTask(inputs=(record,), prompt=CAPTION_PROMPT, targets=(self.caption,), split=self.split)
         return record, task
 
 
 class M4CaptionSplits(BaseModel):
     """The validation and test series of OpenTSLM's split, by M4 id.
 
-    The release has no split. generate_splits.py ran the calls of OpenTSLM's loader once and wrote this
-    split to splits.json.xz. Every series that the file does not name is in the train split.
+    The release archive stores no split. OpenTSLM's loader makes one when it loads the data.
+    generate_splits.py ran the calls of the loader once and wrote this split to splits.json.xz. Every
+    series that the file does not name is in the train split.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -212,8 +204,8 @@ class M4CaptionSplits(BaseModel):
 
 
 @dataclass(frozen=True)
-class M4CaptionRelease:
-    """The extracted release and the file that holds the split of its series."""
+class M4CaptionReader:
+    """Read the series, the captions and the split of the extracted release."""
 
     directory: Path
     splits_path: Path
@@ -228,9 +220,12 @@ class M4CaptionRelease:
         Returns:
             Each series with its caption and split.
         """
-        captioned = [(frequency, series) for frequency in M4Frequency for series in self._read_frequency(frequency)]
+        captioned: list[tuple[M4Frequency, _CaptionedSeries]] = []
+        for frequency in M4Frequency:
+            captioned.extend((frequency, series) for series in self._read_frequency(frequency))
         m4_ids = [series.m4_id for _, series in captioned]
-        splits = M4CaptionSplits.read_from_file(self.splits_path).assign_split_to_each_series(m4_ids)
+        split_file = M4CaptionSplits.read_from_file(self.splits_path)
+        splits = split_file.assign_split_to_each_series(m4_ids)
         return [
             M4CaptionSeries(
                 m4_id=series.m4_id,
@@ -251,8 +246,8 @@ class M4CaptionRelease:
         Raises:
             TimeNetConnectorError: If the files do not pair one to one, or a series row is malformed.
         """
-        series_path = self.directory / frequency.series_file
-        captions_path = self.directory / frequency.captions_file
+        series_path = self.directory / f"m4_series_{frequency}.csv"
+        captions_path = self.directory / f"m4_captions_{frequency}.csv"
         series_rows = list(CsvDataReader(series_path, _SeriesRow, expected_columns=("id", "series")).iter_rows())
         caption_rows = list(CsvDataReader(captions_path, _CaptionRow, expected_columns=("id", "caption")).iter_rows())
         if len(series_rows) != len(caption_rows):
@@ -275,26 +270,26 @@ class M4CaptionRelease:
                 raise TimeNetConnectorError(f"{series_path.name} data row {number}: {exc}") from exc
 
 
-class M4CaptionConnector(BaseConnector[M4CaptionRelease]):
+class M4CaptionConnector(BaseConnector[M4CaptionReader]):
     """Connector for the M4-Caption release of OpenTSLM."""
 
-    async def download_async(self, cache_dir: Path) -> list[M4CaptionRelease]:  # ruff: ignore[no-self-use]
+    async def download_async(self, cache_dir: Path) -> list[M4CaptionReader]:  # ruff: ignore[no-self-use]
         """Download and extract the release archive once.
 
         Args:
             cache_dir: The directory that holds the extracted files.
 
         Returns:
-            The extracted release, with the frozen split of the connector.
+            A reader of the extracted release and of the split file of the connector.
         """
         root = await ensure_archive(M4_CAPTION_URL, cache_dir, filename="m4_caption.zip", sha256=M4_CAPTION_SHA256)
-        return [M4CaptionRelease(directory=root / RELEASE_FOLDER, splits_path=SPLITS_PATH)]
+        return [M4CaptionReader(directory=root / RELEASE_FOLDER, splits_path=SPLITS_PATH)]
 
-    def convert(self, raw_refs: list[M4CaptionRelease]) -> TimeFDataset:
+    def convert(self, raw_refs: list[M4CaptionReader]) -> TimeFDataset:
         """Create one Record and one AnswerTask for each series.
 
         Args:
-            raw_refs: The release from :meth:`download_async`.
+            raw_refs: The reader from :meth:`download_async`.
 
         Returns:
             The populated dataset.

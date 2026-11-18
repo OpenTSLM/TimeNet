@@ -4,13 +4,14 @@ M4-Caption pairs each of the 100,000 series of the M4 forecasting competition wi
 GPT-4o wrote. OpenTSLM publishes it as a zip archive of CSV files, one series file and one caption
 file for each M4 frequency.
 
-The connector converts each series into one Record and one `AnswerTask` without a prompt. The
-Record holds the series as one float32 Signal on an ordinal axis, the M4 id in its metadata, and
-the M4 frequency as an annotation. The task target is the caption.
+The connector converts each series into one Record and one `AnswerTask`. The Record holds the
+series as one float32 Signal on an ordinal axis, the M4 id in its metadata, and the M4 frequency as
+an annotation. The task target is the caption. The task prompt is the prompt of the OpenTSLM loader
+(the post-prompt of `M4QADataset`), the same for every series.
 
 ## Split
 
-The release has no split column. The OpenTSLM loader splits the series at load time with the
+The release archive stores no split. The OpenTSLM loader splits the series at load time with the
 `train_test_split` function of the datasets library, so the split depends on the versions of
 datasets and NumPy. `generate_splits.py` ran the calls of the loader once, with the library versions
 of the OpenTSLM `uv.lock`. It wrote the 10,000 validation and 10,000 test series, by M4 id, to

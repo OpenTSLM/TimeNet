@@ -18,7 +18,7 @@ from timenet_connectors.datasets.opentslm.m4_caption.connector import (
     M4_CAPTION_SHA256,
     SPLITS_PATH,
     M4CaptionConnector,
-    M4CaptionRelease,
+    M4CaptionReader,
     M4CaptionSplits,
 )
 
@@ -72,7 +72,7 @@ def _write_release(
     *,
     series_rows: dict[str, list[tuple[str, str]]] | None = None,
     splits: dict[str, str | list[str]] = _SPLITS,
-) -> M4CaptionRelease:
+) -> M4CaptionReader:
     # Like the archive, the files sit in a folder of their own, beside the files that the loader skips.
     root = directory / "M4TimeSeriesCaptionDataset"
     root.mkdir()
@@ -86,7 +86,7 @@ def _write_release(
     _write_csv(root / "m4_captions.csv", ("id", "caption"), [("series-W1", "A caption that OpenTSLM never used.")])
     splits_path = directory / "splits.json.xz"
     splits_path.write_bytes(lzma.compress(json.dumps(splits).encode()))
-    return M4CaptionRelease(directory=root, splits_path=splits_path)
+    return M4CaptionReader(directory=root, splits_path=splits_path)
 
 
 def _convert(directory: Path, **changes) -> TimeFDataset:
@@ -111,8 +111,10 @@ def test_each_series_becomes_a_record_and_a_caption_task(tmp_path):
         assert (annotation.key, read_value(annotation.value)) == ("frequency", frequency)
         assert task.targets is not None
         assert [read_value(target) for target in task.targets] == [f"Caption of {m4_id}.\n\nA second paragraph."]
-        # A caption task has no prompt. The training prompt of OpenTSLM is not part of the release.
-        assert task.prompt is None
+        # The prompt of OpenTSLM's loader, the same for every series.
+        assert read_value(task.prompt) == (
+            "Please generate a detailed caption for this time-series, describing it as accurately as possible."
+        )
         assert task.split == _expected_split(m4_id)
 
 
