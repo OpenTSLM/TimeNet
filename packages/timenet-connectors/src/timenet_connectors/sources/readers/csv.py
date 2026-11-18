@@ -31,8 +31,6 @@ class CsvDataReader(DataReader[RowT]):
     def iter_rows(self) -> Generator[RowT, None, None]:
         """Yield validated rows parsed from CSV cells.
 
-        A cell can have any length. A source can hold a long series in one cell.
-
         Yields:
             Validated source rows.
 
