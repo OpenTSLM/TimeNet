@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 from pydantic import ConfigDict, ValidationError
 import pytest
 
-from timenet.errors import TimeNetConnectorError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet_connectors.sources.readers import (
     CsvDataReader,
     DataRow,
@@ -136,6 +136,68 @@ def test_parquet_conversion_error_has_path_and_batch_rows(tmp_path):
         list(ParquetDataReader(path, DataRow).iter_rows())
     assert str(path) in str(exc.value)
     assert isinstance(exc.value.__cause__, OverflowError)
+
+
+class ArrowRow(DataRow):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    name: str
+    values: pa.ListScalar
+
+
+def _arrow_file(path: Path, count: int = 3) -> None:
+    values: list[list[float] | None] = [[float(index), float(index) + 0.5] for index in range(count)]
+    values[1] = None
+    pq.write_table(pa.table({"name": [f"row{index}" for index in range(count)], "values": values}), path)
+
+
+def test_parquet_keeps_arrow_columns_as_arrow_scalars(tmp_path):
+    path = tmp_path / "source.parquet"
+    _arrow_file(path)
+    rows = list(ParquetDataReader(path, ArrowRow, arrow_columns=("values",)).iter_rows())
+    assert [row.name for row in rows] == ["row0", "row1", "row2"]
+    assert all(isinstance(row.values, pa.ListScalar) for row in rows)
+    assert rows[0].values.values.to_pylist() == [0.0, 0.5]
+    assert not rows[1].values.is_valid
+    assert rows[2].values.values.to_pylist() == [2.0, 2.5]
+
+
+def test_parquet_keeps_arrow_columns_across_batches(tmp_path):
+    path = tmp_path / "source.parquet"
+    count = 65537
+    _arrow_file(path, count)
+    last = None
+    for index, row in enumerate(ParquetDataReader(path, ArrowRow, arrow_columns=("values",)).iter_rows()):
+        last = (index, row)
+    assert last is not None
+    assert last[0] == count - 1
+    assert last[1].name == f"row{count - 1}"
+    assert last[1].values.values.to_pylist() == [float(count - 1), float(count - 1) + 0.5]
+
+
+def test_parquet_reads_rows_when_every_column_stays_arrow(tmp_path):
+    class AllArrow(DataRow):
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+
+        name: pa.StringScalar
+
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"name": ["a", "b"]}), path)
+    rows = list(ParquetDataReader(path, AllArrow, arrow_columns=("name",)).iter_rows())
+    assert [row.name.as_py() for row in rows] == ["a", "b"]
+
+
+def test_parquet_rejects_arrow_columns_that_are_not_selected(tmp_path):
+    path = tmp_path / "source.parquet"
+    with pytest.raises(TimeFValidationError, match="arrow_columns must be selected columns"):
+        ParquetDataReader(path, ArrowRow, selected_columns=("name",), arrow_columns=("values",))
+
+
+def test_parquet_rejects_missing_arrow_columns(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"name": ["x"]}), path)
+    with pytest.raises(TimeNetConnectorError, match="missing columns"):
+        list(ParquetDataReader(path, ArrowRow, arrow_columns=("values",)).iter_rows())
 
 
 def test_parquet_reads_across_batches_in_order(tmp_path):

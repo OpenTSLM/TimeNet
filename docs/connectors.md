@@ -431,3 +431,8 @@ CSV and JSON Lines stream rows; Parquet reads batches. JSON arrays are loaded in
 iterator explicitly if leaving it early, for example with `contextlib.closing`. `CsvDataReader` can
 check an exact ordered header via `expected_columns=`, and `ParquetDataReader` can read selected
 columns with `selected_columns=`.
+
+Converting a large numeric list column to Python floats is slow. With `arrow_columns=`, the reader
+keeps the named columns as Arrow. The row then holds a `pyarrow.Scalar` for each of them, and its
+`values` are an Arrow array that the connector can check without a copy. Allow Arrow types in the row
+schema with `ConfigDict(arbitrary_types_allowed=True)`.
