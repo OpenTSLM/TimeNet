@@ -18,7 +18,7 @@ CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name
 
 task = ClassificationTask(
     inputs=(record,),
-    targets=("faulty",),
+    targets=(CONDITION["faulty"],),
     label_set=CONDITION,
 )
 dataset.add_task(task=task)
@@ -91,7 +91,7 @@ ACTIVITY = LabelSet(
 dataset.add_task(
     task=ClassificationTask(
         inputs=(record,),
-        targets=("walking",),
+        targets=(ACTIVITY["walking"],),
         label_set=ACTIVITY,
         split=Split.TRAIN,
     )
@@ -168,7 +168,7 @@ task = ClassificationTask(
         8.0,
         time_series=(vibration,),
     ),
-    targets=("faulty",),
+    targets=(CONDITION["faulty"],),
     label_set=CONDITION,
 )
 ```
@@ -230,8 +230,8 @@ FINDINGS = LabelSet(
     multi_label=True,
 )
 
-ClassificationTask(inputs=(record,), targets=("healthy",), label_set=CONDITION)
-ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
+ClassificationTask(inputs=(record,), targets=(CONDITION["healthy"],), label_set=CONDITION)
+ClassificationTask(inputs=(record,), targets=(FINDINGS["PVC"], FINDINGS["AF"]), label_set=FINDINGS)
 ```
 
 A `LabelSet` defines the allowed labels for a classification target. The `multi_label` flag controls
@@ -247,6 +247,16 @@ must contain exactly one label.
 
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
+
+Each target is a `Label` from the task's label set. A plain string is not a classification target.
+Look up each target in its label set, for example `CONDITION["faulty"]`. An unknown name raises
+`TimeFNotFoundError` during lookup. TimeNet stores the label's name. Read `task.labels` to get the
+labels and their descriptions, in target order.
+
+```python
+task = ClassificationTask(inputs=(record,), targets=(CONDITION["faulty"],), label_set=CONDITION)
+task.labels  # (Label(name="faulty", description="A bearing fault."),)
+```
 
 Tasks can share the same label set object. Each name identifies one label set within a dataset.
 If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
@@ -344,7 +354,7 @@ An empty `candidate_records` tuple means that the candidate pool is dataset-wide
 ```python
 label = ClassificationTask(
     inputs=(record,),
-    targets=("faulty",),
+    targets=(CONDITION["faulty"],),
     label_set=CONDITION,
 )
 answer = AnswerTask(

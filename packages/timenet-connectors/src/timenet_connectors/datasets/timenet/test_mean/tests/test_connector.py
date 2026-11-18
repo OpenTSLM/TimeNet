@@ -1,6 +1,5 @@
 from collections import Counter
 from pathlib import Path
-from typing import cast
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
@@ -16,7 +15,7 @@ def _convert() -> TimeFDataset:
 
 def _labels_by_record(dataset: TimeFDataset) -> dict[int | None, str | None]:
     return {
-        record.id: cast(str, read_value(task.targets[0]))
+        record.id: read_value(task.targets[0])
         for task in dataset.tasks
         if isinstance(task, ClassificationTask) and task.targets is not None
         for record in task.inputs

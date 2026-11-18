@@ -83,7 +83,7 @@ class TestMeanConnector(BaseConnector[None]):
             dataset.add_task(
                 task=ClassificationTask(
                     inputs=(record,),
-                    targets=(label,),
+                    targets=(_MEAN_SIGN[label],),
                     label_set=_MEAN_SIGN,
                 )
             )

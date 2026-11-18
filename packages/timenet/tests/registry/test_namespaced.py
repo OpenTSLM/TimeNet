@@ -46,7 +46,7 @@ def _namespaced_dataset() -> TimeFDataset:
             sources=(Source(name="Source", signals=(series,)),),
         )
     )
-    dataset.add_task(task=ClassificationTask(label_set=LABELS, inputs=(record,), targets=("x",)))
+    dataset.add_task(task=ClassificationTask(label_set=LABELS, inputs=(record,), targets=(LABELS["x"],)))
     return dataset
 
 

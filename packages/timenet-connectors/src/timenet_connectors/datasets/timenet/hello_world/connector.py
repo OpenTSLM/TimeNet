@@ -176,7 +176,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         artifact = shared.annotate(artifact)
         classification = ClassificationTask(
             inputs=(record0,),
-            targets=("normal",),
+            targets=(_RHYTHM["normal"],),
             label_set=_RHYTHM,
         )
         dataset.add_tasks(
@@ -270,7 +270,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record2,),
-                targets=("onset",),
+                targets=(_EVENT["onset"],),
                 label_set=_EVENT,
                 scope=TimeInterval.seconds(0.5, 0.75, time_series=(window,)),
             ),

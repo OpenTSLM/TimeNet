@@ -128,7 +128,7 @@ CONDITION = LabelSet(
 
 task = ClassificationTask(
     inputs=(record,),
-    targets=("healthy",),
+    targets=(CONDITION["healthy"],),
     label_set=CONDITION,
 )
 dataset.add_task(task=task)

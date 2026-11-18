@@ -147,7 +147,9 @@ def make_dataset(**card: object) -> TimeFDataset:
         ]
     )
     shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25)))
-    classification = ClassificationTask(inputs=(record0,), targets=("normal",), label_set=_RHYTHM_LABELS)
+    classification = ClassificationTask(
+        inputs=(record0,), targets=(_RHYTHM_LABELS["normal"],), label_set=_RHYTHM_LABELS
+    )
     dataset.add_tasks(
         tasks=[
             classification,
@@ -201,7 +203,7 @@ def make_dataset(**card: object) -> TimeFDataset:
     dataset.add_task(
         task=ClassificationTask(
             inputs=(record2,),
-            targets=("onset",),
+            targets=(_EVENT_LABELS["onset"],),
             label_set=_EVENT_LABELS,
             scope=TimeInterval.seconds(0.0, 0.25, time_series=(window,)),
         ),

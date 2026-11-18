@@ -3,9 +3,9 @@
 from collections.abc import Iterator, Sequence
 from typing import Self
 
-from pydantic import StrictBool, model_validator
+from pydantic import PrivateAttr, StrictBool, model_validator
 
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFNotFoundError, TimeFValidationError
 from timenet.types._model import TimeFModel
 from timenet.types.wire import NonEmptyString
 
@@ -34,7 +34,7 @@ class LabelSet(TimeFModel):
                 Label(name="rem_sleep"),
             ),
         )
-        ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
+        ClassificationTask(inputs=(record,), targets=(SLEEP_STAGE["awake"],), label_set=SLEEP_STAGE)
 
     Each name identifies one label set in a dataset.
     """
@@ -49,11 +49,15 @@ class LabelSet(TimeFModel):
     If ``True``, a target holds all labels from the set that apply.
     An empty target means that no label applies."""
 
+    _labels_by_name: dict[str, Label] = PrivateAttr()
+    """Maps each label name to its label. The validator creates this mapping when the label set is created."""
+
     @model_validator(mode="after")
     def _valid_set(self) -> Self:
         if not self.labels:
             raise ValueError(f"label set {self.name!r} must list at least one label")
-        if len(set(self.names)) != len(self.labels):
+        self._labels_by_name = {label.name: label for label in self.labels}
+        if len(self._labels_by_name) != len(self.labels):
             raise ValueError(f"label set {self.name!r} lists a label more than once")
         return self
 
@@ -61,6 +65,23 @@ class LabelSet(TimeFModel):
     def names(self) -> tuple[str, ...]:
         """The name of each label, in label order."""
         return tuple(label.name for label in self.labels)
+
+    def __getitem__(self, name: str) -> Label:
+        """Return a label from this set by name.
+
+        With the set in the class example, ``SLEEP_STAGE["awake"]`` returns
+        ``Label(name="awake", description="The subject is awake.")``.
+
+        Returns:
+            The Label with the requested name.
+
+        Raises:
+            TimeFNotFoundError: If the set has no label with this name.
+        """
+        try:
+            return self._labels_by_name[name]
+        except KeyError:
+            raise TimeFNotFoundError(f"label set {self.name!r} has no label {name!r}") from None
 
     def check_targets(self, targets: Sequence[str]) -> None:
         """Make sure that the target labels follow the rules of this set.
@@ -79,8 +100,7 @@ class LabelSet(TimeFModel):
             TimeFValidationError: If a label is not in the set or a label repeats.
                 Also if a single-label target does not hold exactly one label.
         """
-        names = set(self.names)
-        unknown = sorted({label for label in targets if label not in names})
+        unknown = sorted({label for label in targets if label not in self._labels_by_name})
         if unknown:
             raise TimeFValidationError(f"labels not in label set {self.name!r}: {unknown}")
         if not self.multi_label and len(targets) != 1:
