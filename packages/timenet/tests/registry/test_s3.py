@@ -19,6 +19,7 @@ from timenet.registry import LocalRegistry, S3Registry, open_local_version  # ru
 from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types import DatasetFilter, DatasetSchema, Version  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types.references import DatasetRef  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.values_backends import ValuesBackend  # ruff: ignore[module-import-not-at-top-of-file]
 
 
 @pytest.fixture
@@ -62,6 +63,17 @@ def test_put_dataset_and_remote_load_round_trip(s3_root, backend, entry_point):
     assert isinstance(
         registry.open_release(DatasetRef.parse("timenet/hello-world@1.0.0")).filesystem, pafs.S3FileSystem
     )
+
+
+def test_a_zarr_release_reads_back_from_s3(s3_root):
+    # A bucket no other test writes: in tn-test an earlier test may have stored the same version with
+    # Parquet values, and this test would read those instead.
+    boto3.client("s3").create_bucket(Bucket="tn-zarr-only")
+    registry = S3Registry("s3://tn-zarr-only/registry")
+    reference = registry.put_dataset(make_dataset(), values_backend="zarr")
+    assert registry.open_release(reference).manifest.values_backend == ValuesBackend.ZARR
+    with TimeNet(sources=[registry]).open(str(reference)) as reader:
+        assert_datasets_equal(make_dataset(), reader.read())
 
 
 def test_put_dataset_checks_payload_sources_against_the_bucket(s3_root, tmp_path):
