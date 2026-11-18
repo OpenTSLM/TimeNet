@@ -16,7 +16,7 @@ from timenet.types import (
 from timenet.writer import TimeFWriter
 
 
-LABELS = LabelSet(name="labels", labels=(Label(name="x"),))
+LABELS = LabelSet(labels=(Label(name="x"),))
 
 
 def _namespaced_dataset() -> TimeFDataset:

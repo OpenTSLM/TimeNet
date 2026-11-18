@@ -16,7 +16,7 @@ import numpy as np
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError
-from timenet.types import ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
+from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import ensure_archive
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
@@ -35,7 +35,6 @@ SAMPLES_PER_WINDOW = 128
 
 # The label order is the order of the OpenTSLM training prompt.
 ACTIVITY = LabelSet(
-    name="activity",
     labels=(
         Label(name="biking"),
         Label(name="lying"),
@@ -46,6 +45,7 @@ ACTIVITY = LabelSet(
         Label(name="walking_down", description="Walking down stairs."),
         Label(name="walking_up", description="Walking up stairs."),
     ),
+    annotations=(Annotation(key="name", value="activity"),),
 )
 # The release states no unit. A resting window has a magnitude of about 9.8, which is gravity in m/s².
 ACCELERATION = TimeSeriesSpec(

@@ -29,7 +29,6 @@ from timenet.writer import TimeFWriter
 
 
 CLASSES = LabelSet(
-    name="classes",
     labels=(
         Label(name="c0"),
         Label(name="c1"),

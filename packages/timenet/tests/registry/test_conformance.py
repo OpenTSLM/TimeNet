@@ -35,7 +35,6 @@ from timenet.types.references import DatasetRef
 
 
 RHYTHM = LabelSet(
-    name="rhythm",
     labels=(
         Label(name="afib"),
         Label(name="normal"),

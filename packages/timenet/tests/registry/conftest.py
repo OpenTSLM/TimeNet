@@ -23,7 +23,6 @@ from timenet.writer import TimeFWriter
 
 
 RHYTHM = LabelSet(
-    name="rhythm",
     labels=(
         Label(name="afib"),
         Label(name="normal"),

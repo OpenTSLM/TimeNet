@@ -6,8 +6,9 @@ values and gives tasks.
 No task names its own id. Nothing resolves one by id: each task holds its record in ``inputs``,
 and no task here states a lineage. Every task takes the id the dataset gives it.
 
-Each classification task draws its target from one closed set, a ``LabelSet`` named after the
-annotation key whose values it holds. The tasks that ask one question share one set.
+Each classification task draws its target from one closed set. The ``name`` annotation of each
+``LabelSet`` holds the annotation key whose values the set lists. The tasks that ask one question
+share one set.
 
 No task carries a prompt. The release states no question in words.
 """
@@ -38,10 +39,9 @@ EPOCH_MICROSECONDS = 30 * US_PER_S
 
 # The labels the release writes for a scored epoch. Five name a stage of sleep. `Sleep stage W`
 # is wake, `Movement time` marks a disturbed epoch, and `Sleep stage ?` marks one the
-# technician left unscored. Each classification task draws its target from one closed set, named
-# after the key whose values it holds, and each target is exactly one label.
+# technician left unscored. Each classification task draws its target from one closed set, whose
+# name annotation is the key whose values it holds, and each target is exactly one label.
 SLEEP_STAGES = LabelSet(
-    name=str(AnnotationKey.SLEEP_STAGE),
     labels=(
         Label(name="Sleep stage W", description="Wake."),
         Label(name="Sleep stage 1"),
@@ -52,6 +52,7 @@ SLEEP_STAGES = LabelSet(
         Label(name="Movement time", description="An epoch that body movement obscures, so it has no stage."),
         Label(name="Sleep stage ?", description="An epoch with no sleep-stage score from data collection."),
     ),
+    annotations=(Annotation(key="name", value=str(AnnotationKey.SLEEP_STAGE)),),
 )
 STAGE_LABELS = SLEEP_STAGES.names
 
@@ -61,14 +62,17 @@ ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 # The sexes, after each sheet is decoded. The two sheets code the column with opposite
 # meanings, so a raw code never reaches a task.
 SEXES = LabelSet(
-    name=str(AnnotationKey.SEX),
     labels=(Label(name="F", description="Female."), Label(name="M", description="Male.")),
+    annotations=(Annotation(key="name", value=str(AnnotationKey.SEX)),),
 )
 SEX_LABELS = SEXES.names
 
 # The two nights of the telemetry study.
 CONDITION_LABELS = tuple(Condition)
-CONDITIONS = LabelSet(name=str(AnnotationKey.CONDITION), labels=tuple(Label(name=str(one)) for one in Condition))
+CONDITIONS = LabelSet(
+    labels=[str(one) for one in Condition],
+    annotations=(Annotation(key="name", value=str(AnnotationKey.CONDITION)),),
+)
 
 
 def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation]) -> Iterator[ClassificationTask]:

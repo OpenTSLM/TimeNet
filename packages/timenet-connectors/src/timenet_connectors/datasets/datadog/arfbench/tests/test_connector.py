@@ -115,8 +115,8 @@ def test_questions_with_equal_options_share_a_label_set(release):
     assert isinstance(presence, ClassificationTask) and isinstance(correlation, ClassificationTask)
     assert isinstance(up_down_task, ClassificationTask)
     assert presence.label_set == correlation.label_set
-    assert presence.label_set.name.startswith("options_")
-    assert up_down_task.label_set.name != presence.label_set.name
+    assert presence.label_set.annotations == ()
+    assert up_down_task.label_set != presence.label_set
 
 
 def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(release, tmp_path):

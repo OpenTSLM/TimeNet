@@ -14,7 +14,7 @@ expected output.
 ```python
 from timenet.types import ClassificationTask, Label, LabelSet
 
-CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
+CONDITION = LabelSet(labels=(Label(name="healthy"), Label(name="faulty")))
 
 task = ClassificationTask(
     inputs=(record,),
@@ -87,10 +87,7 @@ own: one Record may serve Tasks of several splits.
 ```python
 from timenet.types import ClassificationTask, Label, LabelSet, Split
 
-ACTIVITY = LabelSet(
-    name="activity",
-    labels=(Label(name="walking"), Label(name="sitting")),
-)
+ACTIVITY = LabelSet(labels=(Label(name="walking"), Label(name="sitting")))
 
 dataset.add_task(
     ClassificationTask(
@@ -225,11 +222,9 @@ dataset.add_task(age_question(record, 64))
 from timenet.types import Label, LabelSet
 
 CONDITION = LabelSet(
-    name="condition",
     labels=(Label(name="healthy"), Label(name="faulty", description="A bearing fault.")),
 )
 FINDINGS = LabelSet(
-    name="findings",
     labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")),
     multi_label=True,
 )
@@ -238,8 +233,9 @@ ClassificationTask(inputs=(record,), targets="healthy", label_set=CONDITION)
 ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-A `LabelSet` defines the allowed labels for a classification target. The `multi_label` flag controls
-how many labels a target can contain.
+A `LabelSet` defines the allowed labels for a classification target. Like other owners, it can carry
+[annotations](annotations.md#label-set-annotations). The `multi_label` flag controls how many labels
+a target can contain.
 
 If `multi_label=False`, the default, a target must contain exactly one label. If `multi_label=True`,
 a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
@@ -252,9 +248,12 @@ must contain exactly one label.
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
 
-Tasks can share the same label set object. Each name identifies one label set within a dataset.
-If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
-error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
+A label set has no name. TimeF stores equal sets once. For this, two sets are equal if they have the
+same labels, label descriptions, and `multi_label`. The order of labels and the annotations do not
+matter, and `==` follows the same rule. The stored set gets one integer id, `label_set_id`, and keeps
+the label order of the first equal set that the writer meets. If you need the order of each task,
+put it in the task metadata. If equal sets carry different annotation occurrences, the stored set
+keeps each distinct occurrence. In one read, the reader gives tasks that use the same set a shared object.
 
 ### Answer and rationale
 

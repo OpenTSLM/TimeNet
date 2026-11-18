@@ -3,7 +3,7 @@
 from collections import deque
 from collections.abc import Container, Hashable, Iterable, Iterator, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
 from timenet.dataset.record import Record
@@ -18,6 +18,7 @@ from timenet.types import (
     TimePoint,
     TSCorrespondenceTask,
 )
+from timenet.types.annotations import _copy_annotation
 from timenet.types.clock import TimeOrigin
 from timenet.types.ids import EntityId, check_id
 from timenet.types.load_plan import LoadPlan
@@ -161,23 +162,6 @@ def _fits(annotation: Annotation, signals: tuple[Signal, ...], owner: str, time_
     except TimeFValidationError:
         return False
     return True
-
-
-def _copy_annotation(original: Annotation) -> Annotation:
-    """Copy an annotation occurrence as a value, with the handle of a stored value.
-
-    The copy has deep copies of the value, the metadata, and the occurrence metadata. So a change to
-    one of them in the copy leaves the original as it is. Imports and edits copy annotations this way.
-
-    Returns:
-        The copy.
-    """
-    return replace(
-        original,
-        value=deepcopy(original.value),
-        metadata=deepcopy(original.metadata),
-        occurrence_metadata=deepcopy(original.occurrence_metadata),
-    )
 
 
 def _hierarchy(record: Record) -> list[tuple[Record | Source, dict[str, tuple]]]:

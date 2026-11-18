@@ -59,6 +59,7 @@ def test_entity_id_columns_are_bigint_and_dataset_id_stays_varchar(tmp_path):
         "signal_id",
         "content_id",
         "occurrence_id",
+        "label_set_id",
         "task_id",
     }
 
