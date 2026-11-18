@@ -7,7 +7,6 @@ this file only asserts the shared read/write contract.
 """
 
 from typing import NamedTuple
-import uuid
 
 from _demo_child import _child_of_the_demo
 from _fake_registry import build_service_fake
@@ -76,12 +75,7 @@ class Backend(NamedTuple):
 
 
 def _s3_registry(request) -> S3Registry:
-    boto3 = pytest.importorskip("boto3")
-    endpoint = request.getfixturevalue("s3_endpoint")
-    # A unique bucket per fixture: every test in the process shares one moto backend, so a fixed name
-    # would leak these datasets into other tests, test_s3.py's own tn-test bucket included.
-    bucket = f"tn-conformance-{uuid.uuid4().hex[:12]}"
-    boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket=bucket)
+    bucket = request.getfixturevalue("s3_bucket")
     return S3Registry(f"s3://{bucket}/registry")
 
 

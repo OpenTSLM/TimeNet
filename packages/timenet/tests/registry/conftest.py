@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+import uuid
 
 import pytest
 
@@ -76,7 +77,7 @@ def _moto_server() -> Iterator[str]:
 
     Stopping a ``ThreadedMotoServer`` blocks for about half a second, so one server per test costs
     seconds across the suite. Sharing the server changes no state: moto keeps one process-global
-    backend however many servers run.
+    backend however many servers run. Each test keeps its objects apart with ``s3_bucket``.
     """
     pytest.importorskip("moto")
     from moto.server import ThreadedMotoServer  # ruff: ignore[import-outside-top-level]
@@ -104,3 +105,16 @@ def s3_endpoint(_moto_server: str, monkeypatch: pytest.MonkeyPatch) -> str:
     }.items():
         monkeypatch.setenv(key, value)
     return _moto_server
+
+
+@pytest.fixture
+def s3_bucket(s3_endpoint: str) -> str:
+    """Create an empty bucket with a unique name on the shared moto endpoint and return its name.
+
+    The shared server keeps every object until the session ends, so a fixed bucket name would let
+    one test read what an earlier test wrote.
+    """
+    boto3 = pytest.importorskip("boto3")
+    bucket = f"tn-test-{uuid.uuid4().hex[:12]}"
+    boto3.client("s3", endpoint_url=s3_endpoint).create_bucket(Bucket=bucket)
+    return bucket

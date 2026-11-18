@@ -22,10 +22,9 @@ from timenet.values_backends import ValuesBackend  # ruff: ignore[module-import-
 
 
 @pytest.fixture
-def s3_root(s3_endpoint):
-    """Create the ``tn-test`` bucket on the shared moto endpoint and return the registry URI."""
-    boto3.client("s3", endpoint_url=s3_endpoint).create_bucket(Bucket="tn-test")
-    return "s3://tn-test/registry"
+def s3_root(s3_bucket):
+    """Return the registry URI under this test's own bucket."""
+    return f"s3://{s3_bucket}/registry"
 
 
 @pytest.mark.parametrize("entry_point", ["open", "load"])
@@ -34,6 +33,7 @@ def test_put_dataset_and_remote_load_round_trip(s3_root, backend, entry_point):
     registry = S3Registry(s3_root)
     reference = registry.put_dataset(make_dataset(), values_backend=backend)
     assert reference == DatasetRef.parse(f"{make_dataset().metadata.dataset_id}@1.0.0")
+    assert registry.open_release(reference).manifest.values_backend == ValuesBackend(backend)
     client = TimeNet(sources=[registry])
     if entry_point == "open":
         with client.open(make_dataset().metadata.dataset_id) as reader:
@@ -47,22 +47,10 @@ def test_put_dataset_and_remote_load_round_trip(s3_root, backend, entry_point):
     )
 
 
-def test_a_zarr_release_reads_back_from_s3(s3_root):
-    # A bucket no other test writes: in tn-test an earlier test may have stored the same version with
-    # Parquet values, and this test would read those instead.
-    boto3.client("s3").create_bucket(Bucket="tn-zarr-only")
-    registry = S3Registry("s3://tn-zarr-only/registry")
-    reference = registry.put_dataset(make_dataset(), values_backend="zarr")
-    assert registry.open_release(reference).manifest.values_backend == ValuesBackend.ZARR
-    with TimeNet(sources=[registry]).open(str(reference)) as reader:
-        assert_datasets_equal(make_dataset(), reader.read())
-
-
-def test_put_dataset_checks_payload_sources_against_the_bucket(s3_root, tmp_path):
+def test_put_dataset_checks_payload_sources_against_the_bucket(s3_bucket, s3_root, tmp_path):
     local = LocalRegistry(tmp_path / "local")
     local.put_dataset(make_dataset())
-    # moto keeps one bucket state per process, so this test uses a prefix no other test writes.
-    registry = S3Registry("s3://tn-test/payload-sources")
+    registry = S3Registry(s3_root)
     with TimeFReader(open_local_version(local.root / "timenet/hello-world/1.0.0")) as reader:
         parent = reader.read()
         child = TimeFDataset.from_parts(
@@ -74,20 +62,20 @@ def test_put_dataset_checks_payload_sources_against_the_bucket(s3_root, tmp_path
         )
         with pytest.raises(
             TimeNetDatasetNotFoundError,
-            match=r"of test/child@1\.0\.0 is not in S3 registry s3://tn-test/payload-sources",
+            match=rf"of test/child@1\.0\.0 is not in S3 registry {s3_root};",
         ):
             registry.put_dataset(child)
     assert not registry.exists("test/child", "1.0.0")
-    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket="tn-test").get("Contents", [])]
+    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket=s3_bucket).get("Contents", [])]
     assert not [key for key in keys if "test/child" in key]
 
 
-def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
+def test_objects_live_under_a_datasets_prefix(s3_bucket, s3_root, tmp_path):
     # Keys sit under <prefix>/datasets/... so the bucket matches the hosted registry's layout and can
     # hold other top-level prefixes beside the datasets.
     registry = S3Registry(s3_root)
     registry.put_dataset(make_dataset())
-    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket="tn-test")["Contents"]]
+    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket=s3_bucket)["Contents"]]
     assert keys  # something was stored
     assert all(key.startswith("registry/datasets/") for key in keys)
 
