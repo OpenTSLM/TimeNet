@@ -1,3 +1,4 @@
+import importlib.metadata
 import json
 import sys
 from typing import Any, TypeVar, cast
@@ -18,8 +19,10 @@ from timenet.manifest import (
     ManifestCounts,
     ManifestFiles,
     PayloadSource,
+    manifest as manifest_module,
     parse_manifest,
 )
+from timenet.manifest.manifest import installed_packages
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -568,6 +571,22 @@ def test_build_env_captures_the_running_python_and_the_installed_packages():
     assert build_env.packages["timenet"]
     assert list(build_env.packages) == sorted(build_env.packages)
     assert build_env.git == _BUILD_ENV.git
+
+
+# installed_packages is the function imported above. The autouse fixture in packages/conftest.py
+# replaces only the module attribute, so these tests run the real code.
+def test_installed_packages_lists_each_named_distribution_sorted_by_name(monkeypatch):
+    class _Dist:
+        def __init__(self, name, version):
+            self.metadata = {"Name": name, "Version": version}
+
+    dists = [_Dist("zarr", "3.0.0"), _Dist(None, "9.9.9"), _Dist("attrs", "25.1.0")]
+    monkeypatch.setattr(manifest_module, "distributions", lambda: dists)
+    assert list(installed_packages().items()) == [("attrs", "25.1.0"), ("zarr", "3.0.0")]
+
+
+def test_installed_packages_reports_the_installed_timenet_version():
+    assert installed_packages()["timenet"] == importlib.metadata.version("timenet")
 
 
 def test_build_env_round_trips():
