@@ -21,7 +21,9 @@
 # options use the same clock.
 #
 # Each question becomes one test task over the cited metric records. Thus the test split holds 750
-# tasks. A task carries the row of the question as `question_index` in its metadata. The released
+# tasks. A task carries the row of the question as `question_index` in its metadata, and the
+# answer options in release order as `answer_options`. Questions with the same options in a
+# different order share one label set, so only the metadata keeps the order. The released
 # charts are in `datadog/arfbench-charts`. The chart tasks of that dataset carry the same
 # `question_index`.
 #

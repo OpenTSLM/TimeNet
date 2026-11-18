@@ -10,6 +10,7 @@
 # Each question becomes one test task over its charts. For a metric pair, the combined chart comes
 # first, then the chart of each metric. A task carries the row of the question as `question_index`
 # in its metadata, the same as the series task in `datadog/arfbench`, so a consumer can pair them.
+# It also carries the answer options in release order as `answer_options`.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench-charts
 dataset_version: 1.0.0

@@ -141,6 +141,21 @@ def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(rele
     assert [label.name for label in tasks[1].label_set.labels] == ["Yes", "No"]
 
 
+def test_the_metadata_keeps_the_option_order_when_a_stored_set_does_not(release, tmp_path):
+    no_yes = {**PRESENCE_ROW, "Unnamed: 0": "2", "options_str": '["No", "Yes"]', "correct_answer": "No"}
+    write_qa_csv(_path(release, "questions").parent, [*ROWS, no_yes])
+    connector = ARFBenchConnector()
+    dataset = connector.convert(release)
+    with TimeFWriter(tmp_path / "built", dataset, values_backend=connector.values_backend) as output:
+        output.write()
+    with TimeFReader(open_local_version(tmp_path / "built/datadog/arfbench/1.0.0")) as reader:
+        tasks = reader.read().get_all()
+
+    assert [task.metadata["answer_options"] for task in tasks] == [["Yes", "No"], ["Yes", "No"], ["No", "Yes"]]
+    assert all(isinstance(task, ClassificationTask) for task in tasks)
+    assert len({id(task.label_set) for task in tasks if isinstance(task, ClassificationTask)}) == 1
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [
