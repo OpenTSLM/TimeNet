@@ -193,7 +193,7 @@ A column that a task type does not use is `NULL`. SQL can filter these columns w
 
 Every classification task has a label set, and `tasks.label_set` stores its name. Each row in
 `label_sets` stores one set with the fields `name`, `labels`, and `multi_label`. The name is unique
-within a release. A set that has no name in Python gets a name that is a hash of its content.
+within a release. If a set has no name in Python, TimeNet uses a hash of its content as the name.
 
 The `labels` field holds one `{name, description}` entry per label, in label order. If a label has
 no description, its `description` is `NULL`.

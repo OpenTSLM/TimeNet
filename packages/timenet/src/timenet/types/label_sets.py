@@ -38,15 +38,15 @@ class LabelSet(TimeFModel):
         )
         ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
 
-    Each name identifies one label set in a dataset. Leave the name out and TimeNet derives one
-    from the labels, so sets with the same labels and ``multi_label`` have the same name, whatever
-    the order of their labels.
+    Each name identifies one label set in a dataset. If you omit the name, TimeNet derives a name
+    from the labels. Sets with the same labels and ``multi_label`` then have the same name, in any
+    label order.
     """
 
     name: NonEmptyString = Field(default="", validate_default=False)
     """The name of the set within a dataset, such as ``sleep_stage``.
 
-    If you leave it out, the name is a hash of the labels, their descriptions and ``multi_label``."""
+    If you omit the name, TimeNet uses a hash of the labels, their descriptions, and ``multi_label``."""
     labels: tuple[Label, ...]
     """The allowed labels. A dataset keeps the order of the first set that it stores under a name."""
     multi_label: StrictBool = False
@@ -113,8 +113,8 @@ class LabelSet(TimeFModel):
 class LabelSetRegistry:
     """The label sets of a dataset, with one set per name.
 
-    The sets stay in the order in which tasks first added them. Two sets with one name are the same
-    set if they have the same labels, descriptions and ``multi_label``, in any order.
+    The sets stay in the order in which tasks first added them. Two sets with the same name are the same
+    set if they have the same labels, descriptions, and ``multi_label``. The label order can differ.
     """
 
     def __init__(self) -> None:
