@@ -278,7 +278,9 @@ def test_zarr_shared_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
 
-    version = _written(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes)
+    version = _written(
+        tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes, shard_target_bytes=2**16
+    )
     back = next(iter(TimeFReader(open_local_version(version)).iter_records())).signals[0]
     assert back.time_offsets_us().tolist() == _HATCH_US
 

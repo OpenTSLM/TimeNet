@@ -341,7 +341,7 @@ def test_streamed_and_batched_tasks_read_back_equally(tmp_path, load):
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_split_value_chunks_round_trip_and_support_range_reads(tmp_path, backend):
-    version_dir = _write(tmp_path, values_backend=backend, chunk_max_bytes=64)
+    version_dir = _write(tmp_path, values_backend=backend, chunk_max_bytes=64, shard_target_bytes=2**16)
     with TimeFReader(open_local_version(version_dir)) as reader:
         signal = next(iter(reader.iter_records())).signals[0]
         expected = signal.to_arrow().slice(3, 7)
