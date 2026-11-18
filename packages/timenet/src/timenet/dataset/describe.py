@@ -68,7 +68,7 @@ def _identity(dataset: TimeFDataset) -> str:
 
 def _counts(dataset: TimeFDataset, unique_series: dict[EntityId, Signal]) -> str:
     task_counts = Counter(str(task.task_type) for task in dataset.tasks)
-    annotation_ids = {ann._content_key for record in dataset.records for ann in record.walk_annotations()}
+    annotation_ids = {ann._content_key for ann in dataset.walk_annotations()}
     spec_counts = Counter(ts.spec.spec_type for ts in unique_series.values())
     fields = {
         "records": str(len(dataset.records)),

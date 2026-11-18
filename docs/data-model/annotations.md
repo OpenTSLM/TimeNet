@@ -23,7 +23,8 @@ occurrence = record.annotate(condition)
 ```
 
 `annotate()` returns the attached occurrence. A Task must refer to this occurrence, not the unattached
-content object.
+content object. Every owner also has `annotation(key)`. It returns the first annotation with that key,
+or `None`.
 
 ## Content and occurrence fields
 

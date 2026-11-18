@@ -1,6 +1,6 @@
 """Declarative modelling tasks over records and signals."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from functools import lru_cache
@@ -280,6 +280,18 @@ class Task(SupportsAnnotate):
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
         return attached
+
+    def annotation_owners(self) -> Iterator[SupportsAnnotate]:
+        """Yield the task and each object that it owns that can hold annotations.
+
+        Yields:
+            The task. A task class with an owned object yields it after the task.
+        """
+        yield self
+
+    def walk_annotations(self) -> Iterator[Annotation]:
+        """Yield the annotation occurrences of each object that :meth:`annotation_owners` yields."""
+        return (annotation for owner in self.annotation_owners() for annotation in owner.annotations)
 
     def spans(self) -> tuple[Span, ...]:
         """Return the task scope followed by every span-valued target."""

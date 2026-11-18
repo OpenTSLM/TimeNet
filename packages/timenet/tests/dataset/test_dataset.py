@@ -179,6 +179,57 @@ def test_derive_schema(make_series):
     assert ds.schema is schema
 
 
+def test_derive_schema_collects_dataset_and_task_annotations(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="age", value=64))
+    ds.annotate(Annotation(key="cohort", value="adult"))
+    task = ds.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
+    task.annotate(Annotation(key="difficulty", value=2))
+
+    schema = ds.derive_schema()
+
+    assert [descriptor.key for descriptor in schema.annotations] == ["cohort", "age", "difficulty"]
+
+
+def test_derive_schema_rejects_a_task_annotation_that_conflicts_with_a_record_annotation(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="name", value=1))
+    task = ds.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
+    task.annotate(Annotation(key="name", value="letters"))
+    with pytest.raises(TimeFValidationError, match="conflicting descriptors"):
+        ds.derive_schema()
+
+
+def test_a_task_stream_adds_its_annotation_keys_to_the_schema(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="age", value=64))
+    task = _classification_task(record, "a")
+    task.annotate(Annotation(key="difficulty", value=2))
+    ds.set_task_stream([ClassificationTask], lambda: iter((task,)))
+    assert [descriptor.key for descriptor in ds.derive_schema().annotations] == ["age"]
+
+    list(ds.iter_streamed_tasks_validated())
+
+    assert ds.schema is not None
+    assert [descriptor.key for descriptor in ds.schema.annotations] == ["age", "difficulty"]
+
+
+def test_a_task_stream_rejects_an_annotation_key_that_conflicts_with_the_schema(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="name", value=1))
+    task = _classification_task(record, "a")
+    task.annotate(Annotation(key="name", value="letters"))
+    ds.set_task_stream([ClassificationTask], lambda: iter((task,)))
+    ds.derive_schema()
+
+    with pytest.raises(TimeFValidationError, match="conflicting descriptors"):
+        list(ds.iter_streamed_tasks_validated())
+
+
 def test_derive_schema_dedupes_specs(make_series):
     ds = _dataset()
     # Two signals of the same modality => one distinct spec.
@@ -828,6 +879,37 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     with pytest.raises(TimeFValidationError):
         ds.add_tasks(tasks=[good, bad])
     assert ds.tasks == ()  # all-or-nothing: the valid one is not registered either
+
+
+def test_annotation_owners_walks_the_dataset_then_records_then_tasks(make_series):
+    ds = _dataset()
+    signal = make_series()
+    source = Source(name="Source", signals=(signal,))
+    record = ds.add_record(record=Record(sources=(source,)))
+    task = ds.add_task(task=_classification_task(record, "a"))
+    answer = ds.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
+    assert list(ds.annotation_owners()) == [ds, record, source, signal, task, answer]
+
+
+def test_annotation_finds_the_first_match_on_every_owner(make_series):
+    ds = _dataset()
+    signal = make_series()
+    source = Source(name="Source", signals=(signal,))
+    record = ds.add_record(record=Record(sources=(source,)))
+    task = _classification_task(record, "a")
+    owners = (ds, record, source, signal, task)
+    for owner in owners:
+        owner.annotate(Annotation(key="name", value=type(owner).__name__))
+        owner.annotate(Annotation(key="name", value="second"))
+    found = [owner.annotation("name") for owner in owners]
+    assert [None if one is None else one.value for one in found] == [
+        "TimeFDataset",
+        "Record",
+        "Source",
+        "Signal",
+        "ClassificationTask",
+    ]
+    assert ds.annotation("other") is None
 
 
 def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_series):
