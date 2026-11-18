@@ -3,11 +3,15 @@
 sync:
 	uv sync --all-groups --all-extras
 
+# pytest-xdist runs the tests in one worker process per CPU. Set PYTEST_WORKERS=0 to run them in
+# this process, for example to use a debugger.
+PYTEST_WORKERS ?= auto
+
 # Core tests in the dev environment. Each connector declares its own dependencies in a
 # requirements.txt, so a connector's tests do not run here. They run in per-connector environments
 # through `make test-connectors`.
 test:
-	uv run pytest --ignore-glob='*/timenet_connectors/datasets/*'
+	uv run pytest -n $(PYTEST_WORKERS) --ignore-glob='*/timenet_connectors/datasets/*'
 
 # The in-memory part of `make test`, for the CI job that has to answer in under a minute. This is a
 # preview of the suite, not a partition of it: every test listed here runs again under `make test`.
@@ -36,7 +40,7 @@ UNIT_TESTS = \
 	packages/timenet/tests/test_ui.py
 
 test-unit:
-	uv run pytest $(UNIT_TESTS)
+	uv run pytest -n $(PYTEST_WORKERS) $(UNIT_TESTS)
 
 # Each connector's tests and type-check run in an environment built from that connector's own
 # requirements, the same way a build runs. See scripts/check_connectors.py.
