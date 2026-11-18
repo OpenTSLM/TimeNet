@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 from pydantic import ConfigDict, ValidationError
 import pytest
 
-from timenet.errors import TimeFValidationError, TimeNetConnectorError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers import (
     CsvDataReader,
     DataRow,
@@ -66,32 +66,24 @@ def test_csv_rejects_ambiguous_rows(tmp_path, content, message):
         list(CsvDataReader(path, Row).iter_rows())
 
 
+_CSV_MODULE_DEFAULT_LIMIT = 128 * 1024
+"""The default cell limit of the csv module, in characters."""
+
+
 @pytest.fixture
-def restore_csv_field_limit():
-    # The limit of the csv module is process-wide, so restore it for the tests that run after.
-    previous = csv.field_size_limit()
+def csv_module_default_limit():
+    # The limit of the csv module is process-wide, so start from the default and restore the limit after.
+    previous = csv.field_size_limit(_CSV_MODULE_DEFAULT_LIMIT)
     yield
     csv.field_size_limit(previous)
 
 
-@pytest.mark.usefixtures("restore_csv_field_limit")
-def test_csv_reads_a_cell_up_to_the_set_field_size_limit(tmp_path):
-    long_name = "x" * (csv.field_size_limit() + 1)
+@pytest.mark.usefixtures("csv_module_default_limit")
+def test_csv_reads_a_cell_longer_than_the_default_limit_of_the_csv_module(tmp_path):
+    long_name = "x" * (_CSV_MODULE_DEFAULT_LIMIT + 1)
     path = tmp_path / "source.csv"
     path.write_text(f"name,count\n{long_name},1\n")
-    with pytest.raises(TimeNetConnectorError, match="field larger than field limit"):
-        list(CsvDataReader(path, Row).iter_rows())
-    CsvDataReader.set_field_size_limit(len(long_name))
     assert list(CsvDataReader(path, Row).iter_rows()) == [Row(name=long_name, count=1)]
-
-
-@pytest.mark.usefixtures("restore_csv_field_limit")
-@pytest.mark.parametrize("chars", [0, -5])
-def test_csv_field_size_limit_must_be_positive(chars):
-    previous = csv.field_size_limit()
-    with pytest.raises(TimeFValidationError, match=f"field size limit must be at least 1 character, got {chars}"):
-        CsvDataReader.set_field_size_limit(chars)
-    assert csv.field_size_limit() == previous
 
 
 def test_csv_checks_expected_header_even_without_rows(tmp_path):

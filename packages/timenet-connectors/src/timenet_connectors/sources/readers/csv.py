@@ -3,10 +3,16 @@
 from collections.abc import Generator, Mapping, Sequence
 import csv
 from pathlib import Path
+import sys
 from typing import TypeGuard
 
-from timenet.errors import TimeFValidationError, TimeNetConnectorError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataReader, RowT
+
+
+_NO_FIELD_SIZE_LIMIT = min(sys.maxsize, 2**31 - 1)
+"""The largest cell limit that the csv module accepts on every platform. On Windows, the limit is a
+32-bit C long, and a larger value raises OverflowError."""
 
 
 class CsvDataReader(DataReader[RowT]):
@@ -22,27 +28,10 @@ class CsvDataReader(DataReader[RowT]):
         super().__init__(path, row_type)
         self.expected_columns = expected_columns
 
-    @staticmethod
-    def set_field_size_limit(chars: int) -> None:
-        """Let every CSV reader in this process read cells of up to ``chars`` characters.
-
-        The ``csv`` module has one cell limit for the whole process, 131,072 characters by default, and
-        it checks the limit while it parses. Call this method before reading a source whose cells are
-        larger, such as a long series in one cell.
-
-        Args:
-            chars: The largest cell to accept, in characters.
-
-        Raises:
-            TimeFValidationError: If ``chars`` is less than 1.
-        """
-        # The csv module accepts zero or a negative limit, and then rejects every nonempty cell.
-        if chars < 1:
-            raise TimeFValidationError(f"the field size limit must be at least 1 character, got {chars}")
-        csv.field_size_limit(chars)
-
     def iter_rows(self) -> Generator[RowT, None, None]:
         """Yield validated rows parsed from CSV cells.
+
+        A cell can have any length. A source can hold a long series in one cell.
 
         Yields:
             Validated source rows.
@@ -50,6 +39,8 @@ class CsvDataReader(DataReader[RowT]):
         Raises:
             TimeNetConnectorError: If the file or a row is invalid.
         """
+        # The csv module limits each cell to 131,072 characters, for the whole process.
+        csv.field_size_limit(_NO_FIELD_SIZE_LIMIT)
         try:
             with self.path.open(encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle, strict=True)
