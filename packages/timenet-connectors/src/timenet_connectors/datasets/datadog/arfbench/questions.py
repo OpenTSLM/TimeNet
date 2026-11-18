@@ -206,11 +206,11 @@ class ARFBenchQuestion:
     def _create_task(self, inputs: tuple[Record, ...], modality: InputModality) -> ClassificationTask:
         """Create a test task that asks for the correct answer from the options of the question.
 
-        The options are the label set of the task. TimeNet names the set from its content, so
-        questions with the same options, in any order, share one set. The set keeps the first order that it
-        sees. The metadata lists the options of this question in the order of the release. The row index in
-        the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``. The interpolation flags
-        describe what an engineer saw. This method does not interpolate.
+        The options are the label set of the task. TimeNet names the set from its content. Questions with the same
+        options share one set, in any order. The set keeps the first order that TimeNet sees. The metadata lists
+        the options of this question in the order of the release. The row index in the metadata pairs the series
+        task with the chart task of ``datadog/arfbench-charts``. The interpolation flags describe what an engineer
+        saw. This method does not interpolate.
 
         Returns:
             The task, not yet added to a dataset.
