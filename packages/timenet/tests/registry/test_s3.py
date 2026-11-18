@@ -5,7 +5,6 @@ boto3 = pytest.importorskip("boto3")
 pytest.importorskip("moto")
 
 import botocore.exceptions  # ruff: ignore[module-import-not-at-top-of-file]
-from moto.server import ThreadedMotoServer  # ruff: ignore[module-import-not-at-top-of-file]
 import pyarrow.fs as pafs  # ruff: ignore[module-import-not-at-top-of-file]
 
 from timenet.client import TimeNet  # ruff: ignore[module-import-not-at-top-of-file]
@@ -23,27 +22,10 @@ from timenet.values_backends import ValuesBackend  # ruff: ignore[module-import-
 
 
 @pytest.fixture
-def s3_root(monkeypatch):
-    """Start a local moto S3 endpoint, point boto3 + pyarrow at it, and yield the registry URI."""
-    server = ThreadedMotoServer(port=0)
-    try:
-        server.start()
-    except Exception as exc:
-        pytest.skip(f"cannot start a local S3 endpoint: {exc}")
-    host, port = server.get_host_and_port()
-    endpoint = f"http://{host}:{port}"
-    for key, value in {
-        "AWS_ENDPOINT_URL": endpoint,
-        "AWS_ENDPOINT_URL_S3": endpoint,
-        "AWS_ACCESS_KEY_ID": "testing",
-        "AWS_SECRET_ACCESS_KEY": "testing",
-        "AWS_SESSION_TOKEN": "testing",
-        "AWS_DEFAULT_REGION": "us-east-1",
-    }.items():
-        monkeypatch.setenv(key, value)
-    boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket="tn-test")
-    yield "s3://tn-test/registry"
-    server.stop()
+def s3_root(s3_endpoint):
+    """Create the ``tn-test`` bucket on the shared moto endpoint and return the registry URI."""
+    boto3.client("s3", endpoint_url=s3_endpoint).create_bucket(Bucket="tn-test")
+    return "s3://tn-test/registry"
 
 
 @pytest.mark.parametrize("entry_point", ["open", "load"])

@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -67,3 +68,39 @@ def registry_root(tmp_path) -> Path:
         with TimeFWriter(tmp_path, dataset) as writer:
             writer.write()
     return tmp_path
+
+
+@pytest.fixture(scope="session")
+def _moto_server() -> Iterator[str]:
+    """Start one local moto S3 endpoint for the whole session and yield its URL.
+
+    Stopping a ``ThreadedMotoServer`` blocks for about half a second, so one server per test costs
+    seconds across the suite. Sharing the server changes no state: moto keeps one process-global
+    backend however many servers run.
+    """
+    pytest.importorskip("moto")
+    from moto.server import ThreadedMotoServer  # ruff: ignore[import-outside-top-level]
+
+    server = ThreadedMotoServer(port=0)
+    try:
+        server.start()
+    except Exception as exc:
+        pytest.skip(f"cannot start a local S3 endpoint: {exc}")
+    host, port = server.get_host_and_port()
+    yield f"http://{host}:{port}"
+    server.stop()
+
+
+@pytest.fixture
+def s3_endpoint(_moto_server: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Point boto3 and pyarrow at the shared moto endpoint and return its URL."""
+    for key, value in {
+        "AWS_ENDPOINT_URL": _moto_server,
+        "AWS_ENDPOINT_URL_S3": _moto_server,
+        "AWS_ACCESS_KEY_ID": "testing",
+        "AWS_SECRET_ACCESS_KEY": "testing",
+        "AWS_SESSION_TOKEN": "testing",
+        "AWS_DEFAULT_REGION": "us-east-1",
+    }.items():
+        monkeypatch.setenv(key, value)
+    return _moto_server
