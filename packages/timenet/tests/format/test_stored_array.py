@@ -39,8 +39,9 @@ def _arrays(reader):
 
 @pytest.fixture(params=["parquet", "zarr"])
 def stored(tmp_path, request):
-    # Small chunks split the long series into several Parquet chunks.
-    dataset, version_dir = _write(tmp_path, values_backend=request.param, chunk_max_bytes=64)
+    # Small chunks split the long series into several Parquet chunks. A small shard keeps the Zarr
+    # shard index small: with the default shard size, it has an entry for 2 million 64-byte chunks.
+    dataset, version_dir = _write(tmp_path, values_backend=request.param, chunk_max_bytes=64, shard_target_bytes=2**16)
     expected = {signal.id: signal.to_arrow() for record in dataset.records for signal in record.signals}
     with TimeFReader(open_local_version(version_dir)) as reader:
         yield reader, _arrays(reader), expected
@@ -316,7 +317,7 @@ def test_read_step_ranges_keep_no_decoded_payload_alive(stored):
 
 
 def test_a_zarr_series_across_storage_chunks_is_copied_once(tmp_path, monkeypatch):
-    _, version_dir = _write(tmp_path, values_backend="zarr", chunk_max_bytes=64)
+    _, version_dir = _write(tmp_path, values_backend="zarr", chunk_max_bytes=64, shard_target_bytes=2**16)
     ranges = []
     original = ZarrValuesReader._read_range
 
