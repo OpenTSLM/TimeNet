@@ -22,7 +22,7 @@ import pint
 from pydantic import BeforeValidator, StrictStr
 
 from timenet.errors import TimeFValidationError
-from timenet.json import JsonMapping, validate_json_mapping
+from timenet.json import JsonMapping, freeze_json_mapping
 from timenet.types._fields import ValueField
 from timenet.types._model import TimeFModel
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
@@ -101,11 +101,11 @@ class Annotation:
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
     metadata: JsonMapping = field(default_factory=dict)
-    """Optional metadata that is part of the reusable content."""
+    """Optional immutable metadata that is part of the reusable content."""
     confidence: float | None = field(default=None, compare=False)
     """Optional confidence for this particular application."""
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
-    """Optional metadata for this particular application."""
+    """Optional immutable metadata for this particular application."""
 
     # cls is typed as a plain type: with the class final, a checker would otherwise report a
     # subclass twice, once as a final-class error and once as a bad argument to this method.
@@ -131,12 +131,9 @@ class Annotation:
                 the annotation has neither a value nor a span.
         """
         object.__setattr__(self, "unit", normalize_unit(self.unit))
-        object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
-        object.__setattr__(
-            self,
-            "occurrence_metadata",
-            validate_json_mapping(self.occurrence_metadata),
-        )
+        # Annotation content cannot change, even through a dict or a list that the caller still holds.
+        object.__setattr__(self, "metadata", freeze_json_mapping(self.metadata))
+        object.__setattr__(self, "occurrence_metadata", freeze_json_mapping(self.occurrence_metadata))
         if self.span is not None and not isinstance(self.span, TimeSpan):
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"

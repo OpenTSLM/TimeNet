@@ -362,7 +362,7 @@ def _annotated_a():
 
 
 @pytest.mark.parametrize("edit", [remove_records, remove_signals])
-def test_an_edit_holds_copies_with_metadata_of_their_own(edit):
+def test_an_edit_owns_its_objects_metadata_and_annotation_occurrences(edit):
     dataset = _annotated_a()
     a = dataset.records[0]
     edited = _without_b(edit, dataset)
@@ -371,20 +371,16 @@ def test_an_edit_holds_copies_with_metadata_of_their_own(edit):
     originals = [a, a.sources[0], a.signals[0], dataset, dataset.tasks[0]]
     for holder, original in zip(holders, originals, strict=True):
         assert holder is not original
+        # Equal annotations, but each copy owns its own occurrences.
         assert holder.annotations == original.annotations
         assert not {id(item) for item in holder.annotations} & {id(item) for item in original.annotations}
-        for annotation in holder.annotations:
-            _change(annotation.metadata)
-            _change(annotation.occurrence_metadata)
     # The Signal copy has the ID of the original and reads its stored values.
     assert record.signals[0].id == a.signals[0].id
     assert record.signals[0]._values is a.signals[0]._values
+    # Record, Source, and Signal metadata stays mutable, so each copy holds its own.
     for holder in holders[:3]:
         _change(holder.metadata)
-    unchanged = {"by": {"name": "a"}}
-    assert [original.metadata for original in originals[:3]] == [unchanged] * 3
-    annotations = [annotation for original in originals for annotation in original.annotations]
-    assert [(item.metadata, item.occurrence_metadata) for item in annotations] == [(unchanged, unchanged)] * 5
+    assert [original.metadata for original in originals[:3]] == [{"by": {"name": "a"}}] * 3
 
 
 @pytest.mark.parametrize("edit", [remove_records, remove_signals])

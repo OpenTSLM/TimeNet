@@ -101,9 +101,9 @@ def test_inline_text_takes_only_a_string(value):
         InlineText(value)
 
 
-@pytest.mark.parametrize("value", ["ab", ("a", "b"), ["a", 1]])
-def test_inline_text_list_takes_only_a_list_of_strings(value):
-    with pytest.raises(TimeFValidationError, match="list of strings"):
+@pytest.mark.parametrize("value", ["ab", ["a", 1], ("a", 1), {"a"}])
+def test_inline_text_list_takes_only_a_list_or_tuple_of_strings(value):
+    with pytest.raises(TimeFValidationError, match="list or a tuple of strings"):
         InlineTextList(value)
 
 
@@ -322,12 +322,6 @@ def test_value_type_and_modality_inference_read_no_text():
     assert prompt.reads == labels.reads == 0
 
 
-def test_a_text_annotation_equals_its_copies():
-    annotation = Annotation(key="label", value="sleep")
-    assert annotation == copy.deepcopy(annotation)
-    assert annotation == pickle.loads(pickle.dumps(annotation))
-
-
 def test_annotations_sharing_a_key_can_be_found_in_a_list():
     sleep = Annotation(key="label", value="sleep")
     wake = Annotation(key="label", value="wake")
@@ -400,3 +394,12 @@ def test_a_lazy_text_without_a_length_learns_it_from_one_read():
 def test_a_lazy_handle_rejects_a_bad_function_length_or_result(make, message):
     with pytest.raises(TimeFValidationError, match=message):
         make()
+
+
+def test_an_inline_text_list_keeps_its_own_copy():
+    strings = ["a"]
+    texts = InlineTextList(strings)
+    strings.append("b")
+    texts.read().append("c")
+    assert texts.read() == ["a"]
+    assert InlineTextList(("a",)) == texts

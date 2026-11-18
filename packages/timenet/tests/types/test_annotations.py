@@ -1,9 +1,10 @@
+import copy
 from dataclasses import dataclass, replace
 import math
 import pickle
 from typing import Literal
 
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 import pytest
 
 from timenet.errors import TimeFValidationError
@@ -101,11 +102,6 @@ def test_frozen():
         ann.value = 2  # ty: ignore[invalid-assignment]
 
 
-def test_picklable():
-    ann = Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0))
-    assert pickle.loads(pickle.dumps(ann)) == ann
-
-
 def test_presets_are_constants_or_builder_functions():
     # A constant is one piece of content: every occurrence shares its content key.
     assert type(HEALTHY_ANNOTATION) is Annotation
@@ -135,17 +131,6 @@ def test_annotation_cannot_be_subclassed():
 
 def test_annotation_is_final_for_type_checkers():
     assert getattr(Annotation, "__final__", False) is True
-
-
-def test_replace_and_pickle_keep_a_constant_annotation_intact():
-    sick = replace(HEALTHY_ANNOTATION, value="sick")
-    assert type(sick) is Annotation
-    assert isinstance(sick.value, InlineText)
-    assert sick.value.read() == "sick"
-    restored = pickle.loads(pickle.dumps(HEALTHY_ANNOTATION))
-    assert type(restored) is Annotation
-    assert isinstance(restored.value, InlineText)
-    assert restored == HEALTHY_ANNOTATION
 
 
 def test_equal_text_gives_equal_content_keys():
@@ -223,3 +208,58 @@ def test_value_type_of_rejects_maps_and_non_string_lists():
 def test_value_type_of_rejects_unsupported_type():
     with pytest.raises(TimeFValidationError, match="unsupported annotation value type"):
         value_type_of(object())
+
+
+def test_both_metadata_fields_keep_a_frozen_copy():
+    rater: dict[str, JsonValue] = {"name": "a"}
+    run: list[JsonValue] = [1]
+    annotation = Annotation(key="k", value=1, metadata={"rater": rater}, occurrence_metadata={"run": run})
+    rater["name"] = "b"
+    run.append(2)
+    assert annotation.metadata == {"rater": {"name": "a"}}
+    assert annotation.occurrence_metadata == {"run": [1]}
+    frozen_rater, frozen_run = annotation.metadata["rater"], annotation.occurrence_metadata["run"]
+    assert isinstance(frozen_rater, dict) and isinstance(frozen_run, list)
+    with pytest.raises(TypeError, match="cannot change"):
+        frozen_rater["name"] = "c"
+    with pytest.raises(TypeError, match="cannot change"):
+        frozen_run.append(2)
+
+
+def test_replace_builds_a_new_annotation_with_frozen_metadata():
+    # The documented way to change an annotation is to build a new one.
+    original = Annotation(key="condition", value="healthy", metadata={"a": [1]})
+    changed = replace(original, value="sick", metadata={**original.metadata, "a": [1, 2]})
+    assert type(changed) is Annotation
+    assert isinstance(changed.value, InlineText)
+    assert changed.value.read() == "sick"
+    assert original.metadata == {"a": [1]}
+    items = changed.metadata["a"]
+    assert isinstance(items, list)
+    with pytest.raises(TypeError, match="cannot change"):
+        items.append(3)
+
+
+@pytest.mark.parametrize(
+    "copy_annotation", [lambda value: pickle.loads(pickle.dumps(value)), copy.deepcopy], ids=["pickle", "deepcopy"]
+)
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        HEALTHY_ANNOTATION,
+        Annotation(key="labels", value=["a", "b"], metadata={"a": [1]}, occurrence_metadata={"b": {"c": 1}}),
+        Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)),
+    ],
+    ids=["text", "text-list-with-metadata", "span"],
+)
+def test_pickle_and_deepcopy_keep_the_value_and_frozen_metadata(annotation, copy_annotation):
+    restored = copy_annotation(annotation)
+    assert type(restored) is Annotation
+    assert restored == annotation
+    assert type(restored.value) is type(annotation.value)
+    for metadata in (restored.metadata, restored.occurrence_metadata):
+        with pytest.raises(TypeError, match="cannot change"):
+            metadata["added"] = True
+    for nested in (*restored.metadata.values(), *restored.occurrence_metadata.values()):
+        with pytest.raises(TypeError, match="cannot change"):
+            nested.clear()
