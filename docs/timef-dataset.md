@@ -237,7 +237,9 @@ lead_i.annotate(
 ## Schema and persistence
 
 `derive_schema()` collects the time-series specifications, annotation descriptors, and concrete Task
-types found in the dataset. It does not load Signal values.
+types found in the dataset. Annotation descriptors come from every owner: the Dataset, Records,
+Sources, Signals, and Tasks. The Tasks of a task stream are not read here. The writer adds their
+keys to the schema while it writes them. It does not load Signal values.
 
 Write a version with the declarative helper:
 

@@ -1,6 +1,6 @@
 """The :class:`Record` type: one logical unit of time-series data."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -164,13 +164,20 @@ class Record(SupportsAnnotate):
         for source in self.walk_sources():
             yield from sorted(source.signals, key=lambda signal: signal.name)
 
+    def annotation_owners(self) -> Iterator[SupportsAnnotate]:
+        """Yield this Record, then each Source followed by its Signals.
+
+        Yields:
+            Each object of the Record hierarchy that can hold annotations.
+        """
+        yield self
+        for source in self.walk_sources():
+            yield source
+            yield from source.signals
+
     def walk_annotations(self) -> Iterable[Annotation]:
         """Yield annotation occurrences from this Record, its Sources, and its Signals."""
-        yield from self.annotations
-        for source in self.walk_sources():
-            yield from source.annotations
-            for signal in source.signals:
-                yield from signal.annotations
+        return (annotation for owner in self.annotation_owners() for annotation in owner.annotations)
 
     @property
     def has_absolute_time(self) -> bool:
