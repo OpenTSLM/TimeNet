@@ -241,6 +241,10 @@ If `multi_label=False`, the default, a target must contain exactly one label. If
 a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
 label applies. The order of labels does not matter.
 
+A label set has a `name`. If you leave it out, TimeNet names the set after a hash of its labels,
+their descriptions, and `multi_label`. Sets with the same content then share one name, so you can
+build a set for each task and TimeF stores each distinct set once.
+
 When the dataset adds or streams a task, it makes sure that the target follows the rules of its
 label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
 must contain exactly one label.
@@ -249,8 +253,10 @@ Labels come from the targets stored directly on the task or from the text of its
 annotations.
 
 Tasks can share the same label set object. Each name identifies one label set within a dataset.
-If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
-error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
+Two sets with the same name must have the same labels, descriptions, and `multi_label`. The order of
+the labels can differ, and the dataset keeps the order of the first set that it sees. If two
+different sets have the same name, `add_task()`, the task stream, and the writer raise an error.
+TimeF stores each set once. The reader gives tasks that use the same set a shared object.
 
 ### Answer and rationale
 

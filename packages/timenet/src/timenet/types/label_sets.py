@@ -1,9 +1,11 @@
 """The allowed labels for a classification target."""
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Hashable, Iterator, Sequence
+import hashlib
+import json
 from typing import Self
 
-from pydantic import StrictBool, model_validator
+from pydantic import Field, StrictBool, model_validator
 
 from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
@@ -36,13 +38,17 @@ class LabelSet(TimeFModel):
         )
         ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
 
-    Each name identifies one label set in a dataset.
+    Each name identifies one label set in a dataset. Leave the name out and TimeNet derives one
+    from the labels, so sets with the same labels and ``multi_label`` have the same name, whatever
+    the order of their labels.
     """
 
-    name: NonEmptyString
-    """The name of the set within a dataset, such as ``sleep_stage``."""
+    name: NonEmptyString = Field(default="", validate_default=False)
+    """The name of the set within a dataset, such as ``sleep_stage``.
+
+    If you leave it out, the name is a hash of the labels, their descriptions and ``multi_label``."""
     labels: tuple[Label, ...]
-    """The allowed labels in a fixed order."""
+    """The allowed labels. A dataset keeps the order of the first set that it stores under a name."""
     multi_label: StrictBool = False
     """If ``False``, a target holds exactly one label from the set.
 
@@ -51,11 +57,25 @@ class LabelSet(TimeFModel):
 
     @model_validator(mode="after")
     def _valid_set(self) -> Self:
+        what = f"label set {self.name!r}" if self.name else "label set"
         if not self.labels:
-            raise ValueError(f"label set {self.name!r} must list at least one label")
+            raise ValueError(f"{what} must list at least one label")
         if len(set(self.names)) != len(self.labels):
-            raise ValueError(f"label set {self.name!r} lists a label more than once")
+            raise ValueError(f"{what} lists a label more than once")
+        if not self.name:
+            object.__setattr__(self, "name", self._derived_name())  # ruff: ignore[unnecessary-dunder-call] - the model is frozen
         return self
+
+    def _derived_name(self) -> str:
+        # Label names are unique in a set, so sorting the pairs fixes their order.
+        labels = sorted((label.name, label.description) for label in self.labels)
+        text = json.dumps([self.multi_label, labels], separators=(",", ":"), ensure_ascii=False)
+        return f"labels_{hashlib.sha256(text.encode()).hexdigest()[:32]}"
+
+    @property
+    def _content_key(self) -> tuple[Hashable, ...]:
+        """What makes two sets the same set, without the name: the labels in any order and ``multi_label``."""
+        return (self.multi_label, frozenset((label.name, label.description) for label in self.labels))
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -93,7 +113,8 @@ class LabelSet(TimeFModel):
 class LabelSetRegistry:
     """The label sets of a dataset, with one set per name.
 
-    The sets stay in the order in which tasks first added them.
+    The sets stay in the order in which tasks first added them. Two sets with one name are the same
+    set if they have the same labels, descriptions and ``multi_label``, in any order.
     """
 
     def __init__(self) -> None:
@@ -103,7 +124,7 @@ class LabelSetRegistry:
     def register_or_reuse_matching_label_set(self, label_set: LabelSet) -> LabelSet:
         """Store a label set by name.
 
-        If the registry already holds an equal set with this name, return that set.
+        If the registry already holds a set with this name and the same content, return that set.
 
         Returns:
             The set that the registry holds under the name.
@@ -112,7 +133,7 @@ class LabelSetRegistry:
             TimeFValidationError: If a different set already has the same name.
         """
         known = self._by_name.setdefault(label_set.name, label_set)
-        if known is not label_set and known != label_set:
+        if known is not label_set and known._content_key != label_set._content_key:
             raise TimeFValidationError(
                 f"label set {label_set.name!r} differs from another set with that name. "
                 "A name stands for one label set in a dataset"

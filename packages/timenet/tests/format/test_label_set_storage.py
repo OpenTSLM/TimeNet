@@ -292,3 +292,28 @@ def test_the_reader_rejects_a_label_set_on_another_task_type(release_copy):
 
     with pytest.raises(TimeFFormatError, match="answer task 2 has a label set"):
         _read_tasks(release_copy)
+
+
+def test_sets_with_the_same_labels_in_another_order_are_stored_once(tmp_path):
+    dataset, record = _dataset()
+    yes_no = LabelSet(labels=(Label(name="Yes"), Label(name="No")))
+    no_yes = LabelSet(labels=(Label(name="No"), Label(name="Yes")))
+    dataset.add_tasks(
+        tasks=[
+            ClassificationTask(inputs=(record,), targets=("Yes",), label_set=yes_no),
+            ClassificationTask(inputs=(record,), targets=("No",), label_set=no_yes),
+        ]
+    )
+    path = tmp_path / "control.duckdb"
+    _write(dataset, path)
+
+    with connect_control(path, read_only=True) as connection:
+        audit_control_database(connection, require_chunks=False)
+        rows = connection.execute("SELECT name, labels FROM label_sets").fetchall()
+    assert rows == [(yes_no.name, [{"name": "Yes", "description": None}, {"name": "No", "description": None}])]
+
+    first, second = _read_tasks(path)
+    assert first.label_set == yes_no
+    assert first.label_set is second.label_set
+    assert second.targets is not None
+    assert [target.read() for target in second.targets] == ["No"]
