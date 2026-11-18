@@ -8,7 +8,7 @@ from itertools import count, islice
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, assert_never, cast
-from weakref import WeakValueDictionary
+from weakref import WeakValueDictionary, ref
 
 import duckdb
 import numpy as np
@@ -39,7 +39,8 @@ from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
     ArrayHandle,
-    LabelSetRegistry,
+    ClassificationTask,
+    LabelSet,
     ObjectKind,
     Task,
     TSCorrespondenceTask,
@@ -205,6 +206,89 @@ class _HierarchyBatches:
         self.sources.flush()
         self.axes.flush()
         self.signals.flush()
+
+
+class _LabelSetRows:
+    """The ``label_sets`` rows of one write, one row for each distinct label set.
+
+    Equal sets (see :meth:`LabelSet._content_key`) get one id, in the order that tasks first use them.
+    The row keeps the labels of the first set. The stored annotations are all the occurrences of the
+    first set, then each occurrence of a later equal set that differs from every stored one in a field.
+    A set object that many tasks share is checked and added once. The caller's sets do not change.
+    """
+
+    def __init__(self, ids: Iterator[int]) -> None:
+        """Start with no label sets.
+
+        Args:
+            ids: The storage ids for new label sets.
+        """
+        self._new_ids = ids
+        self._sets: dict[Hashable, tuple[dict[str, object], list[Annotation], set[Hashable]]] = {}
+        self._known: dict[int, tuple[ref[LabelSet], int]] = {}
+
+    def register(self, label_set: LabelSet) -> int:
+        """Add a label set and its annotations.
+
+        Returns:
+            The stored id of the set.
+
+        Raises:
+            TimeFValidationError: If the set is not valid. A set can change after a task gets it.
+        """  # ruff: ignore[docstring-extraneous-exception] - _validate raises it
+        known = self._known.get(id(label_set))
+        if known is not None and known[0]() is label_set:
+            return known[1]
+        label_set._validate()
+        key = label_set._content_key()
+        stored = self._sets.get(key)
+        if stored is None:
+            row: dict[str, object] = {
+                "label_set_id": next(self._new_ids),
+                "labels": [label.model_dump() for label in label_set.labels],
+                "multi_label": label_set.multi_label,
+            }
+            occurrences = list(label_set.annotations)
+            self._sets[key] = (row, occurrences, {_occurrence_key(annotation) for annotation in occurrences})
+        else:
+            row, occurrences, held = stored
+            for annotation in label_set.annotations:
+                occurrence = _occurrence_key(annotation)
+                if occurrence not in held:
+                    held.add(occurrence)
+                    occurrences.append(annotation)
+        label_set_id = cast("int", row["label_set_id"])
+        object_id = id(label_set)
+        self._known[object_id] = (ref(label_set, lambda _: self._known.pop(object_id, None)), label_set_id)
+        return label_set_id
+
+    def write(
+        self, connection: duckdb.DuckDBPyConnection, annotations: list[tuple[ObjectKind, int | None, Annotation]]
+    ) -> None:
+        """Insert the rows and queue the annotations of each set.
+
+        Args:
+            connection: The open write transaction.
+            annotations: The annotation triples that the writer collects. This method adds to them.
+        """
+        insert_rows(connection, TABLES["label_sets"], [row for row, _, _ in self._sets.values()])
+        for row, occurrences, _ in self._sets.values():
+            label_set_id = cast("int", row["label_set_id"])
+            annotations.extend((ObjectKind.LABEL_SET, label_set_id, annotation) for annotation in occurrences)
+
+
+def _occurrence_key(annotation: Annotation) -> tuple[Hashable, ...]:
+    """Return a key that is equal for two occurrences only if every field of them is equal.
+
+    Returns:
+        The hashable key.
+    """
+    return (
+        annotation._content_key,
+        annotation.source,
+        annotation.confidence,
+        json.dumps(annotation.occurrence_metadata, sort_keys=True),
+    )
 
 
 class DuckDBControlWriter:
@@ -493,14 +577,13 @@ class DuckDBControlWriter:
             TimeFValidationError: If a task refers to a Record or Signal outside the dataset.
                 Also if the dataset registered a different Record or Signal object under that id.
                 Also if two tasks share an id, or a task derives from itself or a task outside the dataset.
-                Also if two tasks use different label sets with the same name.
         """
         # Weak: if no other task names a streamed task, Python can free it after the writer writes it.
         written: WeakValueDictionary[int, Task] = WeakValueDictionary()
         dependencies: list[tuple[int, int, Task]] = []
         annotation_refs: list[_AnnotationRef] = []
         task_counts: dict[str, int] = {}
-        label_sets = LabelSetRegistry()
+        label_sets = _LabelSetRows(self._storage_ids["label_set"])
         index = _TaskValidationIndex(dataset)
         for batch in _task_batches(tasks_source):
             task_rows: list[dict[str, object]] = []
@@ -511,7 +594,6 @@ class DuckDBControlWriter:
                 TimeFDataset._check_signal_refs(task, index)
                 # A task can change after add_task, so check its labels and its label set again.
                 task.check_targets()
-                task.register_label_set(label_sets)
                 task_id = task.id
                 written[task_id] = task
                 task_type = str(task.task_type)
@@ -526,6 +608,9 @@ class DuckDBControlWriter:
                         **self._scope_columns(task, signal_ids),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
+                        "label_set_id": (
+                            label_sets.register(task.label_set) if isinstance(task, ClassificationTask) else None
+                        ),
                         "rationale": self._pack(ObjectKind.TASK, task_id, PackedField.RATIONALE, task.rationale),
                         "metadata": _json(task.metadata),
                     }
@@ -561,8 +646,8 @@ class DuckDBControlWriter:
             insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
-        # Tasks refer to a label set by its name, so the sets can follow the tasks that use them.
-        insert_rows(connection, TABLES["label_sets"], [label_set.model_dump() for label_set in label_sets])
+        # Tasks refer to a label set by its id, so the sets can follow the tasks that use them.
+        label_sets.write(connection, annotations)
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()

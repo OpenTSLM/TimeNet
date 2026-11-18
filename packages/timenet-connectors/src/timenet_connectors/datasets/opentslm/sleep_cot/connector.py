@@ -36,7 +36,6 @@ SPLITS_PATH = Path(__file__).with_name("splits.json")
 # The release writes the stage codes of the Rechtschaffen and Kales manual. The prompts and the
 # rationales write the names in the descriptions.
 SLEEP_STAGE = LabelSet(
-    name="sleep_stage",
     labels=(
         Label(name="W", description="Wake"),
         Label(name="N1", description="Non-REM stage 1"),
@@ -45,6 +44,7 @@ SLEEP_STAGE = LabelSet(
         Label(name="N4", description="Non-REM stage 4"),
         Label(name="REM", description="REM sleep"),
     ),
+    annotations=(Annotation(key="name", value="sleep_stage"),),
 )
 # OpenTSLM converted the microvolts of Sleep-EDF to volts and kept every second sample of 100 Hz.
 EEG = TimeSeriesSpec(spec_type="eeg", name="EEG", unit_value=ureg.volt, dtype="float64")

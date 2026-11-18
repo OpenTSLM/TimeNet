@@ -1,6 +1,7 @@
 """Declarative modelling tasks over records and signals."""
 
 from collections.abc import Iterable, Iterator, Mapping
+from copy import copy as shallow_copy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from functools import lru_cache
@@ -11,9 +12,9 @@ import pint
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._fields import ValueField
-from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
+from timenet.types.annotations import Annotation, SupportsAnnotate, _copy_annotation, value_type_of
 from timenet.types.ids import EntityId, assigned_id
-from timenet.types.label_sets import LabelSet, LabelSetRegistry
+from timenet.types.label_sets import LabelSet
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -285,7 +286,8 @@ class Task(SupportsAnnotate):
         """Yield the entities of this task that can carry annotations: the task, then any entity that it holds.
 
         Yields:
-            The task. A task class that holds another annotatable entity yields it after the task.
+            The task. A task class that holds another annotatable entity, such as a label set, yields it after the
+            task.
         """
         yield self
 
@@ -371,15 +373,6 @@ class Task(SupportsAnnotate):
     def check_targets(self) -> None:
         """Make sure that the final targets follow the rules of this task class."""
 
-    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
-        """Add the label set of the task to the dataset's label sets.
-
-        Only a classification task has a label set.
-
-        Args:
-            label_sets: The label sets of the dataset so far.
-        """
-
 
 @final
 @dataclass(kw_only=True)
@@ -419,8 +412,7 @@ class ClassificationTask(Task):
         for value in values:
             if not isinstance(value, TextHandle):
                 raise TimeFValidationError(
-                    f"{name} has label set {self.label_set.name!r}, so each label must be text, "
-                    f"not {type(value).__name__}"
+                    f"{name} has {self.label_set}, so each label must be text, not {type(value).__name__}"
                 )
             labels.append(value.read())
         try:
@@ -428,19 +420,32 @@ class ClassificationTask(Task):
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
 
-    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
-        """Add the label set of the task to the dataset's label sets.
+    def annotation_owners(self) -> Iterator[SupportsAnnotate]:
+        """Yield the task, then its label set.
+
+        Yields:
+            The task and its label set.
+        """
+        yield self
+        yield self.label_set
+
+    def with_references(self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]) -> Self:
+        """Return a copy of the task that references the given Records and Signals, by ID.
+
+        See :meth:`Task.with_references`. The copy also gets its own copy of the label set and of its
+        annotations, so a change to the set of the copy leaves the set of the task as it is.
 
         Args:
-            label_sets: The label sets of the dataset so far.
+            records: The Records for the copy, by ID.
+            signals: The Signals for the copy, by ID.
 
-        Raises:
-            TimeFValidationError: If a different set already has the same name.
+        Returns:
+            The copy.
         """
-        try:
-            label_sets.register_or_reuse_matching_label_set(self.label_set)
-        except TimeFValidationError as exc:
-            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
+        copy = super().with_references(records, signals)
+        copy.label_set = shallow_copy(self.label_set)
+        copy.label_set.annotations = tuple(_copy_annotation(annotation) for annotation in self.label_set.annotations)
+        return copy
 
 
 @final

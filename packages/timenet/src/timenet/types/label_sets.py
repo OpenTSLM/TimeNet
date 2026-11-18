@@ -1,12 +1,12 @@
 """The allowed labels for a classification target."""
 
-from collections.abc import Iterator, Sequence
-from typing import Self
-
-from pydantic import StrictBool, model_validator
+from collections.abc import Hashable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import TypeVar
 
 from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
+from timenet.types.annotations import Annotation, SupportsAnnotate
 from timenet.types.wire import NonEmptyString
 
 
@@ -19,7 +19,43 @@ class Label(TimeFModel):
     """What the label means, such as ``The subject is awake.``."""
 
 
-class LabelSet(TimeFModel):
+_Item = TypeVar("_Item")
+
+
+def _as_tuple(value: object, item_type: type[_Item]) -> tuple[_Item, ...]:
+    """Return the items of a label set field as a tuple.
+
+    Returns:
+        The items. :meth:`LabelSet._validate` checks their type.
+
+    Raises:
+        TimeFValidationError: If the value is one item, a string, a mapping, or not iterable.
+    """
+    if isinstance(value, (item_type, str, Mapping)) or not isinstance(value, Iterable):
+        raise TimeFValidationError(
+            f"a label set takes a list of {item_type.__name__} items, got {type(value).__name__} {value!r}"
+        )
+    return tuple(value)
+
+
+def _as_label(item: object) -> object:
+    """Turn a plain string into a label without a description. Leave every other item as it is.
+
+    Returns:
+        The label, or the item. :meth:`LabelSet._validate` checks its type.
+
+    Raises:
+        TimeFValidationError: If the string is empty.
+    """
+    if not isinstance(item, str):
+        return item
+    if not item:
+        raise TimeFValidationError("a label set cannot have an empty label")
+    return Label(name=item)
+
+
+@dataclass(init=False, eq=False)
+class LabelSet(SupportsAnnotate):
     """The allowed labels for a classification target.
 
     A target must contain one label unless ``multi_label=True``.
@@ -27,40 +63,127 @@ class LabelSet(TimeFModel):
     Tasks that ask the same kind of question share one label set::
 
         SLEEP_STAGE = LabelSet(
-            name="sleep_stage",
-            labels=(
-                Label(name="awake", description="The subject is awake."),
-                Label(name="non_rem_sleep"),
-                Label(name="rem_sleep"),
-            ),
+            [Label(name="awake", description="The subject is awake."), "non_rem_sleep", "rem_sleep"],
+            annotations=(Annotation(key="name", value="sleep_stage"),),
         )
         ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
 
-    Each name identifies one label set in a dataset.
+    A plain string is a label without a description, so ``LabelSet(["yes", "no"])`` is enough when no label
+    needs one.
+
+    A label set has no name. Two sets with the same labels (in any order, with the same descriptions)
+    and the same ``multi_label`` are the same set, so ``==`` is true for them. A dataset stores them once,
+    with the label order of the first of them that it writes. Annotations are not part of that identity.
     """
 
-    name: NonEmptyString
-    """The name of the set within a dataset, such as ``sleep_stage``."""
     labels: tuple[Label, ...]
-    """The allowed labels in a fixed order."""
-    multi_label: StrictBool = False
+    """The allowed labels in order. A dataset keeps the order of the first equal set that it writes."""
+    multi_label: bool = False
     """If ``False``, a target holds exactly one label from the set.
 
     If ``True``, a target holds all labels from the set that apply.
     An empty target means that no label applies."""
+    annotations: tuple[Annotation, ...] = field(default=(), compare=False)
+    """Annotations that describe the set, such as ``Annotation(key="name", value="sleep_stage")``.
 
-    @model_validator(mode="after")
-    def _valid_set(self) -> Self:
+    An annotation cannot have a span. The set holds its own occurrence of each annotation.
+    When a dataset holds several equal sets, it stores each distinct annotation occurrence of them once."""
+
+    def __init__(
+        self,
+        labels: Iterable[Label | str],
+        *,
+        multi_label: bool = False,
+        annotations: Iterable[Annotation] = (),
+    ) -> None:
+        """Build a label set, make sure that it is valid, and attach the annotations.
+
+        Args:
+            labels: The allowed labels in order. A plain string is a label without a description.
+            multi_label: Whether a target can hold more than one label.
+            annotations: Annotations that describe the set.
+
+        Raises:
+            TimeFValidationError: If the set is not valid (see :meth:`_validate`).
+        """  # ruff: ignore[docstring-extraneous-exception] - _validate raises it
+        self.labels = tuple(_as_label(label) for label in _as_tuple(labels, Label))  # ty: ignore[invalid-assignment]
+        self.multi_label = multi_label
+        self.annotations = _as_tuple(annotations, Annotation)
+        self._validate()
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
+
+    def _validate(self) -> None:
+        """Make sure that the set is valid. The writer calls this again, because a set can change after it is built.
+
+        Raises:
+            TimeFValidationError: If a label is not a Label, the set has no label or repeats a name,
+                ``multi_label`` is not a bool, or an annotation is not an Annotation or has a span.
+        """
+        for label in self.labels:
+            if not isinstance(label, Label):
+                raise TimeFValidationError(f"a label set takes Label objects, got {type(label).__name__}")
         if not self.labels:
-            raise ValueError(f"label set {self.name!r} must list at least one label")
+            raise TimeFValidationError("a label set must list at least one label")
         if len(set(self.names)) != len(self.labels):
-            raise ValueError(f"label set {self.name!r} lists a label more than once")
-        return self
+            raise TimeFValidationError(f"{self} lists a label more than once")
+        if not isinstance(self.multi_label, bool):
+            raise TimeFValidationError(f"{self} multi_label must be a bool, got {type(self.multi_label).__name__}")
+        for annotation in self.annotations:
+            self._check_annotation(annotation)
+
+    def _check_annotation(self, annotation: object) -> None:
+        """Make sure that an annotation can describe the set.
+
+        Raises:
+            TimeFValidationError: If the annotation is not an Annotation or has a span.
+        """
+        if not isinstance(annotation, Annotation):
+            raise TimeFValidationError(f"{self} takes Annotation objects, got {type(annotation).__name__}")
+        if annotation.span is not None:
+            raise TimeFValidationError(
+                f"annotation {annotation.key!r} has a span, but {self} takes annotations without a span"
+            )
+
+    def annotate(self, annotation: Annotation) -> Annotation:
+        """Attach one annotation occurrence and return it.
+
+        Returns:
+            The attached occurrence.
+
+        Raises:
+            TimeFValidationError: If the annotation has a span. A label set has no timeline.
+        """  # ruff: ignore[docstring-extraneous-exception] - _check_annotation raises it
+        self._check_annotation(annotation)
+        attached = annotation._new_occurrence()
+        self.annotations = (*self.annotations, attached)
+        return attached
 
     @property
     def names(self) -> tuple[str, ...]:
         """The name of each label, in label order."""
         return tuple(label.name for label in self.labels)
+
+    def __str__(self) -> str:
+        """Return the labels of the set, for error messages."""
+        return f"label set {list(self.names)}"
+
+    def __eq__(self, other: object) -> bool:
+        """Return whether the sets have the same labels, in any order, and the same ``multi_label``."""
+        if not isinstance(other, LabelSet):
+            return NotImplemented
+        return self._content_key() == other._content_key()
+
+    __hash__ = None
+
+    def _content_key(self) -> tuple[Hashable, ...]:
+        """Return the key that makes two sets equal.
+
+        The key ignores label order and annotations.
+
+        Returns:
+            The hashable key.
+        """
+        return (self.multi_label, frozenset((label.name, label.description) for label in self.labels))
 
     def check_targets(self, targets: Sequence[str]) -> None:
         """Make sure that the target labels follow the rules of this set.
@@ -82,60 +205,9 @@ class LabelSet(TimeFModel):
         names = set(self.names)
         unknown = sorted({label for label in targets if label not in names})
         if unknown:
-            raise TimeFValidationError(f"labels not in label set {self.name!r}: {unknown}")
+            raise TimeFValidationError(f"labels not in {self}: {unknown}")
         if not self.multi_label and len(targets) != 1:
-            raise TimeFValidationError(f"{len(targets)} labels, but label set {self.name!r} takes exactly one")
+            raise TimeFValidationError(f"{len(targets)} labels, but {self} takes exactly one")
         repeated = sorted({label for label in targets if targets.count(label) > 1})
         if repeated:
-            raise TimeFValidationError(f"repeated labels of label set {self.name!r}: {repeated}")
-
-
-class LabelSetRegistry:
-    """The label sets of a dataset, with one set per name.
-
-    The sets stay in the order in which tasks first added them.
-    """
-
-    def __init__(self) -> None:
-        """Start with no label sets."""
-        self._by_name: dict[str, LabelSet] = {}
-
-    def register_or_reuse_matching_label_set(self, label_set: LabelSet) -> LabelSet:
-        """Store a label set by name.
-
-        If the registry already holds an equal set with this name, return that set.
-
-        Returns:
-            The set that the registry holds under the name.
-
-        Raises:
-            TimeFValidationError: If a different set already has the same name.
-        """
-        known = self._by_name.setdefault(label_set.name, label_set)
-        if known is not label_set and known != label_set:
-            raise TimeFValidationError(
-                f"label set {label_set.name!r} differs from another set with that name. "
-                "A name stands for one label set in a dataset"
-            )
-        return known
-
-    def copy(self) -> "LabelSetRegistry":
-        """Return a separate registry with the same label sets.
-
-        The dataset uses the copy to check a batch before adding its tasks.
-        If a task fails, the dataset discards the copy and keeps its original registry.
-
-        Returns:
-            The copy.
-        """
-        copy = LabelSetRegistry()
-        copy._by_name = dict(self._by_name)
-        return copy
-
-    def __iter__(self) -> Iterator[LabelSet]:
-        """Iterate over the sets in the order in which tasks first added them.
-
-        Returns:
-            The iterator.
-        """
-        return iter(self._by_name.values())
+            raise TimeFValidationError(f"repeated labels of {self}: {repeated}")
