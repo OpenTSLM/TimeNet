@@ -78,12 +78,16 @@ class DatasetVersion:
 class _ArrowFileSystem(ArrowFSWrapper):
     """An fsspec view of a pyarrow filesystem that Zarr can read from.
 
-    It works around two faults of ``ArrowFSWrapper`` that make a Zarr release on S3 unreadable:
+    It works around two faults of fsspec's ``ArrowFSWrapper`` that make a Zarr release on S3 unreadable.
+    ``test_version.py`` has a strict ``xfail`` test for each fault, which fails when fsspec fixes it.
+    When a test fails, raise the fsspec minimum in ``pyproject.toml`` to the release with the fix. Then
+    remove the matching override and the test.
 
     - ``fsid`` reads ``host`` and ``port``, which only the HDFS filesystem has. Zarr wraps the mapper's
       filesystem in fsspec's ``AsyncFileSystemWrapper``, which reads ``fsid``.
-    - ``cat_file`` drops ``start`` and ``end`` and returns the whole file. Zarr reads each shard index
-      as the last bytes of its shard.
+    - ``cat_file`` opens a non-seekable stream when a range starts at 0 or gives only an end, then seeks
+      in it. Zarr reads byte ranges from offset 0. Before fsspec 2026.7.0, ``cat_file`` also dropped
+      ``start`` and ``end``, so the override calls the ``cat_file`` of the base class.
     """
 
     @cached_property
