@@ -23,7 +23,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
 from timenet_connectors.download import ensure_archive
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
-from timenet_connectors.splitting import FrozenSplits
+from timenet_connectors.splitting import PrecomputedSplits
 
 
 M4_CAPTION_URL = "https://polybox.ethz.ch/index.php/s/MT3y9WdEebT8wfj/download/M4TimeSeriesCaptionDatasetV02.zip"
@@ -162,8 +162,8 @@ class M4CaptionReader:
             Each series with its caption and split.
         """
         captioned = self.read_captioned_series()
-        frozen = FrozenSplits[str].read_from_file(self.splits_path)
-        splits = frozen.assign_splits([series.m4_id for series in captioned], source_sha256=M4_CAPTION_SHA256)
+        precomputed = PrecomputedSplits[str].read_from_file(self.splits_path)
+        splits = precomputed.assign_splits([series.m4_id for series in captioned], source_sha256=M4_CAPTION_SHA256)
         return [
             M4CaptionSeries(
                 m4_id=series.m4_id,

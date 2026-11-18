@@ -21,7 +21,7 @@ from timenet_connectors.datasets.opentslm.m4_caption.connector import (
     M4CaptionConnector,
     M4CaptionReader,
 )
-from timenet_connectors.splitting import FrozenSplits
+from timenet_connectors.splitting import PrecomputedSplits
 
 
 _SERIES_IDS = {
@@ -145,8 +145,8 @@ _DATASET_SERIES_COUNTS = {"D": 3974, "H": 414, "M": 47943, "Q": 23604, "W": 359,
 dataset leaves out 253 daily, 57 monthly and 396 quarterly series, whose caption is an error message."""
 
 
-def test_the_frozen_split_is_of_the_pinned_release_and_has_a_tenth_of_each_frequency_in_validation_and_test():
-    splits = FrozenSplits[str].read_from_file(SPLITS_PATH)
+def test_the_precomputed_split_is_of_the_pinned_release_and_has_a_tenth_of_each_frequency_in_validation_and_test():
+    splits = PrecomputedSplits[str].read_from_file(SPLITS_PATH)
     assert splits.source_sha256 == M4_CAPTION_SHA256
     for m4_ids in (splits.validation, splits.test):
         counts = Counter(m4_id[0] for m4_id in m4_ids)

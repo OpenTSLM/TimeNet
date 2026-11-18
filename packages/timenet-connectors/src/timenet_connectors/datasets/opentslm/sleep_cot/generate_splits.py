@@ -7,7 +7,7 @@
 #     "scikit-learn==1.7.2",
 # ]
 # ///
-"""Write splits.json, the frozen train, validation and test split of sleep-cot.
+"""Write splits.json, the precomputed train, validation and test split of sleep-cot.
 
 sleep-cot does not store the train/val/test splits explicitly. Rather they give a random seed and
 allow scikit to do the split. This is hard to reproduce, because it means the official split is

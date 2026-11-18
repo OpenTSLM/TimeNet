@@ -1,4 +1,4 @@
-"""Write splits.json.xz, the frozen train, validation and test split of m4-caption.
+"""Write splits.json.xz, the precomputed train, validation and test split of m4-caption.
 
 The release archive stores no split. This script makes an 80/10/10 split with StratifiedSplitter,
 stratified by M4 frequency, so that validation and test each hold a tenth of every frequency.

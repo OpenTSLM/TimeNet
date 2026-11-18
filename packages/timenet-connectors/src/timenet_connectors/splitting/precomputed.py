@@ -1,4 +1,4 @@
-"""A split that a script computed once and froze into a file beside its connector."""
+"""A split that a script computed once and wrote to a file beside its connector."""
 
 from collections import Counter
 from collections.abc import Sequence
@@ -16,8 +16,8 @@ K = TypeVar("K", int, str)
 """How a split file names a sample: a row position or a source id."""
 
 
-class FrozenSplits(BaseModel, Generic[K]):
-    """The validation and test samples of a split that a script froze into a file.
+class PrecomputedSplits(BaseModel, Generic[K]):
+    """The validation and test samples of a split that a script computed once and wrote to a file.
 
     Use it when the source has no split of its own and the published split depends on a library that
     the connector should not pin, such as a seeded shuffle. The script runs the published code once

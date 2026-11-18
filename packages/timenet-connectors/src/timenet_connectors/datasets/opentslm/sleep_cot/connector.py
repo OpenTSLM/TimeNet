@@ -22,7 +22,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
-from timenet_connectors.splitting import FrozenSplits
+from timenet_connectors.splitting import PrecomputedSplits
 
 
 SLEEP_COT_URL = "https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R/download"
@@ -162,7 +162,7 @@ class SleepCotRow:
 
 @dataclass(frozen=True)
 class SleepCotReader:
-    """Reader for the release CSV and the frozen split of its rows."""
+    """Reader for the release CSV and the precomputed split of its rows."""
 
     csv_path: Path
     splits_path: Path
@@ -193,7 +193,7 @@ class SleepCotReader:
         Returns:
             The split for each of the n_rows rows, in file order.
         """
-        splits = FrozenSplits[NonNegativeInt].read_from_file(self.splits_path)
+        splits = PrecomputedSplits[NonNegativeInt].read_from_file(self.splits_path)
         return splits.assign_splits(range(n_rows), source_sha256=SLEEP_COT_SHA256)
 
 
@@ -207,7 +207,7 @@ class SleepCotConnector(BaseConnector[SleepCotReader]):
             cache_dir: Directory for the downloaded file.
 
         Returns:
-            A reader for the release CSV and the frozen split of the connector.
+            A reader for the release CSV and the precomputed split of the connector.
         """
         artifact = Artifact(SLEEP_COT_URL, cache_dir / "sleep_cot.csv", sha256=SLEEP_COT_SHA256)
         (csv_path,) = await download_files([artifact])
