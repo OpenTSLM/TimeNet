@@ -36,7 +36,6 @@ SAMPLES_PER_WINDOW = 128
 
 # The label order is the order of the OpenTSLM training prompt.
 ACTIVITY = LabelSet(
-    name="activity",
     labels=(
         Label(name="biking"),
         Label(name="lying"),

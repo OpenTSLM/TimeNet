@@ -36,7 +36,6 @@ SPLITS_PATH = Path(__file__).with_name("splits.json")
 # The release writes the stage codes of the Rechtschaffen and Kales manual. The prompts and the
 # rationales write the names in the descriptions.
 SLEEP_STAGE = LabelSet(
-    name="sleep_stage",
     labels=(
         Label(name="W", description="Wake"),
         Label(name="N1", description="Non-REM stage 1"),

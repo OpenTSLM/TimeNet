@@ -153,7 +153,7 @@ def _pick(built, kind, label_set=None):
 
 
 def _label_sets(built):
-    return {one.label_set.name for one in built if isinstance(one, ClassificationTask)}
+    return [one.label_set for one in built if isinstance(one, ClassificationTask)]
 
 
 def test_age_is_a_scalar_with_a_unit():
@@ -190,7 +190,7 @@ def test_a_telemetry_night_carries_its_condition():
 
 def test_a_cassette_recording_carries_no_condition_task():
     built = list(tasks.build_record_tasks(_RECORDING_ID, _CASSETTE_FACTS, []))
-    assert "condition" not in _label_sets(built)
+    assert tasks.CONDITIONS not in _label_sets(built)
 
 
 def test_provenance_becomes_no_task():
@@ -203,7 +203,7 @@ def test_provenance_becomes_no_task():
     # This recording can answer these two questions. The builder draws nothing from the four
     # provenance keys that the input carries.
     assert [type(one) for one in built] == [ScalarPredictionTask, ClassificationTask]
-    assert _label_sets(built) == {"sex"}
+    assert _label_sets(built) == [tasks.SEXES]
 
 
 def test_a_missing_age_raises_rather_than_dropping_the_question():

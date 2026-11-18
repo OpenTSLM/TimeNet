@@ -122,8 +122,7 @@ where the recording came from.
 ### How the connector writes them
 
 Each classification task has a set of allowed target labels. The three sets contain eight sleep
-stages, two sexes, and two study conditions. Each `LabelSet` uses its annotation key as its name:
-`sleep_stage`, `sex`, or `condition`.
+stages, two sexes, and two study conditions. TimeNet names each `LabelSet` from its labels.
 
 Tasks that ask the same question share one label set. Each target must contain exactly one label
 from that set. TimeNet enforces this requirement when it writes the dataset.
