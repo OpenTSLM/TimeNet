@@ -264,6 +264,8 @@ class LazyText(_LazyTextBehaviour[str], TextHandle):
 
     A connector can use this handle to load text from a source file.
     The writer stores the text in a separate payload file so readers can load it on request.
+    The function must return the same text on every call: an annotation reads it once for the
+    cached key used to match annotations, and keeps that key.
     """
 
     __slots__ = ()
@@ -282,6 +284,7 @@ class LazyTextList(_LazyTextBehaviour[list[str]], TextListHandle):
 
     A connector can use this handle to load strings from a source file.
     The writer stores the list in a separate payload file so readers can load it on request.
+    The function must return the same strings on every call, as for :class:`LazyText`.
     """
 
     __slots__ = ()

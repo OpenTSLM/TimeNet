@@ -55,6 +55,7 @@ from timenet.types.access import AccessRequirement, access_requirements, effecti
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
+from timenet.types.text import LazyText
 from timenet.writer import TimeFWriter
 
 
@@ -2438,3 +2439,49 @@ def test_read_and_imported_annotations_cannot_change(tmp_path):
             annotation.metadata["added"] = True
         with pytest.raises(TypeError, match="cannot change"):
             annotation.occurrence_metadata["added"] = True
+
+
+def test_sharing_finds_dataset_annotations_added_by_import(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        child.annotate_shared(Annotation(key="local", value="kept"))
+        child.import_from(reader, tasks=[ids["question"]])
+        imported = next(annotation for annotation in child.annotations if annotation.key == "release-note")
+        assert child.annotate_shared(Annotation(key="release-note", value="first release")) is imported
+
+
+def test_failed_task_import_invalidates_shared_annotation_matches(tmp_path, monkeypatch):
+    parent, ids = _tasks_tree()
+    discarded = []
+    validate = TimeFDataset._validate_task_batch
+
+    def refuse(self, batch):
+        validate(self, batch)
+        discarded.append(self.annotate_shared(Annotation(key="release-note", value="first release")))
+        raise TimeFValidationError("refused for the test")
+
+    reads = []
+
+    def load():
+        reads.append(1)
+        return "kept"
+
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        record = child.add_record(record=Record(sources=(Source(name="device", signals=(_signal("s"),)),)))
+        kept = child.annotate(Annotation(key="local", value=LazyText(load)))
+        with monkeypatch.context() as patch:
+            patch.setattr(TimeFDataset, "_validate_task_batch", refuse)
+            with pytest.raises(TimeFValidationError, match="refused for the test"):
+                child.import_from(reader, tasks=[ids["question"]])
+        # The rollback restores the earlier occurrences without reading their text.
+        assert child.annotations == (kept,)
+        assert reads == []
+        # The occurrence that the failed import attached is no longer on the dataset.
+        with pytest.raises(TimeFValidationError, match="not attached to its dataset"):
+            child.add_task(task=AnswerTask(inputs=(record,), targets=("x",), input_annotations=(discarded[0],)))
+        replacement = child.annotate_shared(Annotation(key="release-note", value="first release"))
+        assert replacement is not discarded[0]
+        assert child.annotations == (kept, replacement)
+        assert reads == []
