@@ -14,6 +14,7 @@
   file records the commit that it was built from.
 - ``github-release`` creates the tag and the GitHub release of each released package. It reads the
   notes from the merged PR and attaches the files in ``dist/``.
+- ``next-dev`` opens the PR for the next development version of the released packages.
 
 PyGithub makes the GitHub calls and GitPython makes the git calls. Only ``uv`` and git-cliff run as
 subprocesses, because they have no Python API. The option ``--dry-run`` does not push and does not
@@ -32,7 +33,7 @@ from typing import NoReturn
 
 from connector_notes import commits, notes as connector_notes, repo
 from git import Repo
-from github import Auth, Github, UnknownObjectException
+from github import Auth, Github, GithubException, UnknownObjectException
 from github.Repository import Repository
 
 
@@ -115,10 +116,12 @@ def github() -> Repository:
     return Github(auth=Auth.Token(os.environ["GH_TOKEN"])).get_repo(os.environ["GITHUB_REPOSITORY"])
 
 
-def open_pr(branch: str, title: str, body: str, *, dry_run: bool) -> None:
+def open_pr(branch: str, title: str, body: str, *, dry_run: bool, auto_merge: bool = False) -> None:
     """Commit the working tree to ``branch``, push it, and open its PR against main.
 
-    Update the PR if it is already open.
+    Update the PR if it is already open. With ``auto_merge``, the PR merges when it has the
+    approvals and checks that main needs. If the repository does not allow auto-merge, this only
+    warns.
     """
     if dry_run:
         print(f"{title}\n{branch}\n\n{body}")
@@ -137,7 +140,14 @@ def open_pr(branch: str, title: str, body: str, *, dry_run: bool) -> None:
         pull.edit(body=body)
     else:
         pull = remote.create_pull(title=title, body=body, head=branch, base="main")
-    append("GITHUB_STEP_SUMMARY", f"### {title}\n\n{pull.html_url}\n")
+    note = ""
+    if auto_merge:
+        try:
+            pull.enable_automerge(merge_method="SQUASH")
+            note = "\nIt merges when it has the approvals that main needs.\n"
+        except GithubException as error:
+            print(f"::warning title=Auto-merge is off::{error.data}")
+    append("GITHUB_STEP_SUMMARY", f"### {title}\n\n{pull.html_url}\n{note}")
 
 
 def next_version(git: Repo, package: str, requested: str) -> str:
@@ -319,6 +329,28 @@ def smoke() -> None:
             print("::endgroup::")
 
 
+def next_dev(entries: dict[str, str], *, dry_run: bool) -> None:
+    """Open the PR that moves each released package to its next development version.
+
+    Do this only for packages that main still holds at the released version.
+    """
+    names, tags = [], []
+    for package, version in entries.items():
+        if version_of(package) != version:
+            print(f"main already moved {package} past {version}.")
+            continue
+        run("uv", "version", "--package", package, "--bump", "minor", "--bump", "dev=0", "--frozen")
+        names.append(f"{package} {version_of(package).removesuffix('.dev0')}")
+        tags.append(f"{package}-v{version}")
+    if not names:
+        return
+    run("uv", "lock")
+    title = f"chore: start {' and '.join(names)} development"
+    released = " ".join(f"{package}={version}" for package, version in entries.items())
+    body = f"This PR moves the released packages to their next development version ({released} released). Then builds from main do not look like a release."
+    open_pr("chore/start-development-after-" + "-".join(tags), title, body, dry_run=dry_run, auto_merge=True)
+
+
 def parse(text: str) -> dict[str, str]:
     """Read ``package=version`` pairs.
 
@@ -338,6 +370,9 @@ if __name__ == "__main__":
     commands.add_parser("released")
     commands.add_parser("smoke")
     commands.add_parser("github-release").add_argument("--released", required=True)
+    next_dev_parser = commands.add_parser("next-dev")
+    next_dev_parser.add_argument("--released", required=True)
+    next_dev_parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.command == "prepare":
         prepare(args.package, args.version, dry_run=args.dry_run)
@@ -345,5 +380,7 @@ if __name__ == "__main__":
         released()
     elif args.command == "smoke":
         smoke()
-    else:
+    elif args.command == "github-release":
         github_release(parse(args.released))
+    else:
+        next_dev(parse(args.released), dry_run=args.dry_run)
