@@ -31,14 +31,8 @@ def _convert(tmp_path: Path, rows: list[dict] | None = None) -> TimeFDataset:
     return TimeSeriesExam1Connector().convert([HubFileRef(path, "test")])
 
 
-def _classification_tasks(dataset: TimeFDataset) -> list[ClassificationTask]:
-    tasks = list(dataset.tasks)
-    assert all(isinstance(task, ClassificationTask) for task in tasks)
-    return [task for task in tasks if isinstance(task, ClassificationTask)]
-
-
 def _task_for(dataset: TimeFDataset, row_id: int) -> ClassificationTask:
-    return next(task for task in _classification_tasks(dataset) if task.metadata["id"] == row_id)
+    return next(task for task in dataset.tasks_of(ClassificationTask) if task.metadata["id"] == row_id)
 
 
 def test_metadata():
@@ -60,14 +54,14 @@ def test_records_and_tasks_match_rows(tmp_path):
     dataset = _convert(tmp_path)
     rows = _source_rows()
     two_series = [row for row in rows if row["ts1"] is not None]
-    assert len(dataset.tasks) == len(rows)
+    assert len(dataset.tasks) == len(dataset.tasks_of(ClassificationTask)) == len(rows)
     assert len(dataset.records) == len(rows) + len(two_series)
     roles = [(record.metadata["row_id"], record.metadata["role"]) for record in dataset.records]
     expected = [(row["id"], role) for row in rows for role in (("ts1", "ts2") if row["ts1"] is not None else ("ts",))]
     assert roles == expected
 
 
-def test_lazy_values_equal_source(tmp_path):
+def test_series_values_equal_source(tmp_path):
     dataset = _convert(tmp_path)
     by_key: dict[object, list[float]] = {
         (row["id"], column): row[column] for row in _source_rows() for column in _SERIES_COLUMNS
@@ -94,7 +88,7 @@ def test_records_are_not_shared_between_rows(tmp_path):
 def test_task_fields(tmp_path):
     dataset = _convert(tmp_path)
     rows = {row["id"]: row for row in _source_rows()}
-    for task in _classification_tasks(dataset):
+    for task in dataset.tasks_of(ClassificationTask):
         row = rows[task.metadata["id"]]
         assert task.split == Split.TEST
         assert task.targets == (row["answer"],)
@@ -119,7 +113,7 @@ def test_options_and_answers_survive_a_write(tmp_path):
     with TimeFReader(open_local_version(registry.root / "autonlab/timeseriesexam1/1.0.0")) as reader:
         stored = reader.read()
     rows = {row["id"]: row for row in _source_rows()}
-    for task in _classification_tasks(stored):
+    for task in stored.tasks_of(ClassificationTask):
         row = rows[task.metadata["id"]]
         assert set(task.label_set.names) == set(row["options"])
         assert [read_value(target) for target in task.targets or ()] == [row["answer"]]
