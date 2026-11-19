@@ -101,6 +101,13 @@ class CONNECTOR:
 """
 
 
+def _write_dist_info(tmp_path, distribution, value):
+    dist_info = tmp_path / f"{distribution.replace('-', '_')}-0.1.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 0.1\n")
+    (dist_info / "entry_points.txt").write_text(f"[timenet_connectors.datasets]\nroot = {value}\n")
+
+
 @pytest.fixture
 def add_datasets_root(tmp_path, monkeypatch):
     """Install a package on sys.path that adds a datasets root through the entry-point group."""
@@ -120,10 +127,7 @@ def add_datasets_root(tmp_path, monkeypatch):
                 (directory / "__init__.py").write_text("")
             (directory / "__init__.py").write_text(_CONNECTOR_INIT.format(dataset_id=dataset_id))
             (directory / "dataset.yaml").write_text(f"dataset_id: {dataset_id}\n")
-        dist_info = tmp_path / f"{distribution.replace('-', '_')}-0.1.dist-info"
-        dist_info.mkdir()
-        (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 0.1\n")
-        (dist_info / "entry_points.txt").write_text(f"[timenet_connectors.datasets]\nacme = {package}.datasets\n")
+        _write_dist_info(tmp_path, distribution, f"{package}.datasets")
         created.append(package)
         return root
 
@@ -135,10 +139,7 @@ def add_datasets_root(tmp_path, monkeypatch):
 
 
 def _add_entry_point(tmp_path, monkeypatch, value):
-    dist_info = tmp_path / "broken_datasets-0.1.dist-info"
-    dist_info.mkdir()
-    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: broken-datasets\nVersion: 0.1\n")
-    (dist_info / "entry_points.txt").write_text(f"[timenet_connectors.datasets]\nbroken = {value}\n")
+    _write_dist_info(tmp_path, "broken-datasets", value)
     monkeypatch.syspath_prepend(str(tmp_path))
 
 
