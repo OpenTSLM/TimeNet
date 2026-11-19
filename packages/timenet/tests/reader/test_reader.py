@@ -31,6 +31,7 @@ import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
+from timenet.format.stored_array import StoredArray
 from timenet.format.stored_values import PackedValueLocator
 from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
@@ -434,7 +435,14 @@ def test_loaded_and_lazy_datasets_are_picklable(tmp_path, monkeypatch, backend, 
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_ids", counting_batch)
     restored = pickle.loads(pickle.dumps(dataset))
-    actual = [signal.to_arrow() for record in restored.records for signal in record.signals]
+    signals = [signal for record in restored.records for signal in record.signals]
+    actual = [signal.to_arrow() for signal in signals]
+    handles = [signal._values for signal in signals]
+    # The restored dataset holds a reader of its own, which nothing else closes.
+    for handle in handles:
+        assert isinstance(handle, StoredArray)
+        assert isinstance(handle.reader, TimeFReader)
+        handle.reader.close()
     assert len(actual) == len(expected)
     assert all(left.equals(right) for left, right in zip(actual, expected, strict=True))
     assert len(calls) == (0 if eager else 1)
