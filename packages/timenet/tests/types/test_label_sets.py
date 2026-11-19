@@ -92,9 +92,9 @@ def test_annotate_attaches_an_occurrence_and_rejects_a_span():
 
 def test_a_classification_task_yields_itself_then_its_label_set():
     task = ClassificationTask(targets=("W",), label_set=STAGES)
-    assert list(task.annotation_owners()) == [task, STAGES]
+    assert list(task.annotatable_entities()) == [task, STAGES]
     answer = AnswerTask(targets=("x",))
-    assert list(answer.annotation_owners()) == [answer]
+    assert list(answer.annotatable_entities()) == [answer]
 
 
 def test_a_copied_task_gets_its_own_label_set():
