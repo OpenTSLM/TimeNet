@@ -3,7 +3,7 @@
 BattLeDIM 2020 (Battle of the Leakage Detection and Isolation Methods) released simulated SCADA
 data of the L-Town network for 2018 and 2019: 33 pressure sensors, 3 flow sensors, 1 tank level
 sensor and 82 automated meter readings, every 5 minutes, and the 33 leaks that the simulation
-contained. The two years form one Record. The leaks become record annotations, and two-week windows
+contained. The two years form one Record. The leaks become dataset annotations, and two-week windows
 of the record become the tasks of :mod:`~timenet_connectors.datasets.kios.battledim.tasks`.
 """
 
@@ -20,9 +20,9 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, TimeInterval, TimeOrigin, TimePoint, TimeSeriesSpec, ureg
-from timenet_connectors.datasets.kios.battledim.source import SCADA_FILES, STEP, Release
-from timenet_connectors.datasets.kios.battledim.tasks import split_windows, window_tasks, windows
+from timenet.types import Annotation, TimeOrigin, TimeSeriesSpec, ureg
+from timenet_connectors.datasets.kios.battledim.source import SCADA_FILES, STEP, Leak, Release
+from timenet_connectors.datasets.kios.battledim.tasks import embargoed, split_windows, window_tasks, windows
 from timenet_connectors.download import Artifact, download_files
 
 
@@ -106,15 +106,50 @@ class BattLeDIMConnector(BaseConnector[BattLeDIMSource]):
         release = Release(raw_refs[0].root)
         dataset = TimeFDataset(metadata=self.metadata())
         record = dataset.add_record(record=self._make_record(release))
+        # The leaks are the answers. They go on the dataset, not on the record that every task reads,
+        # so nothing that serves the record to a model serves them too.
+        for leak in release.leaks:
+            dataset.annotate(self._leak_annotation(release, leak))
         found = windows(release)
         split_of = split_windows(found)
+        skipped = embargoed(found, split_of)
         for window in found:
-            dataset.add_tasks(tasks=window_tasks(release, record, window, split_of[window.index]))
+            if window.index not in skipped:
+                dataset.add_tasks(tasks=window_tasks(release, record, window, split_of[window.index]))
         return dataset
 
     @staticmethod
+    def _leak_annotation(release: Release, leak: Leak) -> Annotation:
+        """Describe one leak as a dataset annotation: its pipe, with the leak list's facts as metadata.
+
+        A dataset annotation has no time span, so the metadata gives each time both as text and as
+        microseconds from the record start. The interval runs from the configured start to the step
+        after the configured end.
+
+        Returns:
+            The annotation, keyed ``leak``.
+        """
+        return Annotation(
+            key="leak",
+            value=leak.pipe,
+            description="One leak of the release: the leaking pipe's EPANET id, with its facts as metadata.",
+            metadata={
+                "leak_type": leak.leak_type,
+                "start": f"{leak.start:%Y-%m-%d %H:%M}",
+                "end": f"{leak.end:%Y-%m-%d %H:%M}",
+                "peak": f"{leak.peak:%Y-%m-%d %H:%M}",
+                "start_us": release.micros(leak.start),
+                "end_exclusive_us": release.micros(leak.end + STEP),
+                "peak_us": release.micros(leak.peak),
+                "hole_diameter_mm": round(leak.diameter_m * 1000, 4),
+                "peak_outflow_m3h": float(release.leak_outflow[leak.pipe].max()),
+                "repaired": leak.repaired,
+            },
+        )
+
+    @staticmethod
     def _make_record(release: Release) -> Record:
-        """Build the one record: a source per sensor type and an annotation set per leak.
+        """Build the one record: a source per sensor type, and no labels.
 
         Returns:
             The record, starting at the first step of 2018.
@@ -122,7 +157,7 @@ class BattLeDIMConnector(BaseConnector[BattLeDIMSource]):
         axis = RegularAxis(period_us=Fraction(int(STEP.total_seconds() * 1_000_000)))
         sources = []
         for kind in SCADA_FILES:
-            columns = release.scada[kind][1]
+            columns = release.scada[kind].columns
             signals = tuple(
                 Signal.from_loader(
                     spec=SPECS[kind],
@@ -134,48 +169,11 @@ class BattLeDIMConnector(BaseConnector[BattLeDIMSource]):
                 for sensor in release.sensors[kind]
             )
             sources.append(Source(name=SOURCE_NAMES[kind], signals=signals))
-        record = Record(
+        return Record(
             sources=tuple(sources),
             start_time=TimeOrigin(release.start),
             metadata={"network": "L-Town", "source_doi": "10.5281/zenodo.4017659"},
         )
-        annotations = []
-        for leak in release.leaks:
-            # From the configured start to the step after the configured end.
-            span = TimeInterval.micros(release.micros(leak.start), release.micros(leak.end + STEP))
-            outflow = release.leak_outflow[leak.pipe]
-            annotations += [
-                Annotation(key="leak_pipe", value=leak.pipe, span=span, description="The leaking pipe's EPANET id."),
-                Annotation(key="leak_type", value=leak.leak_type, span=span, description="abrupt or incipient."),
-                Annotation(
-                    key="leak_hole_diameter",
-                    value=round(leak.diameter_m * 1000, 4),
-                    unit="mm",
-                    span=span,
-                    description="The diameter of the simulated hole.",
-                ),
-                Annotation(
-                    key="leak_peak_outflow",
-                    value=float(outflow.max()),
-                    unit="m^3/h",
-                    span=span,
-                    description="The largest outflow in the leak tables.",
-                ),
-                Annotation(
-                    key="leak_repaired",
-                    value=leak.repaired,
-                    span=span,
-                    description="Whether the leak was repaired before the end of 2019.",
-                ),
-                Annotation(
-                    key="leak_peak",
-                    value=leak.pipe,
-                    span=TimePoint.micros(release.micros(leak.peak)),
-                    description="When the leak reaches its full size; the start, for an abrupt leak.",
-                ),
-            ]
-        record.add_annotations(annotations)
-        return record
 
 
 CONNECTOR = BattLeDIMConnector

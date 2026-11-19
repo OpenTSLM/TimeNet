@@ -35,6 +35,9 @@ _TIME_FORMAT = "%Y-%m-%d %H:%M"
 _LEAK_FIELDS = 6  # linkID, startTime, endTime, leakDiameter (m), leakType, peakTime
 _REPAIR_FIELDS = 2  # linkID, endTime
 _LINK_SECTIONS = frozenset({"[PIPES]", "[PUMPS]", "[VALVES]"})
+# The leak tables keep this leak's outflow for one step after its configured end. The connector keeps
+# the configured end, and README.md lists the difference.
+_END_ONE_STEP_LATE = frozenset({"p800"})
 
 
 def _parse_time(text: str, where: str) -> datetime:
@@ -78,7 +81,7 @@ def read_table(path: Path) -> Table:
         TimeNetConnectorError: If the file has no value column, a cell that is not a timestamp or a
             number, a step that is not 5 minutes, a missing value, or a value that is not finite.
     """
-    with path.open(encoding="utf-8") as handle:
+    with path.open(encoding="utf-8-sig") as handle:
         header = handle.readline().strip().split(";")
     if header[0] != "Timestamp" or len(header) == 1:
         raise TimeNetConnectorError(f"{path.name}: expected a Timestamp column and sensor columns, got {header}")
@@ -163,6 +166,8 @@ def _parse_leak(line: object, where: str) -> Leak:
     )
     if not leak.start <= leak.peak <= leak.end:
         raise TimeNetConnectorError(f"{where}: leak {pipe} peaks outside its start and end")
+    if leak.leak_type == "abrupt" and leak.peak != leak.start:
+        raise TimeNetConnectorError(f"{where}: abrupt leak {pipe} peaks after its start")
     return leak
 
 
@@ -258,17 +263,21 @@ class Release:
             if len(set(self.sensors[kind])) != len(self.sensors[kind]):
                 raise TimeNetConnectorError(f"dataset_configuration.yaml lists a {key} entry twice")
         self.scada = {kind: self._join(name, self.sensors[kind]) for kind, (name, _) in SCADA_FILES.items()}
-        self.start = self.scada["pressure"][0]
-        self.n_steps = len(next(iter(self.scada["pressure"][1].values())))
-        for kind, (start, columns) in self.scada.items():
-            if start != self.start or len(next(iter(columns.values()))) != self.n_steps:
+        self.start = self.scada["pressure"].start
+        self.n_steps = self.scada["pressure"].n_rows
+        for kind, table in self.scada.items():
+            if table.start != self.start or table.n_rows != self.n_steps:
                 raise TimeNetConnectorError(f"the {kind} tables do not cover the pressure tables' time range")
-        times = config.get("times") or {}
+        times = config.get("times")
+        if not isinstance(times, dict):
+            raise TimeNetConnectorError("dataset_configuration.yaml has no times mapping")
         if _parse_time(str(times.get("StartTime")), "times") != self.start or (
             _parse_time(str(times.get("EndTime")), "times") != self.end
         ):
             raise TimeNetConnectorError("dataset_configuration.yaml times differ from the SCADA tables")
         self.leak_outflow = self._join_leaks()
+        # The total outflow of every leak at each step, in m3/h.
+        self.total_outflow = np.sum(list(self.leak_outflow.values()), axis=0)
         self.leaks = self._read_leaks(config)
         self.network = Network(self._path("L-TOWN.inp"))
         self._check_network()
@@ -298,11 +307,11 @@ class Release:
         except yaml.YAMLError as error:
             raise TimeNetConnectorError(f"{name} is not valid YAML") from error
 
-    def _join(self, name: str, sensors: list[str]) -> tuple[datetime, dict[str, np.ndarray]]:
+    def _join(self, name: str, sensors: list[str]) -> Table:
         """Join the 2018 and 2019 tables of one sensor type into one recording.
 
         Returns:
-            The first timestamp, and each sensor's values over both years.
+            One table over both years, with the sensors in configuration order.
 
         Raises:
             TimeNetConnectorError: If the years name other sensors than the configuration lists, or
@@ -317,9 +326,10 @@ class Release:
         first, second = tables
         if second.start != first.start + STEP * first.n_rows:
             raise TimeNetConnectorError(f"{YEARS[1]}_{name}.csv does not continue {YEARS[0]}_{name}.csv")
-        return first.start, {
-            sensor: np.concatenate([first.columns[sensor], second.columns[sensor]]) for sensor in sensors
-        }
+        return Table(
+            start=first.start,
+            columns={sensor: np.concatenate([first.columns[sensor], second.columns[sensor]]) for sensor in sensors},
+        )
 
     def _join_leaks(self) -> dict[str, np.ndarray]:
         """Join the two leak tables into one outflow series per pipe, zero where a year does not list it.
@@ -344,23 +354,15 @@ class Release:
             raise TimeNetConnectorError("the leak tables do not cover the SCADA tables")
         return outflow
 
-    def _read_leaks(self, config: dict) -> list[Leak]:
-        """Read the configured leaks and check them against the leak tables and the repair report.
+    def _read_repairs(self) -> dict[str, datetime]:
+        """Read ``2018_Fixed_Leakages_Report.txt``: one ``linkID, endTime`` line per repaired leak.
 
         Returns:
-            The leaks in order of their start, each marked as repaired or not.
+            The repair time of each listed pipe.
 
         Raises:
-            TimeNetConnectorError: If a configured leak is outside the recording or its leak table,
-                a leak table has a pipe the configuration lacks, or a repair time disagrees.
+            TimeNetConnectorError: If the report is not a list, a line is malformed, or a pipe repeats.
         """
-        # The list opens with a comment line that names the fields, which YAML reads as a null item.
-        lines = [line for line in (config.get("leakages") or []) if line is not None]
-        leaks = [_parse_leak(line, "dataset_configuration.yaml") for line in lines]
-        if len({leak.pipe for leak in leaks}) != len(leaks):
-            raise TimeNetConnectorError("dataset_configuration.yaml lists a pipe in two leaks")
-        if {leak.pipe for leak in leaks} != set(self.leak_outflow):
-            raise TimeNetConnectorError("the leak tables and dataset_configuration.yaml name different pipes")
         # A report of comment lines only, with no repair, reads as an empty YAML document.
         report = self._yaml("2018_Fixed_Leakages_Report.txt") or []
         if not isinstance(report, list):
@@ -373,6 +375,29 @@ class Release:
             if fields[0] in repairs:
                 raise TimeNetConnectorError(f"2018_Fixed_Leakages_Report.txt repairs {fields[0]} twice")
             repairs[fields[0]] = _parse_time(fields[1], "2018_Fixed_Leakages_Report.txt")
+        return repairs
+
+    def _read_leaks(self, config: dict) -> list[Leak]:
+        """Read the configured leaks and check them against the leak tables and the repair report.
+
+        Returns:
+            The leaks in order of their start, each marked as repaired or not.
+
+        Raises:
+            TimeNetConnectorError: If a configured leak is outside the recording or its leak table,
+                a leak table has a pipe the configuration lacks, or a repair time disagrees.
+        """
+        # The list opens with a comment line that names the fields, which YAML reads as a null item.
+        leakages = config.get("leakages")
+        if not isinstance(leakages, list):
+            raise TimeNetConnectorError("dataset_configuration.yaml has no leakages list")
+        lines = [line for line in leakages if line is not None]
+        leaks = [_parse_leak(line, "dataset_configuration.yaml") for line in lines]
+        if len({leak.pipe for leak in leaks}) != len(leaks):
+            raise TimeNetConnectorError("dataset_configuration.yaml lists a pipe in two leaks")
+        if {leak.pipe for leak in leaks} != set(self.leak_outflow):
+            raise TimeNetConnectorError("the leak tables and dataset_configuration.yaml name different pipes")
+        repairs = self._read_repairs()
         checked = []
         for leak in leaks:
             if not self.start <= leak.start <= leak.end <= self.end:
@@ -384,7 +409,8 @@ class Release:
                 raise TimeNetConnectorError(f"leak {leak.pipe} ends in {YEARS[0]} but the repair report lacks it")
             outflow = self.leak_outflow[leak.pipe]
             active = np.flatnonzero(outflow > 0)
-            if len(active) == 0 or active[0] < self.step_of(leak.start) or active[-1] > self.step_of(leak.end) + 1:
+            last_allowed = self.step_of(leak.end) + (1 if leak.pipe in _END_ONE_STEP_LATE else 0)
+            if len(active) == 0 or active[0] < self.step_of(leak.start) or active[-1] > last_allowed:
                 raise TimeNetConnectorError(f"leak {leak.pipe}: its outflow lies outside its configured start and end")
             checked.append(replace(leak, repaired=leak.end < self.end))
         if set(repairs) - {leak.pipe for leak in checked if leak.repaired}:

@@ -1,4 +1,5 @@
 from collections import Counter
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -8,10 +9,12 @@ from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.types import AnswerTask, ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask
+from timenet.types.splits import Split
 from timenet.types.text import read_value
 from timenet_connectors.datasets.kios.battledim import BattLeDIMConnector
 from timenet_connectors.datasets.kios.battledim.connector import BattLeDIMSource
 from timenet_connectors.datasets.kios.battledim.source import Release
+from timenet_connectors.datasets.kios.battledim.tasks import embargoed, split_windows, windows
 
 
 # A synthetic release shaped exactly like the Zenodo files: semicolon-separated CSVs with a decimal
@@ -143,28 +146,34 @@ def test_record_holds_every_sensor_on_one_grid(dataset) -> None:
     assert flow.to_numpy()[5] == pytest.approx(44.04)
 
 
-def test_leaks_become_annotations_over_their_intervals(dataset) -> None:
+def test_leaks_are_dataset_annotations_not_record_labels(dataset) -> None:
     (record,) = dataset.records
-    pipes = [annotation for annotation in record.annotations if annotation.key == "leak_pipe"]
-    assert [annotation.value for annotation in pipes] == ["p3", "p5", "p6"]
-    p3 = pipes[0].span
-    assert p3.start_us == _step("2018-03-05 15:45") * 300_000_000
-    # The interval ends after the repair step, the last step with outflow.
-    assert p3.end_us == (_step("2018-03-23 10:25") + 1) * 300_000_000
-    repaired = {a.span.start_us: a.value for a in record.annotations if a.key == "leak_repaired"}
-    assert sorted(repaired.values()) == [False, False, True]
-    peak = [a for a in record.annotations if a.key == "leak_peak" and a.value == "p5"]
-    assert peak[0].span.start_us == _step("2018-11-15 00:00") * 300_000_000
+    # The record every task reads carries no answers.
+    assert record.annotations == ()
+    leaks = [annotation for annotation in dataset.annotations if annotation.key == "leak"]
+    assert [annotation.value for annotation in leaks] == ["p3", "p5", "p6"]
+    p3 = leaks[0].metadata
+    assert p3["leak_type"] == "abrupt"
+    assert p3["start_us"] == _step("2018-03-05 15:45") * 300_000_000
+    # The interval ends after the repair step, the configured end.
+    assert p3["end_exclusive_us"] == (_step("2018-03-23 10:25") + 1) * 300_000_000
+    assert p3["repaired"] is True
+    assert p3["peak_outflow_m3h"] == pytest.approx(28.4)
+    assert leaks[1].metadata["peak"] == "2018-11-15 00:00"
+    assert leaks[1].metadata["repaired"] is False
 
 
 def test_windows_give_four_tasks_each(dataset) -> None:
     tasks = list(dataset.get_all())
-    # 730 days hold 103 two-week windows that start every 7 days.
+    # 730 days hold 103 two-week windows that start every 7 days. Windows after a held-out target
+    # week of another partition get no tasks (see the embargo test).
+    windows = {task.metadata["window_index"] for task in tasks}
+    assert 90 <= len(windows) < 103
     assert Counter(type(task) for task in tasks) == {
-        ClassificationTask: 103,
-        TemporalLocalizationTask: 103,
-        ScalarPredictionTask: 103,
-        AnswerTask: 103,
+        ClassificationTask: len(windows),
+        TemporalLocalizationTask: len(windows),
+        ScalarPredictionTask: len(windows),
+        AnswerTask: len(windows),
     }
     first = tasks[0]
     assert first.scope.start_us == 0
@@ -239,9 +248,30 @@ def test_dataset_survives_storage_round_trip(dataset, tmp_path: Path) -> None:
         restored = reader.read()
     (record,) = restored.records
     assert record.sources[3].signals[1].to_numpy()[0] == pytest.approx(12.5)
+    assert record.annotations == ()
+    assert [a.metadata["start"] for a in restored.annotations if a.key == "leak"] == [
+        "2018-03-05 15:45",
+        "2018-11-01 00:00",
+        "2019-05-01 12:00",
+    ]
     # The reader returns the tasks in the order the connector added them.
     assert [task.split for task in restored.get_all()] == [task.split for task in dataset.get_all()]
     assert _answers(restored) == _answers(dataset)
+
+
+def test_no_window_sees_a_held_out_target_week_of_another_partition(release_dir: Path, dataset) -> None:
+    release = Release(release_dir)
+    found = windows(release)
+    split_of = split_windows(found)
+    skipped = embargoed(found, split_of)
+    assert skipped
+    kept = {task.metadata["window_index"] for task in dataset.get_all()}
+    assert kept == {window.index for window in found} - skipped
+    for previous, window in pairwise(found):
+        # A window's context week is the target week of the window before it.
+        assert previous.target_start == window.start
+        if window.index in kept and split_of[previous.index] in {Split.VALIDATION, Split.TEST}:
+            assert split_of[previous.index] == split_of[window.index]
 
 
 def test_nearest_sensor_prefers_the_nearer_pipe_end(release_dir: Path) -> None:
