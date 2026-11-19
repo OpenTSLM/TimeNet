@@ -3,7 +3,7 @@
 # BattLeDIM 2020 released two years (2018 and 2019) of simulated SCADA data of the L-Town water
 # network, every 5 minutes: 33 pressure sensors, 3 flow sensors, 1 tank level sensor and 82
 # automated meter readings, plus the 33 leaks the simulation contained. The two years form one
-# record. Each leak is a set of record annotations over its active interval. Two-week windows,
+# record, which holds the sensor signals only. Each leak is one dataset annotation. Two-week windows,
 # one every 7 days, become four tasks each about the last week of the window. The answers come from
 # the leak list, the leak tables and the network model by fixed rules, not from a model.
 #

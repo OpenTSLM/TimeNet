@@ -80,32 +80,39 @@ The configuration lists **33 leaks** *(measured)*:
 
 An **abrupt** leak appears at full size at its start. An **incipient** leak grows from its start until its `peakTime`.
 
-Each leak becomes a set of **record annotations** over its active interval. The interval runs from the configured start to the step after the configured end. For one leak, p800, the outflow runs one step past that end (see below).
-- `leak_pipe`: the pipe's EPANET id.
-- `leak_type`: `abrupt` or `incipient`.
-- `leak_hole_diameter`, in mm.
-- `leak_peak_outflow`, in m³/h: the largest outflow in the leak tables.
-- `leak_repaired`: whether the leak was repaired before the end of 2019.
-- `leak_peak`: a time point at `peakTime`.
+Each leak becomes one **dataset annotation** with the key `leak`. Its value is the pipe's EPANET id, and its metadata holds:
+- `leak_type`: `abrupt` or `incipient`;
+- `start`, `end`, `peak`: the configured times, as text;
+- `start_us`, `end_exclusive_us`, `peak_us`: the same times in microseconds from the record start. The interval runs from the configured start to the step after the configured end;
+- `hole_diameter_mm`;
+- `peak_outflow_m3h`: the largest outflow in the leak tables;
+- `repaired`: whether the leak was repaired before the end of 2019.
 
-**These are answers, never task inputs.**
+**The leaks are answers, so they are not on the record.** Every task reads the record, and anything that serves the record to a model also serves the record's annotations. TimeNet's `TimeFTorchDataset`, for example, returns them in each item. The record therefore holds the sensor signals and nothing else. Each window's answers are in its task targets.
 
 **Consistency checks.** The build fails if any of these disagree:
 - the configuration, the two leak tables and the repair report, which must list every leak that ends in 2018, exactly once;
-- a leak's outflow and its configured start and end;
+- a leak's outflow and its configured start and end (for p800 the leak tables keep one step of outflow after its end, an exception the connector names);
 - a leak pipe and the pipes of `L-TOWN.inp`.
 
-It also fails on a sensor listed twice in the configuration, or a CSV cell that is not a timestamp or a number. The release passes all of these checks.
+It also fails on:
+- an abrupt leak whose peak is not its start;
+- a sensor listed twice in the configuration;
+- a configuration without its `times` mapping or `leakages` list;
+- a CSV cell that is not a timestamp or a number.
+
+The release passes all of these checks.
 
 ## Windows and tasks
 
 **Windows:** a window is 14 days, starting every 7 days.
 - The first week is context; the second week is the **target week**.
 - The recording holds **103 windows** *(measured)*.
-- Every leak start and every repair falls in exactly one target week: 33 starts, 17 repairs. The build checks this and fails otherwise, so no leak drops out of the tasks.
+- Every leak start and every repair falls in exactly one target week: 33 starts, 17 repairs. The build checks this and fails otherwise.
 - 33 windows have a new leak, 16 have a repair, and 59 have neither *(measured)*.
+- **Embargo:** 5 windows get no tasks, because their context week is a held-out target week (see The split). They hold no new leak, but two of them describe a repair (p514, p142), so those two repairs appear in no task.
 
-**Tasks:** each window gives four tasks, all scoped to the window. That is 412 tasks.
+**Tasks:** each of the other 98 windows gives four tasks, all scoped to the window. That is 392 tasks.
 
 | Task | Answer | Source of the answer |
 | --- | --- | --- |
@@ -121,7 +128,13 @@ It also fails on a sensor listed twice in the configuration, or a CSV cell that 
 > to {max outflow in the window} m3/h in this window. The nearest pressure sensor is {sensor}, {n}
 > links away.
 
-For an incipient leak, the sentence opens "A gradually growing leak started on pipe {pipe} on {start}", followed by "and peaked on {peakTime}" if the peak lies inside the window, or "and was still growing at the end of this window" if it does not. A peak after the window is not stated, because the scoped input cannot show it. When the leak tables round the outflow in the window to zero (an incipient leak's first hours), the text says "no measurable outflow yet" instead of a number. This applies to 9 windows *(measured)*.
+**Incipient leaks.** The sentence opens "A gradually growing leak started on pipe {pipe} on {start}". It continues with:
+- "and peaked on {peakTime}" if the peak lies inside the window;
+- "and was still growing at the end of this window" if it does not. A peak after the window is not stated, because the scoped input cannot show it.
+
+**Outflow figures.**
+- An outflow under 0.1 m³/h keeps the leak tables' second decimal, e.g. "0.02 m3/h".
+- When the leak tables hold no outflow at all in the window (an incipient leak's first hours), the text says "no outflow in the leak tables yet". This applies to 3 windows *(measured)*.
 
 *Repair:*
 > The leak on pipe {pipe} was repaired on {end}; its outflow before the repair was {outflow} m3/h.
@@ -154,15 +167,20 @@ The release's own partition was 2018 for training and 2019 for evaluation. **Thi
 - A block holds the same weeks of both years.
 - `StratifiedSplitter` (8/1/1 folds, stratified on "a new leak starts", seed 42) assigns whole blocks.
 
+**Embargo.** Windows overlap by one week: a window's context week is the target week of the window before it.
+- A window gets no tasks when that week is a validation or test target week of a different partition.
+- Otherwise a training window would show the model the signals that a test task asks about.
+- This affects 5 training windows *(measured)*.
+
 **Result** *(measured)*:
 
 | Partition | Windows | With a new leak | Tasks | Calendar blocks |
 | --- | --- | --- | --- | --- |
-| train | 79 | 27 | 316 | 0, 1, 2, 3, 5, 7, 8, 9, 10, 11 |
+| train | 74 | 27 | 296 | 0, 1, 2, 3, 5, 7, 8, 9, 10, 11 |
 | validation | 8 | 3 | 32 | 4 |
 | test | 16 | 3 | 64 | 6, 12 |
 
-**Overlap:** the context week of a window can lie in a neighbouring block, so context weeks can overlap across partitions. Target weeks never do.
+**Remaining overlap:** a held-out window's context week can be a training target week. That shows held-out tasks training data, not the other way round. Target weeks never repeat across partitions.
 
 **One leaked day per block boundary:** the 2019 demand repeats 2018 by calendar date, but 2019 weekdays fall one day later. A 2019 target week (Monday to Sunday) therefore shares one date with the 2018 week before it. Where a block boundary separates partitions, one day of a target week's demand background also appears in the neighbouring partition. Week-aligned windows cannot avoid this.
 
