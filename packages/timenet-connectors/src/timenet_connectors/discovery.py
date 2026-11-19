@@ -47,8 +47,13 @@ def _roots() -> list[_Root]:
     """
     roots = [_Root(_datasets.__name__, list(_datasets.__path__), None)]
     for entry in entry_points(group=DATASETS_ENTRY_POINT_GROUP):
+        if any(root.prefix == entry.value for root in roots):
+            continue
         # find_spec imports the parent packages only, so no connector is imported here.
-        spec = importlib.util.find_spec(entry.value)
+        try:
+            spec = importlib.util.find_spec(entry.value)
+        except ImportError:
+            spec = None
         if spec is None or not spec.submodule_search_locations:
             warnings.warn(
                 f"datasets entry point {entry.name!r} names no package: {entry.value!r}",

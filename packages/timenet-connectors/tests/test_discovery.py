@@ -134,6 +134,29 @@ def add_datasets_root(tmp_path, monkeypatch):
             del sys.modules[name]
 
 
+def _add_entry_point(tmp_path, monkeypatch, value):
+    dist_info = tmp_path / "broken_datasets-0.1.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: broken-datasets\nVersion: 0.1\n")
+    (dist_info / "entry_points.txt").write_text(f"[timenet_connectors.datasets]\nbroken = {value}\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+
+def test_an_entry_point_with_a_missing_package_is_skipped_with_a_warning(tmp_path, monkeypatch):
+    _add_entry_point(tmp_path, monkeypatch, "stale_gone.datasets")
+
+    with pytest.warns(ConnectorCardWarning, match="stale_gone.datasets"):
+        assert "timenet/hello-world" in known_ids()
+    with pytest.warns(ConnectorCardWarning, match="stale_gone.datasets"):
+        assert connector_dir("timenet/hello-world").name == "hello_world"
+
+
+def test_an_entry_point_that_names_the_built_in_root_is_ignored(tmp_path, monkeypatch):
+    _add_entry_point(tmp_path, monkeypatch, "timenet_connectors.datasets")
+
+    assert owning_distribution("timenet/hello-world") is None
+
+
 def test_a_registered_root_adds_its_connectors(add_datasets_root):
     root = add_datasets_root("acme/widget")
 
