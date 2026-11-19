@@ -21,10 +21,12 @@ import warnings
 
 import yaml
 
-from timenet.builders import DATASETS_ENTRY_POINT_GROUP
 from timenet.connectors import BaseConnector
 from timenet.errors import ConnectorCardWarning
 import timenet_connectors.datasets as _datasets
+
+
+DATASETS_ENTRY_POINT_GROUP = "timenet_connectors.datasets"
 
 
 @dataclass(frozen=True)
