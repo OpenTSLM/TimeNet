@@ -13,13 +13,15 @@ The prompt is the question alone. The options are the labels of the task, and ``
 letters that the task does not use.
 """
 
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Self
 
 from pydantic import model_validator
 
 from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.types import ClassificationTask, LabelSet, Split, TimeSeriesSpec, ureg
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
 
@@ -76,17 +78,17 @@ class TimeSeriesExam1Connector(
 ):
     """Build TimeSeriesExam from the pinned test parquet file of its Hugging Face release."""
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Build one Record per series and one classification task per question.
 
         Args:
-            raw_refs: The downloaded test file.
+            files: The downloaded test file.
 
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for row in ParquetDataReader(raw_refs[0].path, _SourceRow).iter_rows():
+        for row in ParquetDataReader(files["test"], _SourceRow).iter_rows():
             inputs = [dataset.add_record(_record(row.id, role, values)) for role, values in row.series.items()]
             dataset.add_task(
                 ClassificationTask(

@@ -296,8 +296,8 @@ PhysioNet connectors extend `BasePhysioNetConnector` for WFDB record I/O. They u
 pull their database archive.
 
 Hugging Face Hub connectors extend `BaseHuggingFaceConnector`. The base downloads the files in
-`SOURCE_FILES` and implements `convert`. The connector implements `convert_files(files)` instead, where
-`files` maps each part name to its local path.
+`SOURCE_FILES`. Its `download` returns a mapping from each part name to its local path. The connector
+implements `convert(self, files)` and reads a file as `files["train"]`.
 
 ## Example connectors
 
@@ -411,7 +411,8 @@ See the [API reference for `timenet.connectors`](api/timenet.connectors.md) for 
 ## Reading source rows
 
 For CSV, JSON arrays, JSON Lines, and Parquet, declare the source fields in a connector-owned
-`DataRow` and read each downloaded file during `convert`. This example reads a list of file references:
+`DataRow` and read each downloaded file during `convert`. This example is from a Hub connector. Its
+`files` maps each part name to its local path:
 
 ```python
 from pydantic import Field
@@ -421,8 +422,8 @@ class SourceRow(DataRow):
     question: str = Field(alias="Question")
     count: int = Field(alias="Count")
 
-for ref in raw_refs:
-    for row in ParquetDataReader(ref.path, SourceRow).iter_rows():
+for path in files.values():
+    for row in ParquetDataReader(path, SourceRow).iter_rows():
         # Convert row.question and row.count into TimeNet objects.
         ...
 ```

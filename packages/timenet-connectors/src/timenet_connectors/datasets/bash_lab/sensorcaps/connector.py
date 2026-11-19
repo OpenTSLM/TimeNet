@@ -274,7 +274,7 @@ class SensorCapsConnector(
 
     SOURCE_ROWS: ClassVar[Mapping[str, int]] = _SOURCE_ROWS
 
-    def convert_files(self, files: Mapping[str, Path]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Index local rows into six-channel Records and a re-iterable caption stream.
 
         Args:

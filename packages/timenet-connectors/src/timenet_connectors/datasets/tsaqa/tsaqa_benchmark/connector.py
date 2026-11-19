@@ -746,7 +746,7 @@ class TSAQAConnector(
 ):
     """Build TSAQA from the pinned train, val and test parquet files of its Hugging Face release."""
 
-    def convert_files(self, files: Mapping[str, Path]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Convert each split file into lazy Records and a stream of one task per row.
 
         Every file is read once up front to check each row and keep its small fields. The source issues
@@ -760,12 +760,8 @@ class TSAQAConnector(
             A dataset with the provenance annotations, the Records, and a stream of every task.
 
         Raises:
-            TimeFValidationError: If a split file is missing, or a row is malformed.
-        """
-        if files.keys() != _SPLITS.keys():
-            raise TimeFValidationError(
-                f"TSAQA needs all its split files, missing {sorted(split.value for split in _SplitFile if split not in files)}"
-            )
+            TimeFValidationError: If a row is malformed.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_rows
         rows: list[_Row] = []
         for split in _SplitFile:
             rows.extend(_read_rows(files[split], split))

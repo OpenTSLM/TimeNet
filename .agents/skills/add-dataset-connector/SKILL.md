@@ -42,8 +42,8 @@ latter). For PhysioNet, inspect the archive layout and a WFDB header (`fs`, `sig
 
 ### 3. Pick the base connector
 - Hub dataset: subclass `BaseHuggingFaceConnector`, pass the class keywords `hf_repo`,
-  `source_revision` (a commit), and `source_files`, inherit `download` and `convert`, and implement
-  `convert_files` over the part-to-path mapping. The base fills `source_url` and `source_revision` in the dataset metadata from `HF_REPO` and `SOURCE_REVISION`.
+  `source_revision` (a commit), and `source_files`, inherit `download`, and implement `convert`
+  over the part-to-path mapping. The base fills `source_url` and `source_revision` in the dataset metadata from `HF_REPO` and `SOURCE_REVISION`.
 - PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `ensure_archive` /
   `download_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.

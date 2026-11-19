@@ -62,7 +62,7 @@ class TSQAConnector(
             seed=42,
         )
 
-    def convert_files(self, files: Mapping[str, Path]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Build one record per row: the parsed series plus its question-and-answer task.
 
         Args:

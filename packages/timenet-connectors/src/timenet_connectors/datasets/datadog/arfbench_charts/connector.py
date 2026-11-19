@@ -45,7 +45,7 @@ class ARFBenchChartsConnector(
 
     values_backend = ValuesBackend.ZARR  # the chart tensors need the Zarr backend
 
-    def convert_files(self, files: Mapping[str, Path]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Create a Record for each chart and a chart task for each question.
 
         Args:
