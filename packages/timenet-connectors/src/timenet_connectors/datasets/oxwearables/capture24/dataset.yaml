@@ -1,0 +1,10 @@
+yaml_schema_version: 1
+dataset_id: oxwearables/capture24
+dataset_version: 1.0.0
+name: CAPTURE-24
+description: Native 100 Hz wrist accelerometry, timestamps, and activity annotations for 151 participants.
+license: CC-BY-4.0
+license_url: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
+domains: [activity, motion]
+tags: [activity-recognition, accelerometer, wearable, wrist]
+source_url: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
