@@ -86,8 +86,10 @@ class BaseConnector(ABC, Generic[TRaw]):
         """
         return DatasetMetadata.from_yaml(self._card_path())
 
-    def download(self, cache_dir: Path) -> list[TRaw]:
-        """Fetch or discover raw source files and return lightweight references to them.
+    def download(self, cache_dir: Path) -> TRaw:
+        """Fetch or discover raw source files and return a lightweight handle to them.
+
+        The handle can be any value: one object, a list of file references, or ``None``.
 
         I/O only: no parsing, no array work. Must be idempotent for a given ``cache_dir``. Override
         this for a synchronous connector. For an I/O-bound one, override :meth:`download_async`
@@ -98,11 +100,11 @@ class BaseConnector(ABC, Generic[TRaw]):
             cache_dir: Directory to write downloaded files into (created by the engine).
 
         Returns:
-            Raw references passed directly to :meth:`convert`.
+            The download result. The engine passes it to :meth:`compose` unchanged.
         """
         return asyncio.run(self.download_async(cache_dir))
 
-    async def download_async(self, cache_dir: Path) -> list[TRaw]:
+    async def download_async(self, cache_dir: Path) -> TRaw:
         """Async variant of :meth:`download` for connectors whose downloads are I/O-bound.
 
         Override this to fetch artifacts concurrently, for example with the connector HTTP download
@@ -112,7 +114,7 @@ class BaseConnector(ABC, Generic[TRaw]):
             cache_dir: Directory to write downloaded files into (created by the engine).
 
         Returns:
-            Raw references passed directly to :meth:`convert`.
+            The download result. The engine passes it to :meth:`compose` unchanged.
 
         Raises:
             NotImplementedError: If a subclass overrides neither :meth:`download` nor
@@ -122,8 +124,8 @@ class BaseConnector(ABC, Generic[TRaw]):
             "a connector must implement download() (synchronous) or download_async() (asynchronous)"
         )
 
-    def compose(self, raw_refs: list[TRaw], context: "BuildContext") -> TimeFDataset:
-        """Build the dataset from raw references and the opened parent releases.
+    def compose(self, raw: TRaw, /, context: "BuildContext") -> TimeFDataset:
+        """Build the dataset from the download result and the opened parent releases.
 
         A connector whose card declares ``parents`` must override this hook. The connector reads
         each parent through ``context.parents[alias]`` and copies objects with
@@ -132,23 +134,25 @@ class BaseConnector(ABC, Generic[TRaw]):
         :meth:`convert`.
 
         Args:
-            raw_refs: The references returned by :meth:`download`.
+            raw: The value that :meth:`download` returned. A subclass can give this parameter
+                another name.
             context: The opened parents, keyed by the parent aliases on the card.
 
         Returns:
             The populated dataset.
         """
         del context
-        return self.convert(raw_refs)
+        return self.convert(raw)
 
-    def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:
-        """Parse raw references and populate a :class:`~timenet.dataset.TimeFDataset`.
+    def convert(self, raw: TRaw, /) -> TimeFDataset:
+        """Parse the download result and populate a :class:`~timenet.dataset.TimeFDataset`.
 
         CPU-bound: no network I/O. Attach time-series values as lazy loaders instead of materializing
         them.
 
         Args:
-            raw_refs: The references returned by :meth:`download`.
+            raw: The value that :meth:`download` returned. A subclass can give this parameter
+                another name.
 
         Returns:
             The populated dataset.

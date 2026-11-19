@@ -262,7 +262,7 @@ class SleepCotReader:
 class SleepCotConnector(BaseConnector[SleepCotReader]):
     """Connector for the SleepEDF-CoT release of OpenTSLM."""
 
-    async def download_async(self, cache_dir: Path) -> list[SleepCotReader]:  # ruff: ignore[no-self-use]
+    async def download_async(self, cache_dir: Path) -> SleepCotReader:  # ruff: ignore[no-self-use]
         """Download the release CSV.
 
         Args:
@@ -273,18 +273,17 @@ class SleepCotConnector(BaseConnector[SleepCotReader]):
         """
         artifact = Artifact(SLEEP_COT_URL, cache_dir / "sleep_cot.csv", sha256=SLEEP_COT_SHA256)
         (csv_path,) = await download_files([artifact])
-        return [SleepCotReader(csv_path=csv_path, splits_path=SPLITS_PATH)]
+        return SleepCotReader(csv_path=csv_path, splits_path=SPLITS_PATH)
 
-    def convert(self, raw_refs: list[SleepCotReader]) -> TimeFDataset:
+    def convert(self, reader: SleepCotReader) -> TimeFDataset:
         """Create one Record and one ClassificationTask for each window.
 
         Args:
-            raw_refs: The reader from :meth:`download_async`.
+            reader: The reader from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
-        (reader,) = raw_refs
         rows = reader.read_rows()
         splits = reader.read_splits(len(rows))
         dataset = TimeFDataset(metadata=self.metadata())

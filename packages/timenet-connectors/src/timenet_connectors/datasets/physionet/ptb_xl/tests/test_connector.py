@@ -61,12 +61,12 @@ def _write_source(tmp_path: Path, **cells: str) -> PtbXlSource:
 
 def _annotations(tmp_path: Path, **cells: str) -> dict[str, Annotation]:
     """Convert the fixture row with ``cells`` in place of its cells, and return its annotations by key."""
-    dataset = PtbXlConnector().convert([_write_source(tmp_path, **cells)])
+    dataset = PtbXlConnector().convert(_write_source(tmp_path, **cells))
     return {ann.key: ann for ann in dataset.records[0].annotations}
 
 
 def test_taskless_clinical_records_round_trip(tmp_path):
-    dataset = PtbXlConnector().convert([_write_source(tmp_path)])
+    dataset = PtbXlConnector().convert(_write_source(tmp_path))
     assert dataset.tasks == ()
     assert len(dataset.records[0].signals) == 12
     # Children find a recording by its upstream ecg_id, which the record's metadata carries.
@@ -127,7 +127,7 @@ def test_a_recording_that_is_not_twelve_leads_at_500_hz_raises_a_connector_error
         "record", fs=250, units=["mV"] * 12, sig_name=_LEADS, p_signal=values, fmt=["16"] * 12, write_dir=str(tmp_path)
     )
     with pytest.raises(TimeNetConnectorError, match=r"row 2 \(ecg_id 1\) .*: PTB-XL requires twelve leads at 500 Hz"):
-        PtbXlConnector().convert([source])
+        PtbXlConnector().convert(source)
 
 
 # The optional columns that the fixture row fills. The cell of each adds the annotation of the same key.
@@ -190,11 +190,11 @@ def test_a_repeated_ecg_id_raises_and_names_both_rows(tmp_path):
     with pytest.raises(
         TimeNetConnectorError, match=r"invalid PTB-XL row 4 \(ecg_id 1\) in .*: ecg_id 1 repeats row 2$"
     ):
-        PtbXlConnector().convert([source])
+        PtbXlConnector().convert(source)
 
 
 def test_recording_date_and_findings_are_annotated_when_their_cell_has_a_value(tmp_path):
-    dataset = PtbXlConnector().convert([_write_source(tmp_path)])
+    dataset = PtbXlConnector().convert(_write_source(tmp_path))
     by_key = {ann.key: ann.value for ann in dataset.records[0].annotations}
     # Each value loses its surrounding whitespace. Cells with only whitespace add no annotation.
     expected = {
@@ -222,6 +222,6 @@ def test_convert_needs_no_wfdb_for_format16(tmp_path, monkeypatch):
     # wfdb installed. wfdb is only a fallback for other signal formats.
     source = _write_source(tmp_path)
     monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError if anything reaches for it
-    dataset = PtbXlConnector().convert([source])
+    dataset = PtbXlConnector().convert(source)
     assert dataset.records
     assert len(dataset.records[0].signals[0].to_numpy())  # runs the direct loader, no wfdb

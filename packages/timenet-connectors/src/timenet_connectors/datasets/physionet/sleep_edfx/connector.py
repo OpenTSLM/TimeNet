@@ -65,10 +65,9 @@ _NIGHTS = (1, 2)
 
 @dataclass(frozen=True)
 class SleepEdfxSource:
-    """A small handle to the fetched release, which ``convert`` walks in place of a list of refs.
+    """A small handle to the fetched release.
 
-    ``download`` returns one handle and not an entry for each recording. During ``convert``,
-    :func:`_iter_recordings` finds the recordings. Nothing holds them as a list.
+    During ``convert``, :func:`_iter_recordings` finds the recordings. Nothing holds them as a list.
 
     It names the subject table of every study by path, and carries no row of any of them.
     ``download`` resolves paths and opens nothing. ``convert`` reads the table of each study it
@@ -222,7 +221,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
         (_TELEMETRY_STUDY, tables.TELEMETRY_SHEET),
     )
 
-    async def download_async(self, cache_dir: Path) -> list[SleepEdfxSource]:
+    async def download_async(self, cache_dir: Path) -> SleepEdfxSource:
         """Get the Sleep-EDF archive and give one small handle to it.
 
         One archive holds the full release, and this is one fetch.
@@ -237,7 +236,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             cache_dir: The directory for the archive and its extracted contents.
 
         Returns:
-            A list of one :class:`SleepEdfxSource` handle.
+            One :class:`SleepEdfxSource` handle.
 
         Raises:
             TimeNetDownloadError: If the archive holds no directory for a study, or no subject table.
@@ -258,11 +257,11 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             subject_tables.append((study, table_path))
             studies.append((study, study_dir))
 
-        return [SleepEdfxSource(studies=tuple(studies), subject_tables=tuple(subject_tables))]
+        return SleepEdfxSource(studies=tuple(studies), subject_tables=tuple(subject_tables))
 
     # PLR0914: the loop holds one name for each fact a record is made of, on purpose. A reader
     # of it sees the join and each annotation, and not one call that hides both behind a name.
-    def convert(self, raw_refs: list[SleepEdfxSource]) -> TimeFDataset:
+    def convert(self, source: SleepEdfxSource) -> TimeFDataset:
         """Turn the fetched release into a dataset.
 
         This reads the subject table of each study one time, before the loop. It then joins each
@@ -274,12 +273,11 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
         one time.
 
         Args:
-            raw_refs: The list of one handle from :meth:`download`.
+            source: The handle from :meth:`download`.
 
         Returns:
             The dataset, with one record for each recording it walked.
         """
-        source = raw_refs[0]
         dataset = TimeFDataset(metadata=self.metadata())
         metadata_annotation = metadata.MetadataAnnotation()
         subject_tables = metadata.SubjectTables(

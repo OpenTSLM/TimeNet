@@ -10,7 +10,7 @@ from timenet_connectors.datasets.timenet.test_mean import TestMeanConnector
 
 
 def _convert() -> TimeFDataset:
-    return TestMeanConnector().convert([])
+    return TestMeanConnector().convert(None)
 
 
 def _labels_by_record(dataset: TimeFDataset) -> dict[int | None, str | None]:
@@ -30,9 +30,9 @@ def test_metadata():
     assert TestMeanConnector().metadata().dataset_id == "timenet/test-mean"
 
 
-def test_download_defaults_to_no_op():
-    # Synthetic connector: it generates everything in convert and inherits the no-op download.
-    assert TestMeanConnector().download(Path("cache")) == []
+def test_download_returns_nothing():
+    # Synthetic connector: it generates everything in convert.
+    assert TestMeanConnector().download(Path("cache")) is None
 
 
 def test_convert_is_deterministic():

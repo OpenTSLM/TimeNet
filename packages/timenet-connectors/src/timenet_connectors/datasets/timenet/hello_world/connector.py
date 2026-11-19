@@ -103,7 +103,7 @@ def _wave(
     return lambda: pa.array(_wave_values(fn, n, phase))
 
 
-class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
+class HelloWorldConnector(BaseConnector[list[HelloWorldRecording]]):
     """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
     # Override: the data is synthetic, so this method needs no cache.

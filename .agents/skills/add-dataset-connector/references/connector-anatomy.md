@@ -11,13 +11,14 @@ this branch. Anchor files:
 
 ## The `BaseConnector` contract
 
-`BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is whatever `download` hands to
-`convert` (a dict per Hub row, a dataclass ref per PhysioNet record, etc.).
+`BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is the whole value that `download` hands to
+`convert`: one handle dataclass, a list of file refs (`list[HubFileRef]` for Hub connectors), or `None`.
 
-- `download(self, cache_dir: Path) -> list[TRaw]` (abstract): fetch/discover raw source files, return
-  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`.
-- `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (abstract): parse refs into a `TimeFDataset`.
-  CPU only, no network.
+- `download(self, cache_dir: Path) -> TRaw` (abstract): fetch/discover raw source files, return
+  a lightweight handle. I/O only, no parsing, idempotent for a given `cache_dir`.
+- `convert(self, raw: TRaw, /) -> TimeFDataset` (abstract): parse the download result into a
+  `TimeFDataset`. CPU only, no network. The parameter is positional-only, so name it as you like
+  (`source`, `raw_refs`).
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
@@ -70,7 +71,7 @@ tags:
 ## Base connectors to reuse
 
 ### `BaseHuggingFaceConnector` (`bases/huggingface.py`)
-`BaseHuggingFaceConnector(BaseConnector[HubFileRef])` downloads files from a Hub dataset at a pinned
+`BaseHuggingFaceConnector(BaseConnector[list[HubFileRef]])` downloads files from a Hub dataset at a pinned
 commit. Pass these class keywords:
 
 - `hf_repo`: the Hub repo id.

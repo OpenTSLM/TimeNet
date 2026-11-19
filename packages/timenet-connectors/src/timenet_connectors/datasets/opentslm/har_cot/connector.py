@@ -184,7 +184,7 @@ class HarCotSplitFile:
             yield parsed
 
 
-class HarCotConnector(BaseConnector[HarCotSplitFile]):
+class HarCotConnector(BaseConnector[list[HarCotSplitFile]]):
     """Connector for the HAR-CoT release of OpenTSLM."""
 
     async def download_async(self, cache_dir: Path) -> list[HarCotSplitFile]:  # ruff: ignore[no-self-use]
