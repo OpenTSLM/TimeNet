@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# BattLeDIM 2020 released two years (2018 and 2019) of simulated SCADA data of the L-Town water
+# network, every 5 minutes: 33 pressure sensors, 3 flow sensors, 1 tank level sensor and 82
+# automated meter readings, plus the 33 leaks the simulation contained. The two years form one
+# record. Each leak is a set of record annotations over its active interval. Two-week windows,
+# one every 7 days, become four tasks each about the last week of the window. The answers come from
+# the leak list, the leak tables and the network model by fixed rules, not from a model.
+#
+# The split groups windows by the calendar block of their target week (four ISO weeks), in both
+# years at once: 74 of the 82 meter series of 2019 repeat 2018 exactly, so the same calendar week
+# of both years always lands in the same partition. README.md gives the reasons and the release
+# details.
+yaml_schema_version: 1
+dataset_id: kios/battledim
+dataset_version: 1.0.0
+name: BattLeDIM
+description: >-
+  Two years of simulated SCADA data (pressure, flow, tank level and metered demand, every 5 minutes)
+  from the L-Town water distribution network, with its 33 leaks. Two-week windows ask which leaks
+  started, when, how much water was lost, and for a short explanation that names the pipe and the
+  nearest pressure sensor.
+license: CC-BY-4.0
+source_url: https://zenodo.org/records/4017659
+citation: >-
+  Vrachimis, S. G., Eliades, D. G., Taormina, R., Kapelan, Z., Ostfeld, A., Liu, S., Kyriakou, M.,
+  Pavlou, P., Qiu, M., and Polycarpou, M. M. (2022). Battle of the Leakage Detection and Isolation
+  Methods. Journal of Water Resources Planning and Management, 148(12).
+  https://doi.org/10.1061/(ASCE)WR.1943-5452.0001601. Dataset: https://doi.org/10.5281/zenodo.4017659
+access: open
+domains:
+  - industrial
+  - environment
+tags:
+  - water-distribution
+  - leak-detection
+  - anomaly-detection
+  - fault-diagnosis
+  - explanation
+  - simulated
+  - scada
+  - zenodo
