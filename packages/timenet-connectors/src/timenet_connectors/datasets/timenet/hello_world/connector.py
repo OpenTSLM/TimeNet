@@ -50,11 +50,11 @@ _COSINE = TimeSeriesSpec(
 # shares.
 _RHYTHM = LabelSet(
     [Label(name="normal", description="A regular wave."), "abnormal"],
-    annotations=[Annotation("name", "rhythm")],
+    annotations=[Annotation("name", value="rhythm")],
 )
 _EVENT = LabelSet(
     [Label(name="onset", description="The moment the wave starts."), "offset"],
-    annotations=[Annotation("name", "event")],
+    annotations=[Annotation("name", value="event")],
 )
 
 

@@ -45,7 +45,7 @@ ACTIVITY = LabelSet(
         Label(name="walking_down", description="Walking down stairs."),
         Label(name="walking_up", description="Walking up stairs."),
     ],
-    annotations=[Annotation("name", "activity")],
+    annotations=[Annotation("name", value="activity")],
 )
 # The release states no unit. A resting window has a magnitude of about 9.8, which is gravity in m/s².
 ACCELERATION = TimeSeriesSpec(
