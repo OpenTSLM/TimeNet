@@ -192,14 +192,15 @@ Configuration for each task type uses the columns `label_set_id`, `unit`, `targe
 A column that a task type does not use is `NULL`. SQL can filter these columns without parsing JSON.
 
 Every classification task has a label set, and `tasks.label_set_id` stores its ID. Each row in
-`label_sets` stores one set with the fields `label_set_id`, `labels`, and `multi_label`. Sets with the
-same labels, label descriptions, and `multi_label` are one set, so a release stores them once. The
-writer numbers the sets in the order that tasks first use them. The annotations of a set are rows of
-`annotation_occurrences` with `object_type` `LabelSet` and the `label_set_id` as `object_id`.
+`label_sets` stores one set with the fields `label_set_id`, `labels`, `multi_label`, and `ordered`.
+Sets with the same labels, label descriptions, `multi_label`, and `ordered` are one set, so a release
+stores them once. If `ordered` is true, the label order is part of the set, so the same labels in
+another order are a different set. The writer numbers the sets in the order that tasks first use them.
+The annotations of a set are rows of `annotation_occurrences` with `object_type` `LabelSet` and the
+`label_set_id` as `object_id`.
 
 The `labels` field holds one `{name, description}` entry per label, in the label order of the first
-equal set that the writer meets. If a label has
-no description, its `description` is `NULL`.
+equal set that the writer meets. If a label has no description, its `description` is `NULL`.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores entity IDs directly: `record_id` for a Record, `signal_id` for a

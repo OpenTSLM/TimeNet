@@ -239,7 +239,11 @@ a target can contain.
 
 If `multi_label=False`, the default, a target must contain exactly one label. If `multi_label=True`,
 a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
-label applies. The order of labels does not matter.
+label applies.
+
+By default the order of labels does not matter. Set `ordered=True` when it does. Then the label order is
+part of the identity of the set. Use it for ordinal labels, such as `low`, `medium` and `high`, or for
+answer options whose order matters.
 
 When the dataset adds or streams a task, it makes sure that the target follows the rules of its
 label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
@@ -249,11 +253,16 @@ Labels come from the targets stored directly on the task or from the text of its
 annotations.
 
 A label set has no name. TimeF stores equal sets once. For this, two sets are equal if they have the
-same labels, label descriptions, and `multi_label`. The order of labels and the annotations do not
-matter, and `==` follows the same rule. The stored set gets one integer id, `label_set_id`, and keeps
-the label order of the first equal set that the writer meets. If you need the order of each task,
-put it in the task metadata. If equal sets carry different annotation occurrences, the stored set
-keeps each distinct occurrence. In one read, the reader gives tasks that use the same set a shared object.
+same labels, label descriptions, `multi_label`, and `ordered`. The annotations do not matter. The
+order of labels matters only for an ordered set. `==` follows the same rule.
+
+Use `ordered=True` when the label order has a meaning, for example for ordinal labels or for answer
+options that a model sees in a fixed order. Then each order is its own set, and the stored set keeps
+it. An unordered set keeps the label order of the first equal set that the writer meets.
+
+The stored set gets one integer id, `label_set_id`. If equal sets carry different annotation
+occurrences, the stored set keeps each distinct occurrence. In one read, the reader gives tasks that
+use the same set a shared object.
 
 ### Answer and rationale
 

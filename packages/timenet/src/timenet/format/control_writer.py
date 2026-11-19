@@ -247,6 +247,7 @@ class _LabelSetRows:
                 "label_set_id": next(self._new_ids),
                 "labels": [label.model_dump() for label in label_set.labels],
                 "multi_label": label_set.multi_label,
+                "ordered": label_set.ordered,
             }
             occurrences = list(label_set.annotations)
             self._sets[key] = (row, occurrences, {_occurrence_key(annotation) for annotation in occurrences})

@@ -58,7 +58,8 @@ def _as_label(item: object) -> object:
 class LabelSet(SupportsAnnotate):
     """The allowed labels for a classification target.
 
-    A target must contain one label unless ``multi_label=True``.
+    A target must contain one label unless ``multi_label=True``. By default the label order does not matter.
+    Use ``ordered=True`` for ordinal labels or for options whose order matters.
 
     Tasks that ask the same kind of question share one label set::
 
@@ -71,18 +72,25 @@ class LabelSet(SupportsAnnotate):
     A plain string is a label without a description, so ``LabelSet(["yes", "no"])`` is enough when no label
     needs one.
 
-    A label set has no name. Two sets with the same labels (in any order, with the same descriptions)
-    and the same ``multi_label`` are the same set, so ``==`` is true for them. A dataset stores them once,
-    with the label order of the first of them that it writes. Annotations are not part of that identity.
+    A label set has no name. Two sets with the same labels (with the same descriptions), the same
+    ``multi_label`` and the same ``ordered`` are the same set, so ``==`` is true for them. If ``ordered`` is
+    ``False``, the labels can be in any order. If ``ordered`` is ``True``, the labels must be in the same order.
+    A dataset stores equal sets once, with the label order of the first of them that it writes.
+    Annotations are not part of that identity.
     """
 
     labels: tuple[Label, ...]
-    """The allowed labels in order. A dataset keeps the order of the first equal set that it writes."""
+    """The allowed labels in order. For an unordered set, a dataset keeps the order of the first equal set that
+    it writes."""
     multi_label: bool = False
     """If ``False``, a target holds exactly one label from the set.
 
     If ``True``, a target holds all labels from the set that apply.
     An empty target means that no label applies."""
+    ordered: bool = False
+    """If ``True``, the label order is part of the identity of the set. If ``False``, the order does not matter.
+
+    An ordered set needs labels in a fixed order, so pass a list or a tuple, not a Python set."""
     annotations: tuple[Annotation, ...] = field(default=(), compare=False)
     """Annotations that describe the set, such as ``Annotation(key="name", value="sleep_stage")``.
 
@@ -94,6 +102,7 @@ class LabelSet(SupportsAnnotate):
         labels: Iterable[Label | str],
         *,
         multi_label: bool = False,
+        ordered: bool = False,
         annotations: Iterable[Annotation] = (),
     ) -> None:
         """Build a label set, make sure that it is valid, and attach the annotations.
@@ -101,6 +110,7 @@ class LabelSet(SupportsAnnotate):
         Args:
             labels: The allowed labels in order. A plain string is a label without a description.
             multi_label: Whether a target can hold more than one label.
+            ordered: Whether the label order is part of the identity of the set.
             annotations: Annotations that describe the set.
 
         Raises:
@@ -108,6 +118,7 @@ class LabelSet(SupportsAnnotate):
         """  # ruff: ignore[docstring-extraneous-exception] - _validate raises it
         self.labels = tuple(_as_label(label) for label in _as_tuple(labels, Label))  # ty: ignore[invalid-assignment]
         self.multi_label = multi_label
+        self.ordered = ordered
         self.annotations = _as_tuple(annotations, Annotation)
         self._validate()
         self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
@@ -117,7 +128,7 @@ class LabelSet(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If a label is not a Label, the set has no label or repeats a name,
-                ``multi_label`` is not a bool, or an annotation is not an Annotation or has a span.
+                ``multi_label`` or ``ordered`` is not a bool, or an annotation is not an Annotation or has a span.
         """
         for label in self.labels:
             if not isinstance(label, Label):
@@ -128,6 +139,8 @@ class LabelSet(SupportsAnnotate):
             raise TimeFValidationError(f"{self} lists a label more than once")
         if not isinstance(self.multi_label, bool):
             raise TimeFValidationError(f"{self} multi_label must be a bool, got {type(self.multi_label).__name__}")
+        if not isinstance(self.ordered, bool):
+            raise TimeFValidationError(f"{self} ordered must be a bool, got {type(self.ordered).__name__}")
         for annotation in self.annotations:
             self._check_annotation(annotation)
 
@@ -168,7 +181,7 @@ class LabelSet(SupportsAnnotate):
         return f"label set {list(self.names)}"
 
     def __eq__(self, other: object) -> bool:
-        """Return whether the sets have the same labels, in any order, and the same ``multi_label``."""
+        """Return whether the sets have the same content key (see :meth:`_content_key`)."""
         if not isinstance(other, LabelSet):
             return NotImplemented
         return self._content_key() == other._content_key()
@@ -178,12 +191,13 @@ class LabelSet(SupportsAnnotate):
     def _content_key(self) -> tuple[Hashable, ...]:
         """Return the key that makes two sets equal.
 
-        The key ignores label order and annotations.
+        The key ignores annotations. It ignores label order unless the set is ordered.
 
         Returns:
             The hashable key.
         """
-        return (self.multi_label, frozenset((label.name, label.description) for label in self.labels))
+        labels = ((label.name, label.description) for label in self.labels)
+        return (self.multi_label, self.ordered, tuple(labels) if self.ordered else frozenset(labels))
 
     def check_targets(self, targets: Sequence[str]) -> None:
         """Make sure that the target labels follow the rules of this set.

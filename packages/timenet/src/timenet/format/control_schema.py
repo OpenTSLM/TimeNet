@@ -290,12 +290,14 @@ LABEL_SETS = Table(
         _key("label_set_id"),
         _required("labels", ColumnType.LABEL_LIST),
         _required("multi_label", ColumnType.BOOLEAN),
+        _required("ordered", ColumnType.BOOLEAN),
     ),
     unique=(("label_set_id",),),
 )
 """Each row stores one label set that a classification task uses.
 
 The ``labels`` column holds one ``{name, description}`` entry per label, in label order.
+``ordered`` says whether that order is part of the identity of the set.
 If a label has no description, ``description`` is NULL. Tasks refer to a set by its id in
 ``tasks.label_set_id``. The writer gives each distinct set one id, in the order that tasks first use it."""
 

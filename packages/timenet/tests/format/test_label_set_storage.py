@@ -113,7 +113,9 @@ def release_copy(release, tmp_path) -> Path:
 def test_each_label_set_is_stored_once_and_read_as_one_object(release):
     with connect_control(release, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
-        assert connection.execute("SELECT label_set_id, labels, multi_label FROM label_sets ORDER BY 1").fetchall() == [
+        assert connection.execute(
+            "SELECT label_set_id, labels, multi_label, ordered FROM label_sets ORDER BY 1"
+        ).fetchall() == [
             (
                 1,
                 [
@@ -122,8 +124,9 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
                     {"name": "R", "description": "REM sleep."},
                 ],
                 False,
+                False,
             ),
-            (2, [{"name": "AF", "description": None}, {"name": "PVC", "description": None}], True),
+            (2, [{"name": "AF", "description": None}, {"name": "PVC", "description": None}], True, False),
         ]
 
     stage_w, _, findings, stage_n1, stage_r, none_apply = _read_tasks(release)
@@ -181,6 +184,27 @@ def test_sets_are_stored_once_per_content_and_keep_the_first_label_order(tmp_pat
     first, second, *_ = _read_tasks(path)
     assert first.label_set is second.label_set
     assert first.label_set.names == ("W", "N1", "R")
+
+
+def test_ordered_sets_in_another_order_are_stored_as_two_rows_in_their_own_order(tmp_path):
+    low_high = LabelSet(["low", "high"], ordered=True)
+    high_low = LabelSet(["high", "low"], ordered=True)
+    unordered = LabelSet(["low", "high"])
+    path = _write_sets(tmp_path, low_high, high_low, LabelSet(["low", "high"], ordered=True), unordered)
+
+    with connect_control(path, read_only=True) as connection:
+        audit_control_database(connection, require_chunks=False)
+        assert connection.execute("SELECT label_set_id, ordered FROM label_sets ORDER BY 1").fetchall() == [
+            (1, True),
+            (2, True),
+            (3, False),
+        ]
+    first, second, third, fourth = _label_sets(_read_tasks(path))
+    assert first == low_high and first.ordered
+    assert first.names == ("low", "high")
+    assert second.names == ("high", "low")
+    assert first is third
+    assert fourth == unordered and not fourth.ordered
 
 
 def test_equal_sets_with_different_annotations_are_stored_once_with_both(tmp_path):

@@ -25,6 +25,8 @@ FINDINGS = LabelSet(labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBB
         ({"labels": (3,)}, "takes Label objects, got int"),
         ({"labels": ("W", "W")}, "more than once"),
         ({"labels": (Label(name="W"),), "multi_label": 1}, "multi_label must be a bool, got int"),
+        ({"labels": (Label(name="W"),), "ordered": 1}, "ordered must be a bool, got int"),
+        ({"labels": (Label(name="W"),), "ordered": None}, "ordered must be a bool, got NoneType"),
         ({"labels": (Label(name="W"),), "annotations": ("name",)}, "takes Annotation objects, got str"),
     ],
 )
@@ -73,6 +75,18 @@ def test_equality_ignores_label_order_and_annotations_but_not_descriptions_or_mu
     assert first == second
     assert first != described
     assert first != multi
+
+
+def test_an_ordered_set_uses_its_label_order_for_equality():
+    low_high = LabelSet(["low", "high"], ordered=True)
+    high_low = LabelSet(["high", "low"], ordered=True)
+    assert low_high == LabelSet(["low", "high"], ordered=True)
+    assert low_high._content_key() == LabelSet(["low", "high"], ordered=True)._content_key()
+    assert low_high != high_low
+    assert low_high._content_key() != high_low._content_key()
+    assert low_high != LabelSet(["low", "high"])
+    assert LabelSet(["low", "high"]) == LabelSet({"high", "low"})
+    assert LabelSet(["low"]).ordered is False
 
 
 def test_annotate_attaches_an_occurrence_and_rejects_a_span():

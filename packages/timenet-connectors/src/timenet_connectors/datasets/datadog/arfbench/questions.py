@@ -206,7 +206,8 @@ class ARFBenchQuestion:
     def _create_task(self, inputs: list[Record], modality: InputModality) -> ClassificationTask:
         """Create a test task that asks for the correct answer from the options of the question.
 
-        The options are the label set of the task. Questions with the same options share one set. The row
+        The options are the label set of the task. The set is ordered, because the order of the options is
+        part of the question. Questions with the same options in the same order share one set. The row
         index in the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``.
         The interpolation flags describe what an engineer saw. This method does not interpolate.
 
@@ -220,7 +221,7 @@ class ARFBenchQuestion:
             input_modalities=frozenset({InputModality.TEXT, modality}),
             split=Split.TEST,
             metadata={"question_index": self.index},
-            label_set=LabelSet(self.answer_options),
+            label_set=LabelSet(self.answer_options, ordered=True),
         )
         task.annotate(Annotation("task_category", value=self.task_category.value))
         task.annotate(Annotation("difficulty", value=self.difficulty.value))
