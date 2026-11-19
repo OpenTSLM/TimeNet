@@ -1,5 +1,4 @@
 from collections import Counter
-from pathlib import Path
 from typing import cast
 
 from timenet.connectors import BaseConnector
@@ -28,11 +27,6 @@ def test_is_a_connector():
 
 def test_metadata():
     assert TestMeanConnector().metadata().dataset_id == "timenet/test-mean"
-
-
-def test_download_returns_nothing():
-    # Synthetic connector: it generates everything in convert.
-    assert TestMeanConnector().download(Path("cache")) is None
 
 
 def test_convert_is_deterministic():

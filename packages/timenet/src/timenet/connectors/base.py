@@ -134,8 +134,7 @@ class BaseConnector(ABC, Generic[TRaw]):
         :meth:`convert`.
 
         Args:
-            raw: The value that :meth:`download` returned. A subclass can give this parameter
-                another name.
+            raw: The value that :meth:`download` returned.
             context: The opened parents, keyed by the parent aliases on the card.
 
         Returns:
@@ -151,8 +150,7 @@ class BaseConnector(ABC, Generic[TRaw]):
         them.
 
         Args:
-            raw: The value that :meth:`download` returned. A subclass can give this parameter
-                another name.
+            raw: The value that :meth:`download` returned.
 
         Returns:
             The populated dataset.
