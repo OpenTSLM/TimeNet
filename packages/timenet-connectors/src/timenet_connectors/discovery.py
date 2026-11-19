@@ -68,6 +68,15 @@ def _roots() -> list[_Root]:
     return roots
 
 
+def discovered_roots() -> list[Path]:
+    """Return the directories of every datasets root.
+
+    Returns:
+        The built-in datasets directory, then the directories of each registered root.
+    """
+    return [Path(path) for root in _roots() for path in root.paths]
+
+
 def _relative_parts(dataset_id: str) -> list[str]:
     """Return the package path segments of a dataset id below a datasets root."""
     return [_segment(part) for part in dataset_id.split("/", 1)]

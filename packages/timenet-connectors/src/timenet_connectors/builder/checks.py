@@ -11,17 +11,6 @@ import os
 from pathlib import Path
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argument vectors, never a shell string
 
-from timenet_connectors.discovery import _roots
-
-
-def discovered_roots() -> list[Path]:
-    """Return the directories of every datasets root that discovery finds.
-
-    Returns:
-        The built-in datasets directory, then the directories of each registered root.
-    """
-    return [Path(path) for root in _roots() for path in root.paths]
-
 
 def connectors(roots: Iterable[Path]) -> list[tuple[str, Path]]:
     """Find every connector directory that has a ``tests`` directory.

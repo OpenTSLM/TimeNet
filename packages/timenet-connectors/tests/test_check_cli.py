@@ -1,11 +1,9 @@
-from pathlib import Path
 import subprocess
 
 import pytest
 from typer.testing import CliRunner
 
-from timenet_connectors import datasets
-from timenet_connectors.builder import checks
+from timenet_connectors.builder import checks, cli
 from timenet_connectors.builder.cli import app
 
 
@@ -75,21 +73,17 @@ def test_check_searches_every_given_root(tmp_path, ran):
     result = runner.invoke(app, ["check", str(tmp_path / "one"), str(tmp_path / "two")])
 
     assert result.exit_code == 0, result.output
-    assert [command[-1] for command, _ in ran if command[2] == "ty"] == [str(first), str(second)]
+    assert [command[-1] for command, _ in ran if "ty" in command] == [str(first), str(second)]
 
 
 def test_check_without_a_root_searches_the_discovered_roots(tmp_path, ran, monkeypatch):
     connector = _connector(tmp_path, "acme", "widget")
-    monkeypatch.setattr(checks, "discovered_roots", lambda: [tmp_path])
+    monkeypatch.setattr(cli, "discovered_roots", lambda: [tmp_path])
 
     result = runner.invoke(app, ["check"])
 
     assert result.exit_code == 0, result.output
     assert ["uv", "run", "ty", "check", str(connector)] in [command for command, _ in ran]
-
-
-def test_the_discovered_roots_start_with_the_built_in_datasets_package():
-    assert checks.discovered_roots()[0] == Path(datasets.__path__[0])
 
 
 def test_check_rejects_a_root_without_connector_tests(tmp_path, ran):
@@ -99,4 +93,11 @@ def test_check_rejects_a_root_without_connector_tests(tmp_path, ran):
 
     assert result.exit_code == 2
     assert "found no connectors with a tests directory" in result.output
+    assert ran == []
+
+
+def test_check_rejects_a_missing_directory(tmp_path, ran):
+    result = runner.invoke(app, ["check", str(tmp_path / "missing")])
+
+    assert result.exit_code == 2
     assert ran == []

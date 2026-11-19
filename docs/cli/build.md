@@ -112,6 +112,29 @@ raises `TimeNetIsolationError`.
 
 Unexpected programming errors keep their traceback.
 
+## Check command
+
+```bash
+timenet-build check [DATASETS_DIR]...
+```
+
+`check` runs the tests and the type check of each connector that has a `tests` directory. With no
+`DATASETS_DIR`, it searches every discovered datasets root: the built-in one and each root that an
+installed package registers. Each `DATASETS_DIR` holds connectors in the `<org>/<name>/` layout.
+
+For each connector, `check` runs pytest on its `tests` directory, then `ty check` on the connector
+directory. Both run through `uv run --with-requirements <connector>/requirements.txt`, so the
+requirements of the connector are added to the current project environment for that run only. A
+connector without a `requirements.txt` runs in the plain project environment. `check` runs from
+the current directory, so run it from the project whose environment has `timenet`, pytest and
+`ty`.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | All checks passed. |
+| `1` | One or more checks failed. The command lists each failed connector and tool. |
+| `2` | A `DATASETS_DIR` does not exist, or no connector with a `tests` directory was found. |
+
 ## Inspect a local build
 
 Build into a local registry of your own, and pass the same registry to the consumer:
