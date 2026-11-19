@@ -408,7 +408,7 @@ class ClassificationTask(Task):
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
 
-    def annotation_owners(self) -> Iterator[SupportsAnnotate]:
+    def annotatable_entities(self) -> Iterator[SupportsAnnotate]:
         """Yield the task, then its label set.
 
         Yields:

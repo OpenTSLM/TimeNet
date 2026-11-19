@@ -68,13 +68,13 @@ def _label_set_children(item: LabelSet) -> tuple[object, ...]:
 
 @_load_plan_children.register
 def _task_children(item: Task) -> tuple[object, ...]:
-    """Return a task's text, annotations, owned objects, records, targets, and the annotations it references."""
+    """Return a task's text, annotations, the entities it holds, records, targets, and the annotations it references."""
     return (
         item.prompt,
         item.rationale,
         *(item.targets or ()),
         *item.annotations,
-        *(owner for owner in item.annotation_owners() if owner is not item),
+        *(entity for entity in item.annotatable_entities() if entity is not item),
         *item.inputs,
         *getattr(item, "candidate_records", ()),
         *item.input_annotations,
