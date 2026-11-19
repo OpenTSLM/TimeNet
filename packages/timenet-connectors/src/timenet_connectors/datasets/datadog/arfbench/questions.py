@@ -236,10 +236,10 @@ class ARFBenchQuestion:
                 labels=tuple(Label(name=option) for option in self.answer_options),
             ),
         )
-        task.annotate(Annotation("task_category", self.task_category.value))
-        task.annotate(Annotation("difficulty", self.difficulty.value))
-        task.annotate(Annotation("interpolate_1", self.interpolate_1))
-        task.annotate(Annotation("interpolate_2", self.interpolate_2))
+        task.annotate(Annotation("task_category", value=self.task_category.value))
+        task.annotate(Annotation("difficulty", value=self.difficulty.value))
+        task.annotate(Annotation("interpolate_1", value=self.interpolate_1))
+        task.annotate(Annotation("interpolate_2", value=self.interpolate_2))
         return task
 
 

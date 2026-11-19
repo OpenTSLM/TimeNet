@@ -368,7 +368,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             record.annotations = [
                 annotation for annotation in record.annotations if annotation.key in _KEPT_ANNOTATIONS
             ]
-            record.add_annotations([Annotation("split", split.value)])
+            record.add_annotations([Annotation("split", value=split.value)])
             records[ecg_id] = record
             contexts[ecg_id] = _clinical_context(recording)
 
@@ -400,16 +400,18 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             The attached annotations, keyed by the value that :meth:`_iter_tasks` looks them up by.
         """
         question_type_annotations = {
-            question_type: dataset.annotate(Annotation("question_type", question_type))
+            question_type: dataset.annotate(Annotation("question_type", value=question_type))
             for question_type in sorted(question_types)
         }
         answer_options_annotations: dict[int, Annotation] = {}
         for template_id in sorted(template_ids):
             options = answers.get(template_id)
             if options:
-                answer_options_annotations[template_id] = dataset.annotate(Annotation("answer_options", list(options)))
+                answer_options_annotations[template_id] = dataset.annotate(
+                    Annotation("answer_options", value=list(options))
+                )
         context_annotations = {
-            context: dataset.annotate(Annotation("clinical_context", context))
+            context: dataset.annotate(Annotation("clinical_context", value=context))
             for context in sorted(set(contexts.values()))
         }
         return _TaskAnnotations(

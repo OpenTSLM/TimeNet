@@ -22,8 +22,7 @@ condition = Annotation(
 occurrence = record.annotate(condition)
 ```
 
-`key` and `value` can be positional, in that order: `Annotation("condition", "healthy")`. All other
-fields are keyword-only.
+`key` can be positional: `Annotation("condition", value="healthy")`. All other fields are keyword-only.
 
 `annotate()` returns the attached occurrence. A Task must refer to this occurrence, not the unattached
 content object.
@@ -50,11 +49,11 @@ from typing import Literal
 from timenet.types import Annotation
 
 # A constant to reuse
-HEALTHY_ANNOTATION = Annotation("condition", "healthy")
+HEALTHY_ANNOTATION = Annotation("condition", value="healthy")
 
 
 def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
-    return Annotation("quality", level)
+    return Annotation("quality", value=level)
 
 
 record.annotate(HEALTHY_ANNOTATION)
@@ -72,8 +71,8 @@ row are stored as one row again, but stored text and the same text in memory bec
 An Annotation without a `span` describes its complete owner:
 
 ```python
-record.annotate(Annotation("age", 54, unit="years"))
-record.annotate(Annotation("condition", "healthy"))
+record.annotate(Annotation("age", value=54, unit="years"))
+record.annotate(Annotation("condition", value="healthy"))
 ```
 
 Use `metadata` for untyped implementation details. Use an Annotation when consumers need a named,

@@ -141,7 +141,7 @@ class SleepCotRow:
         """
         signal = Signal.from_values(self.eeg, spec=EEG, name="EEG Fpz-Cz", time_axis=SAMPLED_AT_50_HZ)
         source = Source("EEG", signals=[signal])
-        subject = Annotation("subject_ids", [self.subject_id])
+        subject = Annotation("subject_ids", value=[self.subject_id])
         return Record(sources=(source,), annotations=(subject,), metadata={"recording_id": self.recording_id})
 
     def create_classification_task(self, record: Record, *, split: Split) -> ClassificationTask:

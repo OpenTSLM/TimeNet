@@ -672,7 +672,7 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
         record = Record(sources=[Source("series", signals=[signal])], metadata=metadata)
         if position == 0:
             for key, value in row.contexts.on_input.items():
-                record.annotate(Annotation(key, value if isinstance(value, str) else list(value)))
+                record.annotate(Annotation(key, value=value if isinstance(value, str) else list(value)))
         records.append(record)
     return tuple(records)
 
@@ -776,7 +776,7 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         dataset = TimeFDataset(metadata=self.metadata())
         # The model reads the published task and question_type, so each distinct value is a dataset annotation.
         labels = {
-            label: dataset.annotate(Annotation(label[0], label[1]))
+            label: dataset.annotate(Annotation(label[0], value=label[1]))
             for label in sorted({label for row in rows for label in _published_labels(row)})
         }
         for row_records in records:

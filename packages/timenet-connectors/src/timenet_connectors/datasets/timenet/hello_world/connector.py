@@ -144,7 +144,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         )
         # An annotation shared across two records. The writer stores equal content once, so they share
         # one content row.
-        cohort = Annotation("cohort", "A")
+        cohort = Annotation("cohort", value="A")
 
         # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = Signal.from_values(
@@ -160,7 +160,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         artifact = Annotation("artifact", span=TimeInterval.seconds(0.0, 0.25))
         _, record0_cohort, stimulus = record0.add_annotations(
             [
-                Annotation("age", 64, unit="years"),
+                Annotation("age", value=64, unit="years"),
                 cohort,
                 stimulus,
             ]

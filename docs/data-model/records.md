@@ -76,7 +76,7 @@ firmware version, or an event on the timeline.
 ```python
 from timenet.types import Annotation
 
-record.annotate(Annotation("condition", "healthy"))
+record.annotate(Annotation("condition", value="healthy"))
 ```
 
 Sources and Signals also support `metadata` and `annotate()`.

@@ -85,7 +85,7 @@ def test_collection_fields_take_any_iterable_and_store_a_tuple():
     signals = [_signal("X"), _signal("Y")]
     gyroscope = Source("Gyroscope")
     source = Source("IMU", signals=(signal for signal in signals), sources=[gyroscope])
-    record = Record(sources=[source], annotations=[Annotation("site", "lab")])
+    record = Record(sources=[source], annotations=[Annotation("site", value="lab")])
 
     assert source.name == "IMU"
     assert source.signals == tuple(signals)
@@ -100,7 +100,7 @@ def test_collection_fields_take_any_iterable_and_store_a_tuple():
         time_axis=RegularAxis(period_us=Fraction(1_000)),
         loader=lambda: pa.array([1.0], type=pa.float32()),
         n_values=1,
-        annotations=[Annotation("site", "lab")],
+        annotations=[Annotation("site", value="lab")],
     )
     assert isinstance(annotated.annotations, tuple)
 
@@ -113,7 +113,7 @@ def test_a_collection_field_rejects_a_string_a_mapping_and_a_single_item(value):
         Source("Parent", sources=value)
 
 
-@pytest.mark.parametrize("annotations", ["ab", {"a": 1}, Annotation("site", "lab")])
+@pytest.mark.parametrize("annotations", ["ab", {"a": 1}, Annotation("site", value="lab")])
 def test_a_signal_rejects_annotations_that_are_not_an_iterable_of_items(annotations):
     with pytest.raises(TimeFValidationError, match="takes an iterable"):
         Signal.from_loader(

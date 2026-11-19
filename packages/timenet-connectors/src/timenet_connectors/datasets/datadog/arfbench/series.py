@@ -227,10 +227,10 @@ class MetricSeriesFiles:
         )
         record.add_annotations(
             [
-                Annotation("metric_id", self.metric),
-                Annotation("incident_id", self.metric.partition("_")[0]),
-                Annotation("query_name", self.finest.read_query_name()),
-                Annotation("finest_interval_s", self.finest.interval_s, unit="second"),
+                Annotation("metric_id", value=self.metric),
+                Annotation("incident_id", value=self.metric.partition("_")[0]),
+                Annotation("query_name", value=self.finest.read_query_name()),
+                Annotation("finest_interval_s", value=self.finest.interval_s, unit="second"),
             ]
         )
         return record

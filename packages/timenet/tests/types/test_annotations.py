@@ -225,8 +225,8 @@ def test_value_type_of_rejects_unsupported_type():
         value_type_of(object())
 
 
-def test_key_and_value_are_positional_and_the_other_fields_are_keyword_only():
-    assert Annotation("age", 64, unit="years") == Annotation(key="age", value=64, unit="years")
+def test_key_is_positional_and_the_other_fields_are_keyword_only():
+    assert Annotation("age", value=64, unit="years") == Annotation(key="age", value=64, unit="years")
     assert Annotation("stimulus", span=TimePoint.seconds(0.5)).value is None
     with pytest.raises(TypeError):
-        Annotation("age", 64, None)  # ty: ignore[too-many-positional-arguments]
+        Annotation("age", 64)  # ty: ignore[too-many-positional-arguments]

@@ -384,7 +384,7 @@ def test_a_bare_record_is_one_target():
 
 def test_collection_fields_take_any_iterable_and_store_a_tuple():
     record = _record("a")
-    note = Annotation("note", "x")
+    note = Annotation("note", value="x")
     task = AnswerTask(inputs=(item for item in [record]), input_annotations=[note], annotations=[note])
     assert task.inputs == (record,)
     assert task.input_annotations == (note,)

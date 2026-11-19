@@ -304,7 +304,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
                 metadata={"recording_id": recording.recording_id},
             )
             dataset.add_record(record)
-            record.annotate(Annotation("subject_ids", [recording.subject_id]))
+            record.annotate(Annotation("subject_ids", value=[recording.subject_id]))
             annotations.attach(recording.recording_id, series, sleep_stages)
             record.add_annotations(recording_metadata)
 

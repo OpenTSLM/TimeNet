@@ -122,7 +122,7 @@ interval, for example a time when an electrode lost contact with the skin:
 ```python
 from timenet.types import Annotation, TimeInterval
 
-chest_strap.annotate(Annotation("firmware", "3.1.1"))
+chest_strap.annotate(Annotation("firmware", value="3.1.1"))
 chest_strap.annotate(
     Annotation(
         key="electrode_contact",

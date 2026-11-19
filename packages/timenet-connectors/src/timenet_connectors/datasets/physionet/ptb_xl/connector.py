@@ -196,37 +196,37 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
             raise TimeNetConnectorError(
                 f"required column {names} is empty" if len(empty) == 1 else f"required columns {names} are empty"
             )
-        result = [Annotation("age", _age_in_years(cells), unit="year", description=_AGE_DESCRIPTION)]
+        result = [Annotation("age", value=_age_in_years(cells), unit="year", description=_AGE_DESCRIPTION)]
         for key, unit in (("height", "centimeter"), ("weight", "kilogram")):
             if cells.get(key, "") not in _EMPTY_CELLS:
-                result.append(Annotation(key, float(cells[key]), unit=unit))
+                result.append(Annotation(key, value=float(cells[key]), unit=unit))
         for key in ("report", "heart_axis"):
             if cells.get(key):
-                result.append(Annotation(key, row[key]))
+                result.append(Annotation(key, value=row[key]))
         result.extend(
             (
-                Annotation("device", row["device"]),
-                Annotation("recording_date", cells["recording_date"]),
+                Annotation("device", value=row["device"]),
+                Annotation("recording_date", value=cells["recording_date"]),
             )
         )
         # The cell of a finding can name the leads that the finding affects. The annotation gets the
         # cell value without its surrounding whitespace.
         for key in _FINDINGS:
             if value := cells.get(key):
-                result.append(Annotation(key, value))
-        result.append(Annotation("subject_ids", [_parse_patient_id(cells)]))
+                result.append(Annotation(key, value=value))
+        result.append(Annotation("subject_ids", value=[_parse_patient_id(cells)]))
         sex = _SEX.get(cells["sex"])
         if sex is None:
             raise TimeNetConnectorError(f"sex {row['sex']!r} is not 0 or 1")
-        result.append(Annotation("sex", sex, description=_SEX_DESCRIPTION))
+        result.append(Annotation("sex", value=sex, description=_SEX_DESCRIPTION))
         codes = ast.literal_eval(cells["scp_codes"])
-        result.append(Annotation("scp_codes", sorted(codes), metadata={"likelihoods": codes}))
+        result.append(Annotation("scp_codes", value=sorted(codes), metadata={"likelihoods": codes}))
         fold = int(cells["strat_fold"])
         split = Split.TEST if fold == _TEST_FOLD else Split.VALIDATION if fold == _VALIDATION_FOLD else Split.TRAIN
         result.extend(
             (
-                Annotation("strat_fold", fold),
-                Annotation("split", split.value),
+                Annotation("strat_fold", value=fold),
+                Annotation("split", value=split.value),
             )
         )
         return result

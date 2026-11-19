@@ -283,7 +283,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
             ("time_axis_reconstruction", "round(linspace(0, 119, 60)) / 20 seconds relative to window start"),
         ):
-            dataset.annotate(Annotation(key, value))
+            dataset.annotate(Annotation(key, value=value))
         records: dict[tuple[str, int], Record] = {}
         for file in raw_refs:
             count = 0
@@ -328,7 +328,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         if row.location is not None:
             metadata["sensor_location"] = row.location
         for key, value in metadata.items():
-            record.annotate(Annotation(key, value))
+            record.annotate(Annotation(key, value=value))
         return record
 
 

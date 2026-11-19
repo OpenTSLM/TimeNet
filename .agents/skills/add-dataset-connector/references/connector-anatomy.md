@@ -128,7 +128,7 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   field such as `sources`, `signals`, or `inputs` takes any iterable and stores a tuple. A
   windowed record says so through its axis: `RegularAxis.at_index(...)` moves the origin into the
   recording.
-- `record.annotate(Annotation("key", value))` attaches one annotation and returns it.
+- `record.annotate(Annotation("key", value=value))` attaches one annotation and returns it.
   `record.add_annotations([...])` takes an iterable and returns a tuple. There is one annotation
   class, and its `span` gives its shape. No span means the whole record.
   `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
@@ -237,9 +237,9 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 ]
                 record = Record(sources=[Source("TSQA series", signals=time_series)])
                 dataset.add_record(record)
-                record.annotate(Annotation("task", row.task))
+                record.annotate(Annotation("task", value=row.task))
                 if row.label:
-                    record.annotate(Annotation("label", row.label))
+                    record.annotate(Annotation("label", value=row.label))
                 dataset.add_task(AnswerTask(inputs=[record], prompt=row.question, targets=row.answer))
         return dataset
 

@@ -156,7 +156,7 @@ Store subject identifiers as a list-valued record annotation. Omit it for a reco
 from timenet.types import Annotation
 
 record.annotate(
-    Annotation("subject_ids", ["patient-1", "patient-2"])
+    Annotation("subject_ids", value=["patient-1", "patient-2"])
 )
 ```
 
@@ -222,7 +222,7 @@ content that varies, as [Annotations](data-model/annotations.md#reuse-content) s
 ```python
 from timenet.types import Annotation, TimePoint
 
-male = Annotation("patient_sex", "male")
+male = Annotation("patient_sex", value="male")
 record.annotate(male)
 
 lead_i.annotate(

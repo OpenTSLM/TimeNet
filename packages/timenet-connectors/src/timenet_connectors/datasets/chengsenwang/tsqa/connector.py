@@ -91,9 +91,9 @@ class TSQAConnector(BaseHuggingFaceConnector):
             )
             signals.append(signal)
         record = Record(sources=[Source("TSQA series", signals=signals)])
-        record.annotate(Annotation("task", sample.category))
+        record.annotate(Annotation("task", value=sample.category))
         if sample.label:
-            record.annotate(Annotation("label", sample.label))
+            record.annotate(Annotation("label", value=sample.label))
         return record
 
     @staticmethod
