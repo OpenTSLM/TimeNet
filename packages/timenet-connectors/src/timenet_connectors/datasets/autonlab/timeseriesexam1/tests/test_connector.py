@@ -9,8 +9,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.types import ClassificationTask, Split
-from timenet.types.text import read_value
+from timenet.types import ClassificationTask, Split, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.autonlab.timeseriesexam1 import TimeSeriesExam1Connector
 

@@ -13,13 +13,11 @@ The prompt is the question alone. The options are the labels of the task, and ``
 letters that the task does not use.
 """
 
-from collections.abc import Mapping
-from typing import ClassVar, Self
+from typing import Self
 
 from pydantic import model_validator
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
+from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.types import ClassificationTask, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
@@ -67,10 +65,7 @@ class _SourceRow(DataRow):
 
 def _record(row_id: int, role: str, values: list[float]) -> Record:
     signal = Signal.from_values(values, spec=_SPEC, name="series", time_axis=_AXIS)
-    return Record(
-        sources=(Source(name="series", signals=(signal,)),),
-        metadata={"row_id": row_id, "role": role},
-    )
+    return Record(sources=[Source("series", signals=[signal])], metadata={"row_id": row_id, "role": role})
 
 
 class TimeSeriesExam1Connector(BaseHuggingFaceConnector):
@@ -78,7 +73,7 @@ class TimeSeriesExam1Connector(BaseHuggingFaceConnector):
 
     HF_REPO = "AutonLab/TimeSeriesExam1"
     SOURCE_REVISION = "628f686757bb484d9b608b6855fb41f6a302ecda"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"test": "data/test-00000-of-00001.parquet"}
+    SOURCE_FILES = {"test": "data/test-00000-of-00001.parquet"}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Build one Record per series and one classification task per question.
@@ -91,15 +86,13 @@ class TimeSeriesExam1Connector(BaseHuggingFaceConnector):
         """
         dataset = TimeFDataset(metadata=self.metadata())
         for row in ParquetDataReader(raw_refs[0].path, _SourceRow).iter_rows():
-            inputs = tuple(
-                dataset.add_record(record=_record(row.id, role, values)) for role, values in row.series.items()
-            )
+            inputs = [dataset.add_record(_record(row.id, role, values)) for role, values in row.series.items()]
             dataset.add_task(
-                task=ClassificationTask(
+                ClassificationTask(
                     inputs=inputs,
                     prompt=row.question,
                     label_set=LabelSet(row.options),
-                    targets=(row.answer,),
+                    targets=row.answer,
                     split=Split.TEST,
                     metadata=row.model_dump(exclude=_NOT_METADATA),
                 )
