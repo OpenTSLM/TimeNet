@@ -35,16 +35,16 @@ SAMPLES_PER_WINDOW = 128
 
 # The label order is the order of the OpenTSLM training prompt.
 ACTIVITY = LabelSet(
-    labels=(
-        Label(name="biking"),
-        Label(name="lying"),
-        Label(name="running"),
-        Label(name="sitting"),
-        Label(name="standing"),
-        Label(name="walking"),
+    [
+        "biking",
+        "lying",
+        "running",
+        "sitting",
+        "standing",
+        "walking",
         Label(name="walking_down", description="Walking down stairs."),
         Label(name="walking_up", description="Walking up stairs."),
-    ),
+    ],
     annotations=(Annotation(key="name", value="activity"),),
 )
 # The release states no unit. A resting window has a magnitude of about 9.8, which is gravity in m/s².

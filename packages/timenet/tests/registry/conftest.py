@@ -12,7 +12,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Domain,
-    Label,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -22,12 +21,7 @@ from timenet.types import (
 from timenet.writer import TimeFWriter
 
 
-RHYTHM = LabelSet(
-    labels=(
-        Label(name="afib"),
-        Label(name="normal"),
-    ),
-)
+RHYTHM = LabelSet(["afib", "normal"])
 
 
 def _ecg_dataset() -> TimeFDataset:

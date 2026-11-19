@@ -122,10 +122,10 @@ A `LabelSet` takes annotations like the other owners. Pass them to the construct
 `annotate()` later. Use them for a name, a description, or other context. No key is required.
 
 ```python
-from timenet.types import Annotation, Label, LabelSet
+from timenet.types import Annotation, LabelSet
 
 SLEEP_STAGE = LabelSet(
-    labels=(Label(name="W"), Label(name="N1"), Label(name="R")),
+    ["W", "N1", "R"],
     annotations=(Annotation(key="name", value="sleep_stage"),),
 )
 SLEEP_STAGE.annotate(Annotation(key="description", value="Sleep stage of one epoch."))

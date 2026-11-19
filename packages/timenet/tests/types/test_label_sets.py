@@ -6,8 +6,8 @@ from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, TimePoint
 
 
-STAGES = LabelSet(labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")))
-FINDINGS = LabelSet(labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")), multi_label=True)
+STAGES = LabelSet([Label(name="W", description="Awake."), "N1", "R"])
+FINDINGS = LabelSet(["AF", "PVC", "LBBB"], multi_label=True)
 
 
 @pytest.mark.parametrize(
@@ -65,13 +65,13 @@ def test_a_multi_label_target_rejects_a_repeated_label():
 
 
 def test_equality_ignores_label_order_and_annotations_but_not_descriptions_or_multi_label():
-    first = LabelSet(labels=(Label(name="F"), Label(name="M")), annotations=(Annotation(key="name", value="sex"),))
-    second = LabelSet(labels=(Label(name="M"), Label(name="F")))
-    described = LabelSet(labels=(Label(name="F", description="Female."), Label(name="M")))
-    multi = LabelSet(labels=(Label(name="F"), Label(name="M")), multi_label=True)
+    first = LabelSet(["F", "M"], annotations=(Annotation(key="name", value="sex"),))
+    second = LabelSet(["M", "F"])
+    described = LabelSet([Label(name="F", description="Female."), "M"])
+    multi = LabelSet(["F", "M"], multi_label=True)
     assert first._content_key() == second._content_key()
     assert len({first._content_key(), described._content_key(), multi._content_key()}) == 3
-    assert first == LabelSet(labels=(Label(name="F"), Label(name="M")))
+    assert first == LabelSet(["F", "M"])
     assert first == second
     assert first != described
     assert first != multi
@@ -91,17 +91,17 @@ def test_an_ordered_set_uses_its_label_order_for_equality():
 
 def test_annotate_attaches_an_occurrence_and_rejects_a_span():
     annotation = Annotation(key="name", value="sex")
-    built = LabelSet(labels=(Label(name="F"),), annotations=(annotation,))
+    built = LabelSet(["F"], annotations=(annotation,))
     assert built.annotations == (annotation,)
     assert built.annotations[0] is not annotation
-    label_set = LabelSet(labels=(Label(name="F"),))
+    label_set = LabelSet(["F"])
     attached = label_set.annotate(annotation)
     assert label_set.annotations == (attached,)
     assert attached is not annotation
     with pytest.raises(TimeFValidationError, match="has a span"):
         label_set.annotate(Annotation(key="x", span=TimePoint.seconds(1.0)))
     with pytest.raises(TimeFValidationError, match="has a span"):
-        LabelSet(labels=(Label(name="F"),), annotations=(Annotation(key="x", span=TimePoint.seconds(1.0)),))
+        LabelSet(["F"], annotations=(Annotation(key="x", span=TimePoint.seconds(1.0)),))
 
 
 def test_a_classification_task_walks_its_annotations_then_those_of_its_label_set():
@@ -116,7 +116,7 @@ def test_a_classification_task_walks_its_annotations_then_those_of_its_label_set
 
 
 def test_a_copied_task_gets_its_own_label_set():
-    label_set = LabelSet(labels=(Label(name="W"),), annotations=(Annotation(key="name", value="stage"),))
+    label_set = LabelSet(["W"], annotations=(Annotation(key="name", value="stage"),))
     task = ClassificationTask(targets=("W",), label_set=label_set)
     copy = task.with_references({}, {})
     assert copy.label_set == label_set
@@ -129,7 +129,7 @@ def test_a_copied_task_gets_its_own_label_set():
 
 def test_a_task_with_an_annotated_set_survives_a_pickle_round_trip():
     label_set = LabelSet(
-        labels=(Label(name="W", description="Awake."),),
+        [Label(name="W", description="Awake.")],
         multi_label=True,
         annotations=(Annotation(key="name", value="stage"),),
     )

@@ -12,7 +12,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
-    Label,
     LabelSet,
     License,
     StepInterval,
@@ -27,7 +26,7 @@ from timenet.types import (
 from timenet.writer import TimeFWriter
 
 
-LABELS = LabelSet(labels=(Label(name="x"),))
+LABELS = LabelSet(["x"])
 
 
 def _spec():

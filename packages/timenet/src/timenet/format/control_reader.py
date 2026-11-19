@@ -1877,7 +1877,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             label_set_id = row["label_set_id"]
             try:
                 label_sets[label_set_id] = LabelSet(
-                    labels=tuple(Label.model_validate(label) for label in row["labels"]),
+                    [Label.model_validate(label) for label in row["labels"]],
                     multi_label=row["multi_label"],
                     ordered=row["ordered"],
                     annotations=annotations.get((ObjectKind.LABEL_SET, label_set_id), ()),

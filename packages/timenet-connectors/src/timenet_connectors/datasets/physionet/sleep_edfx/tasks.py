@@ -42,16 +42,16 @@ EPOCH_MICROSECONDS = 30 * US_PER_S
 # technician left unscored. Each classification task draws its target from one closed set, whose
 # name annotation is the key whose values it holds, and each target is exactly one label.
 SLEEP_STAGES = LabelSet(
-    labels=(
+    [
         Label(name="Sleep stage W", description="Wake."),
-        Label(name="Sleep stage 1"),
-        Label(name="Sleep stage 2"),
-        Label(name="Sleep stage 3"),
-        Label(name="Sleep stage 4"),
+        "Sleep stage 1",
+        "Sleep stage 2",
+        "Sleep stage 3",
+        "Sleep stage 4",
         Label(name="Sleep stage R", description="Rapid eye movement (REM) sleep."),
         Label(name="Movement time", description="An epoch that body movement obscures, so it has no stage."),
         Label(name="Sleep stage ?", description="An epoch with no sleep-stage score from data collection."),
-    ),
+    ],
     annotations=(Annotation(key="name", value=str(AnnotationKey.SLEEP_STAGE)),),
 )
 STAGE_LABELS = SLEEP_STAGES.names
@@ -62,7 +62,7 @@ ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 # The sexes, after each sheet is decoded. The two sheets code the column with opposite
 # meanings, so a raw code never reaches a task.
 SEXES = LabelSet(
-    labels=(Label(name="F", description="Female."), Label(name="M", description="Male.")),
+    [Label(name="F", description="Female."), Label(name="M", description="Male.")],
     annotations=(Annotation(key="name", value=str(AnnotationKey.SEX)),),
 )
 SEX_LABELS = SEXES.names
@@ -70,7 +70,7 @@ SEX_LABELS = SEXES.names
 # The two nights of the telemetry study.
 CONDITION_LABELS = tuple(Condition)
 CONDITIONS = LabelSet(
-    labels=[str(one) for one in Condition],
+    [str(one) for one in Condition],
     annotations=(Annotation(key="name", value=str(AnnotationKey.CONDITION)),),
 )
 

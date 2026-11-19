@@ -12,9 +12,9 @@ A Task describes one modeling problem. It holds ordered input Records and one re
 expected output.
 
 ```python
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.types import ClassificationTask, LabelSet
 
-CONDITION = LabelSet(labels=(Label(name="healthy"), Label(name="faulty")))
+CONDITION = LabelSet(["healthy", "faulty"])
 
 task = ClassificationTask(
     inputs=(record,),
@@ -85,9 +85,9 @@ A dataset that ships a partition marks each Task with its `split`. Records carry
 own: one Record may serve Tasks of several splits.
 
 ```python
-from timenet.types import ClassificationTask, Label, LabelSet, Split
+from timenet.types import ClassificationTask, LabelSet, Split
 
-ACTIVITY = LabelSet(labels=(Label(name="walking"), Label(name="sitting")))
+ACTIVITY = LabelSet(["walking", "sitting"])
 
 dataset.add_task(
     ClassificationTask(
@@ -221,13 +221,8 @@ dataset.add_task(age_question(record, 64))
 ```python
 from timenet.types import Label, LabelSet
 
-CONDITION = LabelSet(
-    labels=(Label(name="healthy"), Label(name="faulty", description="A bearing fault.")),
-)
-FINDINGS = LabelSet(
-    labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")),
-    multi_label=True,
-)
+CONDITION = LabelSet(["healthy", Label(name="faulty", description="A bearing fault.")])
+FINDINGS = LabelSet(["AF", "PVC", "LBBB"], multi_label=True)
 
 ClassificationTask(inputs=(record,), targets="healthy", label_set=CONDITION)
 ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)

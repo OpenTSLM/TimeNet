@@ -16,7 +16,6 @@ from timenet.types import (
     Annotation,
     ClassificationTask,
     DatasetMetadata,
-    Label,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -28,12 +27,7 @@ from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
-CLASSES = LabelSet(
-    labels=(
-        Label(name="c0"),
-        Label(name="c1"),
-    ),
-)
+CLASSES = LabelSet(["c0", "c1"])
 
 
 # Small enough that a modest dataset shards every artifact type into several parts, tiny on disk.

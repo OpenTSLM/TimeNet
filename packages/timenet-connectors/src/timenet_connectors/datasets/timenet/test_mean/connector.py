@@ -23,10 +23,10 @@ _SAMPLING_RATE_HZ = 16.0
 _NOISE_STD = 0.5
 _SEED = 20260715  # fixed base seed keeps every build's values identical
 _MEAN_SIGN = LabelSet(
-    labels=(
+    [
         Label(name="above_zero", description="The mean of the signal is above zero."),
         Label(name="below_zero", description="The mean of the signal is below zero."),
-    ),
+    ],
     annotations=(Annotation(key="name", value="mean_sign"),),
 )
 

@@ -19,7 +19,6 @@ from timenet.types import (
     Annotation,
     ClassificationTask,
     DatasetMetadata,
-    Label,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -31,7 +30,7 @@ from timenet.writer.encodings import applied_matches, values_encoding_of
 from timenet.writer.value_encoding import ValueEncoding
 
 
-LABELS = LabelSet(labels=(Label(name="x"),))
+LABELS = LabelSet(["x"])
 
 
 def _written(tmp_path, dataset=None, **kwargs):

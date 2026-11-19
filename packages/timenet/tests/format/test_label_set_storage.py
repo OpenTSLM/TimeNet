@@ -30,10 +30,10 @@ from timenet.types import (
 
 SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.millivolt)
 STAGE_LABELS = LabelSet(
-    labels=(Label(name="W"), Label(name="N1"), Label(name="R", description="REM sleep.")),
+    ["W", "N1", Label(name="R", description="REM sleep.")],
     annotations=(Annotation(key="name", value="stage", description="Sleep stage"),),
 )
-FINDINGS = LabelSet(labels=(Label(name="AF"), Label(name="PVC")), multi_label=True)
+FINDINGS = LabelSet(["AF", "PVC"], multi_label=True)
 
 
 def _record() -> Record:
@@ -175,9 +175,9 @@ def _write_sets(tmp_path, *label_sets):
 
 
 def test_sets_are_stored_once_per_content_and_keep_the_first_label_order(tmp_path):
-    reordered = LabelSet(labels=tuple(reversed(STAGE_LABELS.labels)))
-    described = LabelSet(labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")))
-    multi = LabelSet(labels=STAGE_LABELS.labels, multi_label=True)
+    reordered = LabelSet(STAGE_LABELS.labels[::-1])
+    described = LabelSet([Label(name="W", description="Awake."), "N1", "R"])
+    multi = LabelSet(STAGE_LABELS.labels, multi_label=True)
     path = _write_sets(tmp_path, STAGE_LABELS, reordered, described, multi)
 
     assert [row[0] for row in _stored_sets(path)] == [1, 2, 3]
@@ -208,12 +208,12 @@ def test_ordered_sets_in_another_order_are_stored_as_two_rows_in_their_own_order
 
 
 def test_equal_sets_with_different_annotations_are_stored_once_with_both(tmp_path):
-    first = LabelSet(labels=STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),))
+    first = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),))
     second = LabelSet(
-        labels=STAGE_LABELS.labels,
+        STAGE_LABELS.labels,
         annotations=(Annotation(key="name", value="stage"), Annotation(key="source", value="manual")),
     )
-    bare = LabelSet(labels=STAGE_LABELS.labels)
+    bare = LabelSet(STAGE_LABELS.labels)
     path = _write_sets(tmp_path, first, bare, second)
 
     assert [row[0] for row in _stored_sets(path)] == [1]
@@ -228,10 +228,10 @@ def test_equal_sets_with_different_annotations_are_stored_once_with_both(tmp_pat
 
 
 def test_occurrences_that_differ_only_in_occurrence_fields_are_all_stored(tmp_path):
-    first = LabelSet(labels=STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage", confidence=0.5),))
+    first = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage", confidence=0.5),))
     first.annotate(Annotation(key="name", value="stage", occurrence_metadata={"k": 1}))
     second = LabelSet(
-        labels=STAGE_LABELS.labels,
+        STAGE_LABELS.labels,
         annotations=(
             Annotation(key="name", value="stage", confidence=0.5),
             Annotation(key="name", value="stage", source="rater", confidence=0.9),
@@ -248,8 +248,8 @@ def test_occurrences_that_differ_only_in_occurrence_fields_are_all_stored(tmp_pa
 
 
 def test_writing_does_not_change_the_callers_label_sets(tmp_path):
-    first = LabelSet(labels=STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),))
-    second = LabelSet(labels=STAGE_LABELS.labels, annotations=(Annotation(key="source", value="manual"),))
+    first = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),))
+    second = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="source", value="manual"),))
     first_annotations, second_annotations = first.annotations, second.annotations
 
     _write_sets(tmp_path, first, second)
@@ -261,8 +261,8 @@ def test_writing_does_not_change_the_callers_label_sets(tmp_path):
 def test_equal_annotations_of_two_sets_share_one_content_row(tmp_path):
     path = _write_sets(
         tmp_path,
-        LabelSet(labels=STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),)),
-        LabelSet(labels=FINDINGS.labels, annotations=(Annotation(key="name", value="stage"),)),
+        LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),)),
+        LabelSet(FINDINGS.labels, annotations=(Annotation(key="name", value="stage"),)),
     )
 
     with connect_control(path, read_only=True) as connection:
@@ -276,7 +276,7 @@ def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path):
     dataset, record = _dataset()
     second = ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS)
     dataset.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS), second])
-    second.label_set = LabelSet(labels=(Label(name="X"),))
+    second.label_set = LabelSet(["X"])
 
     with pytest.raises(TimeFValidationError, match=r"ClassificationTask 2: labels not in label set \['X'\]"):
         _write(dataset, tmp_path / "control.duckdb")
@@ -291,7 +291,7 @@ def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path):
     ],
 )
 def test_the_writer_checks_a_label_set_changed_after_it_was_built(tmp_path, field, value, message):
-    label_set = LabelSet(labels=(Label(name="W"),))
+    label_set = LabelSet(["W"])
     dataset, record = _dataset()
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=label_set))
     setattr(label_set, field, value)

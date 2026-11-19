@@ -17,7 +17,6 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     InputModality,
-    Label,
     LabelSet,
     License,
     ScalarPredictionTask,
@@ -34,21 +33,7 @@ from timenet.types import (
 )
 
 
-TEST_LABELS = LabelSet(
-    labels=(
-        Label(name="N2"),
-        Label(name="a"),
-        Label(name="afib"),
-        Label(name="b"),
-        Label(name="beat"),
-        Label(name="c"),
-        Label(name="d"),
-        Label(name="e"),
-        Label(name="event"),
-        Label(name="walking"),
-        Label(name="x"),
-    ),
-)
+TEST_LABELS = LabelSet(["N2", "a", "afib", "b", "beat", "c", "d", "e", "event", "walking", "x"])
 
 
 def _classification_task(record: Record, label: str, **kwargs: Any) -> ClassificationTask:
@@ -182,19 +167,19 @@ def test_derive_schema(make_series):
 def test_derive_schema_collects_label_set_annotations(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    labels = (Label(name="a"), Label(name="b"))
+    labels = ("a", "b")
     ds.add_task(
         task=ClassificationTask(
             inputs=(record,),
             targets=("a",),
-            label_set=LabelSet(labels=labels, annotations=(Annotation(key="name", value="letters", unit="meter"),)),
+            label_set=LabelSet(labels, annotations=(Annotation(key="name", value="letters", unit="meter"),)),
         )
     )
     ds.add_task(
         task=ClassificationTask(
             inputs=(record,),
             targets=("b",),
-            label_set=LabelSet(labels=labels, annotations=(Annotation(key="note", value="extra"),)),
+            label_set=LabelSet(labels, annotations=(Annotation(key="note", value="extra"),)),
         )
     )
 
@@ -214,7 +199,7 @@ def test_derive_schema_rejects_a_label_set_annotation_that_conflicts_with_a_reco
         task=ClassificationTask(
             inputs=(record,),
             targets=("a",),
-            label_set=LabelSet(labels=(Label(name="a"),), annotations=(Annotation(key="name", value="letters"),)),
+            label_set=LabelSet(["a"], annotations=(Annotation(key="name", value="letters"),)),
         )
     )
     with pytest.raises(ValueError, match="conflicting descriptors"):
