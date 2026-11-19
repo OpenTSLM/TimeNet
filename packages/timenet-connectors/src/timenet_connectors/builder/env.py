@@ -209,8 +209,11 @@ def _base_args() -> tuple[str, ...]:
             raise TimeNetIsolationError(
                 f"cannot make a build environment: {name} is not installed in {sys.executable}."
             ) from exc
+        git_url = installed.git_requirement_url()
         source = installed.path_to_ondisk_project_directory()
-        if source is not None:
+        if git_url is not None:
+            args += ["--with", f"{name} @ {git_url}"]
+        elif source is not None:
             args += ["--with-editable", str(source)]
         else:
             args += ["--with", f"{name}=={installed.version}"]

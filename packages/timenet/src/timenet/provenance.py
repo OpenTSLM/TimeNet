@@ -8,7 +8,7 @@ import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the commands are fixed argument vectors
 import sys
 from typing import ClassVar, Self
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 from urllib.request import url2pathname
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, model_validator
@@ -157,6 +157,11 @@ class InstalledDistribution:
         """Return the commit of the code that this distribution runs. Raises ``TimeNetBuildError`` if it is unknown."""
         return self.install_source().read_git_source()
 
+    def git_requirement_url(self) -> str | None:
+        """Return the pip URL of a git install, pinned to its commit and without credentials, else ``None``."""
+        direct_url = self._read_direct_url()
+        return None if direct_url is None else direct_url.git_requirement_url()
+
     def path_to_ondisk_project_directory(self) -> Path | None:
         """Return the project directory of an editable or local path install, else ``None``."""
         direct_url = self._read_direct_url()
@@ -302,6 +307,18 @@ class _DirectUrl(BaseModel):
         if self.vcs_info is None or self.vcs_info.vcs != "git":
             return None
         return self.vcs_info.commit_id
+
+    def git_requirement_url(self) -> str | None:
+        """Return ``git+<url>@<commit>`` for a git install, with any subdirectory and no credentials, else ``None``."""
+        commit_id = self.installed_git_commit()
+        if commit_id is None:
+            return None
+        parts = urlsplit(self.url.removeprefix("git+"))
+        userinfo, _, host = parts.netloc.rpartition("@")
+        if userinfo and parts.scheme not in {"http", "https"}:
+            host = f"{userinfo.partition(':')[0]}@{host}"
+        url = f"git+{urlunsplit((parts.scheme, host, parts.path, '', ''))}@{commit_id}"
+        return url if self.subdirectory is None else f"{url}#subdirectory={self.subdirectory}"
 
     def is_editable(self) -> bool:
         """Whether the distribution was installed editable."""

@@ -111,6 +111,42 @@ def test_base_args_pins_a_version_for_an_index_install(monkeypatch):
     assert _base_args_for(monkeypatch, _FakeDist(version="9.9.9", direct_url=None)) == ("--with", "timenet==9.9.9")
 
 
+_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.mark.parametrize(
+    ("subdirectory", "expected"),
+    [
+        (None, f"timenet @ git+https://github.com/o/r.git@{_COMMIT}"),
+        ("packages/timenet", f"timenet @ git+https://github.com/o/r.git@{_COMMIT}#subdirectory=packages/timenet"),
+    ],
+)
+def test_base_args_pins_the_commit_for_a_git_install(monkeypatch, subdirectory, expected):
+    record = {"url": "https://github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+    if subdirectory is not None:
+        record["subdirectory"] = subdirectory
+
+    assert _base_args_for(monkeypatch, _FakeDist(direct_url=json.dumps(record))) == ("--with", expected)
+
+
+def test_base_args_strips_credentials_from_a_git_url(monkeypatch):
+    record = {"url": "https://user:secret-token@github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+
+    assert _base_args_for(monkeypatch, _FakeDist(direct_url=json.dumps(record))) == (
+        "--with",
+        f"timenet @ git+https://github.com/o/r.git@{_COMMIT}",
+    )
+
+
+def test_base_args_keeps_the_ssh_user_of_a_git_url(monkeypatch):
+    record = {"url": "ssh://git@github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+
+    assert _base_args_for(monkeypatch, _FakeDist(direct_url=json.dumps(record))) == (
+        "--with",
+        f"timenet @ git+ssh://git@github.com/o/r.git@{_COMMIT}",
+    )
+
+
 @pytest.mark.parametrize("editable", [False, True])
 def test_isolated_environment_installs_backend_dependencies(monkeypatch, tmp_path, editable):
     captured = {}
