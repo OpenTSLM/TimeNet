@@ -158,7 +158,7 @@ class InstalledDistribution:
         return self.install_source().read_git_source()
 
     def git_requirement_url(self) -> str | None:
-        """Return the pip URL of a git install, pinned to its commit and without credentials, else ``None``."""
+        """Return the requirement URL of a git install, pinned to its commit and without credentials, else ``None``."""
         direct_url = self._read_direct_url()
         return None if direct_url is None else direct_url.git_requirement_url()
 

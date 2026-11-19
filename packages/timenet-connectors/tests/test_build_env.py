@@ -138,6 +138,15 @@ def test_base_args_strips_credentials_from_a_git_url(monkeypatch):
     )
 
 
+def test_base_args_pins_a_version_for_a_non_git_vcs_install(monkeypatch):
+    record = {"url": "https://example.org/r", "vcs_info": {"vcs": "hg", "commit_id": _COMMIT}}
+
+    assert _base_args_for(monkeypatch, _FakeDist(version="9.9.9", direct_url=json.dumps(record))) == (
+        "--with",
+        "timenet==9.9.9",
+    )
+
+
 def test_base_args_keeps_the_ssh_user_of_a_git_url(monkeypatch):
     record = {"url": "ssh://git@github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
 
