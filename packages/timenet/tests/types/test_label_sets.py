@@ -27,6 +27,7 @@ FINDINGS = LabelSet(["AF", "PVC", "LBBB"], multi_label=True)
         ({"labels": (Label(name="W"),), "multi_label": 1}, "multi_label must be a bool, got int"),
         ({"labels": (Label(name="W"),), "ordered": 1}, "ordered must be a bool, got int"),
         ({"labels": (Label(name="W"),), "ordered": None}, "ordered must be a bool, got NoneType"),
+        ({"labels": {"W", "R"}, "ordered": True}, "needs labels in a fixed order, got a set"),
         ({"labels": (Label(name="W"),), "annotations": ("name",)}, "takes Annotation objects, got str"),
     ],
 )

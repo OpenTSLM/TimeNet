@@ -202,7 +202,7 @@ def test_derive_schema_rejects_a_label_set_annotation_that_conflicts_with_a_reco
             label_set=LabelSet(["a"], annotations=(Annotation(key="name", value="letters"),)),
         )
     )
-    with pytest.raises(ValueError, match="conflicting descriptors"):
+    with pytest.raises(TimeFValidationError, match="conflicting descriptors"):
         ds.derive_schema()
 
 

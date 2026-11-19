@@ -2455,8 +2455,7 @@ class _TaskBuilder:
             The shared label set.
 
         Raises:
-            TimeFFormatError: If the task names no label set, no label set has this id, or a stored
-                label set is not valid.
+            TimeFFormatError: If the task names no label set, or no label set has this id.
         """
         if label_set_id is None:
             raise TimeFFormatError(f"classification task {task_id!r} has no label set")

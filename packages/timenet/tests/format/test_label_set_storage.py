@@ -156,9 +156,10 @@ def test_the_batches_of_a_task_stream_share_one_label_set_object(release):
     assert first is fourth
 
 
-def _stored_sets(path):
+def _stored_set_ids(path):
     with connect_control(path, read_only=True) as connection:
-        return connection.execute("SELECT label_set_id, labels, multi_label FROM label_sets ORDER BY 1").fetchall()
+        rows = connection.execute("SELECT label_set_id FROM label_sets ORDER BY label_set_id").fetchall()
+    return [row[0] for row in rows]
 
 
 def _write_sets(tmp_path, *label_sets):
@@ -180,7 +181,7 @@ def test_sets_are_stored_once_per_content_and_keep_the_first_label_order(tmp_pat
     multi = LabelSet(STAGE_LABELS.labels, multi_label=True)
     path = _write_sets(tmp_path, STAGE_LABELS, reordered, described, multi)
 
-    assert [row[0] for row in _stored_sets(path)] == [1, 2, 3]
+    assert _stored_set_ids(path) == [1, 2, 3]
     first, second, *_ = _read_tasks(path)
     assert first.label_set is second.label_set
     assert first.label_set.names == ("W", "N1", "R")
@@ -216,7 +217,7 @@ def test_equal_sets_with_different_annotations_are_stored_once_with_both(tmp_pat
     bare = LabelSet(STAGE_LABELS.labels)
     path = _write_sets(tmp_path, first, bare, second)
 
-    assert [row[0] for row in _stored_sets(path)] == [1]
+    assert _stored_set_ids(path) == [1]
     with connect_control(path, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
         assert connection.execute(

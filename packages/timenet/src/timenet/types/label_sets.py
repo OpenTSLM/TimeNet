@@ -1,7 +1,7 @@
 """The allowed labels for a classification target."""
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TypeVar
 
 from timenet.errors import TimeFValidationError
@@ -91,7 +91,7 @@ class LabelSet(SupportsAnnotate):
     """If ``True``, the label order is part of the identity of the set. If ``False``, the order does not matter.
 
     An ordered set needs labels in a fixed order, so pass a list or a tuple, not a Python set."""
-    annotations: tuple[Annotation, ...] = field(default=(), compare=False)
+    annotations: tuple[Annotation, ...] = ()
     """Annotations that describe the set, such as ``Annotation(key="name", value="sleep_stage")``.
 
     An annotation cannot have a span. The set holds its own occurrence of each annotation.
@@ -115,7 +115,9 @@ class LabelSet(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If the set is not valid (see :meth:`_validate`).
-        """  # ruff: ignore[docstring-extraneous-exception] - _validate raises it
+        """
+        if ordered and isinstance(labels, (set, frozenset)):
+            raise TimeFValidationError("an ordered label set needs labels in a fixed order, got a set")
         self.labels = tuple(_as_label(label) for label in _as_tuple(labels, Label))  # ty: ignore[invalid-assignment]
         self.multi_label = multi_label
         self.ordered = ordered

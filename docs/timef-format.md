@@ -176,8 +176,9 @@ An occurrence can annotate a Dataset, Task, Record, Source, Signal, or label set
 owner. For a Source, it is the storage ID of that row. `object_id` is `NULL` exactly when the
 owner is the Dataset. IDs are unique only within one kind, so the type is part of the reference.
 
-A read of every Record or every Task rejects an occurrence with an unknown owner type or a missing
-owner. It does not drop that occurrence.
+A read of every Record or every Task rejects an occurrence with an unknown owner type. It also
+rejects an occurrence whose Record, Source, Signal, or Task owner is missing. It does not drop that
+occurrence. Only `audit_control_database()` reports an occurrence whose label set is missing.
 
 One content row can apply to many objects without copying a long value. Each attachment still has
 its own `occurrence_id` and temporal placement.
