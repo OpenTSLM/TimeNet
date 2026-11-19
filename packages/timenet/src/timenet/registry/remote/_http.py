@@ -154,6 +154,26 @@ def timenet_user_agent() -> str:
     return f"timenet/{version}"
 
 
+class RegistryForbiddenError(TimeNetRegistryError):
+    """The registry service refused the request (403)."""
+
+
+def _refusal_reason(response: httpx.Response) -> str:
+    """Return the reason that the service gives for a 401 or a 403.
+
+    Args:
+        response: The error response.
+
+    Returns:
+        The whole ``detail`` text of a JSON body, otherwise the start of the body.
+    """
+    try:
+        detail = response.json()["detail"]
+    except (ValueError, KeyError, TypeError):
+        detail = None
+    return detail if isinstance(detail, str) else response.text[:200]
+
+
 def _raise_for_status(response: httpx.Response) -> None:
     """Map an error response onto a TimeNet error.
 
@@ -162,7 +182,9 @@ def _raise_for_status(response: httpx.Response) -> None:
 
     Raises:
         TimeNetDatasetNotFoundError: On 404.
-        TimeNetRegistryError: On any other 4xx/5xx, with the status and a body snippet.
+        RegistryForbiddenError: On 403, with the reason that the service gives.
+        TimeNetRegistryError: On any other 4xx/5xx, with the status and a body snippet. A 401 carries the reason
+            that the service gives, and says how to set a token.
     """
     if not response.is_error:
         return
@@ -172,7 +194,14 @@ def _raise_for_status(response: httpx.Response) -> None:
     if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
         retry = response.headers.get("retry-after", "?")
         raise TimeNetRegistryError(f"registry rate-limited (429), retry after {retry}s: {body}")
-    raise TimeNetRegistryError(f"registry request to {response.request.url} failed ({response.status_code}): {body}")
+    failed = f"registry request to {response.request.url} failed ({response.status_code})"
+    if response.status_code == httpx.codes.FORBIDDEN:
+        raise RegistryForbiddenError(f"{failed}: {_refusal_reason(response)}")
+    if response.status_code == httpx.codes.UNAUTHORIZED:
+        raise TimeNetRegistryError(
+            f"{failed}: {_refusal_reason(response)}. Set TIMENET_TOKEN or pass token= to RemoteRegistry."
+        )
+    raise TimeNetRegistryError(f"{failed}: {body}")
 
 
 def _download_path(dataset_id: str, version: str, relpath: str) -> str:

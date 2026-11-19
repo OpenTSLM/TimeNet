@@ -157,7 +157,7 @@ class BaseRegistry(ABC):
         """Check whether the registry serves a dataset release.
 
         If :attr:`requires_open_access` is true, the registry serves a release only if its card and each card in its
-        lineage declare open access.
+        lineage declare open access. A ``RemoteRegistry`` leaves this decision to its service.
 
         Args:
             dataset_id: The dataset ID.

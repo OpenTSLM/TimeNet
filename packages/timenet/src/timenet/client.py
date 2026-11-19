@@ -365,7 +365,7 @@ class TimeNet:
 
         Raises:
             TimeFValidationError: If the sources have no writable local registry.
-            TimeNetAccessError: If a required release is only listed or lacks open access in a remote registry.
+            TimeNetAccessError: If a registry lists a required release but does not serve it.
             TimeNetNotBuiltError: If only installed connectors provide the release.
             TimeNetDatasetNotFoundError: If no registry other than the local registry provides the release.
             TimeNetVersionUnavailableError: If the version is missing and its connector builds another version.

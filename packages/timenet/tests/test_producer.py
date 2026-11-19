@@ -3,6 +3,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+from _fake_registry import OpenOnlyRemoteRegistry
 import httpx
 import pytest
 
@@ -281,7 +282,7 @@ def test_publish_of_a_listed_release_that_the_source_does_not_serve_raises_the_a
         DatasetRef.parse("org/gated@1.0.0"), access=Access.CREDENTIALED, access_url="https://physionet.example/dua"
     )
 
-    class _Hosted(RemoteRegistry):
+    class _Hosted(OpenOnlyRemoteRegistry):
         def get_manifest(self, dataset_id, version=None):
             return SimpleNamespace(metadata=card, lineage=())
 

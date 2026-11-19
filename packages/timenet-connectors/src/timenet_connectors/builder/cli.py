@@ -102,8 +102,8 @@ def build(
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
         TimeNetFileError: If a copy of a parent in the local registry is damaged, or a copied file
             does not match its manifest record. The hint of the error names the flags.
-        TimeNetAccessError: If ``--publish-to`` is remote and gets a release without access declared
-            ``open``.
+        TimeNetAccessError: If ``--publish-to`` requires open access and gets a release without access
+            declared ``open``.
         TimeNetVersionConflictError: If the copy to ``--publish-to`` finds other files of the
             version, or of a payload source of it, in that registry. Nothing is copied then.
     """  # ruff: ignore[docstring-extraneous-exception, escape-sequence-in-docstring] - raised by the build and the publish; the form feed ends the help text

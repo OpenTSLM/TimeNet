@@ -65,6 +65,32 @@ def test_error_statuses_map_to_registry_error(status):
         _client(handler).get_text("/datasets")
 
 
+def test_a_403_keeps_the_whole_detail():
+    detail = "this registry does not accept the release. " * 10
+
+    def handler(request):
+        return httpx.Response(403, json={"detail": detail})
+
+    with pytest.raises(TimeNetRegistryError) as caught:
+        _client(handler).get_text("/datasets")
+
+    assert len(detail) > 200
+    assert str(caught.value) == f"registry request to http://api.local/api/v1/datasets failed (403): {detail}"
+
+
+def test_a_401_names_the_token():
+    def handler(request):
+        return httpx.Response(401, json={"detail": "an API key is required"})
+
+    with pytest.raises(TimeNetRegistryError) as caught:
+        _client(handler).get_text("/datasets")
+
+    assert str(caught.value) == (
+        "registry request to http://api.local/api/v1/datasets failed (401): an API key is required. "
+        "Set TIMENET_TOKEN or pass token= to RemoteRegistry."
+    )
+
+
 def test_retries_a_429_then_succeeds(monkeypatch):
     calls = {"n": 0}
 

@@ -131,9 +131,10 @@ A published version cannot change. If `dest` already holds the same release, `pu
 nothing.
 
 
-A remote registry holds only releases with access declared `open`. Before
-`timenet.publish()` copies anything to such a registry, it checks the card and the lineage of each
-release.
+A remote registry service decides which releases it accepts. The hosted registry accepts only
+releases with access declared `open`. If the service refuses a release, `timenet.publish()` raises
+`TimeNetRegistryError` with the reason that the service gives. An `s3://` registry has no service,
+so `publish()` checks the card and the lineage of each release itself before it copies anything.
 
 ## Clean code provenance for remote registries
 

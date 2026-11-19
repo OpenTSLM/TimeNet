@@ -608,9 +608,9 @@ def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
 
 
 @pytest.mark.parametrize("entry_point", ["open", "download"])
-def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_registry(tmp_path, entry_point):
-    dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
-    transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
+def test_a_read_or_a_download_raises_the_access_error_if_the_service_refuses_the_release(tmp_path, entry_point):
+    dataset_id, release = _gated_release(tmp_path / "origin", "own")
+    transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent, gate=True)
     remote = RemoteRegistry("http://api.local", transport=transport)
     client = TimeNet(sources=[LocalRegistry(tmp_path / "local"), remote])
 
@@ -622,24 +622,73 @@ def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_regist
     assert not (tmp_path / "local").exists()
 
 
-def test_a_remote_registry_lists_but_does_not_serve_a_release_that_is_not_open(tmp_path):
-    # The card of the release is open. A card in its lineage is not.
-    dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
-    transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
+def test_a_remote_registry_answers_not_served_for_a_release_that_the_service_refuses(tmp_path):
+    dataset_id, release = _gated_release(tmp_path / "origin", "own")
+    transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent, gate=True)
     remote = RemoteRegistry("http://api.local", transport=transport)
     requirement = AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua")
 
     answer = remote.resolve(dataset_id, None)
 
     assert answer == NotServed(Version(1, 0, 0), Access.CREDENTIALED, (requirement,))
-    # The answer keeps the manifest that the lookup fetched.
+    # The service does not hand out the manifest of a release that it refuses.
     assert isinstance(answer, NotServed)
-    assert answer.manifest is not None
-    assert answer.manifest.metadata.dataset_id == dataset_id
+    assert answer.manifest is None
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     # A local registry serves every release that it holds.
     local = LocalRegistry(tmp_path / "origin")
     assert local.resolve(dataset_id, None) == FoundInRegistry(Version(1, 0, 0), local)
+
+
+@pytest.mark.parametrize("page", ["own", "ancestor"])
+def test_a_remote_registry_serves_a_release_that_is_not_open_if_the_service_serves_it(tmp_path, page):
+    dataset_id, _ = _gated_release(tmp_path / "origin", page)
+    transport, _ = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
+    remote = RemoteRegistry("http://api.local", transport=transport)
+    local = LocalRegistry(tmp_path / "local")
+
+    assert remote.resolve(dataset_id, None) == FoundInRegistry(Version(1, 0, 0), remote)
+    TimeNet(sources=[local, remote]).download(dataset_id)
+
+    assert local.damage(DatasetRef.parse(f"{dataset_id}@1.0.0")) is None
+
+
+def test_a_gated_release_with_an_open_card_raises_the_refusal_of_the_service(version_dir, tmp_path):
+    directory, manifest = version_dir
+    served, _ = build_fake(directory)
+
+    def handler(request):
+        if request.url.path.endswith("/manifest"):
+            return httpx.Response(403, json={"detail": "dataset is gated; a token grant is required"})
+        return served.handle_request(request)
+
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
+
+    # The card is open, so it has no access level or page to show.
+    with pytest.raises(TimeNetRegistryError, match=r"\(403\): dataset is gated; a token grant is required$"):
+        remote.resolve(manifest.dataset_id, None)
+
+
+def test_put_release_raises_the_refusal_of_the_service(version_dir, tmp_path):
+    directory, _ = version_dir
+    detail = (
+        "dataset access is credentialed; this registry does not accept non-open datasets "
+        "(set ALLOW_CREDENTIALED_DATASETS=true to allow)"
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(403, json={"detail": detail})
+
+    remote = RemoteRegistry("http://api.local", token="tok_rw", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(TimeNetRegistryError) as caught:
+        remote.put_release(directory)
+
+    assert str(caught.value).endswith(f"/publish failed (403): {detail}")
+    # The publish request is the first write, so the refusal comes before any upload.
+    assert [request.method for request in requests if request.method != "GET"] == ["POST"]
 
 
 def test_resolve_keeps_the_manifest_that_it_fetched(version_dir, tmp_path):

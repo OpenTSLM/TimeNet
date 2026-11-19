@@ -4,7 +4,7 @@ import shutil
 from types import SimpleNamespace
 
 from _demo_child import _child_of_the_demo
-from _fake_registry import build_service_fake
+from _fake_registry import OpenOnlyRemoteRegistry, build_service_fake
 from _origin_record import origin_file
 import httpx
 from pydantic import ValidationError
@@ -539,7 +539,7 @@ def test_get_manifest_returns_the_listed_manifest_of_a_release_that_is_not_serve
         child.import_from(reader)
     hosted.put_dataset(child)
     transport, _ = build_service_fake(tmp_path / "hosted")
-    remote = RemoteRegistry("http://api.local", transport=transport)
+    remote = OpenOnlyRemoteRegistry("http://api.local", transport=transport)
     client = TimeNet(sources=[remote])
 
     manifest = client.get_manifest("test/child")
@@ -1163,7 +1163,7 @@ def _card(dataset_id, access, access_url=None):
 def _hosted(tmp_path, metadata, lineage=()):
     """Return a registry that is not local and serves one manifest, so the build-your-own gate applies."""
 
-    class _Hosted(RemoteRegistry):
+    class _Hosted(OpenOnlyRemoteRegistry):
         def get_manifest(self, dataset_id, version=None):
             return SimpleNamespace(metadata=metadata, lineage=lineage)
 

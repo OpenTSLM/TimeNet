@@ -123,10 +123,10 @@ def _child_reading(target_registry, *cards, child_release=CHILD):
 
 
 def _gated_remote(tmp_path) -> RemoteRegistry:
-    """Return a remote registry that lists DEMO as credentialed, so it does not serve its files."""
+    """Return a remote registry whose service lists DEMO as credentialed and refuses to serve it."""
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(_demo(make_dataset().metadata.model_copy(update=_GATED)))
-    transport, _ = build_fake(release_dir(origin.root, DEMO))
+    transport, _ = build_fake(release_dir(origin.root, DEMO), gate=True)
     return RemoteRegistry("http://api.local", transport=transport)
 
 

@@ -54,7 +54,8 @@ which is how you point at a private or a dev deployment.
 
 The HTTP transport authenticates with a bearer token read from `$TIMENET_TOKEN`. When it is unset the
 SDK talks to the registry anonymously (no `Authorization` header), which is enough for public reads.
-Set it to reach private datasets or to write:
+Set it to reach private datasets or to write. The service decides which releases a token can read,
+and which releases it accepts:
 
 ```bash
 export TIMENET_TOKEN=your-token
@@ -87,7 +88,7 @@ Every backend implements this contract.
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version. Raises `TimeNetManifestError` if the stored manifest is not valid, `TimeFFormatVersionError` if it has an unsupported older or newer TimeF format, or `TimeFFormatError` if its own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
 | `location` | Where the registry is: the base URL of a remote registry, the `s3://bucket/prefix` root of an S3 registry, or the resolved root directory of a local registry. Each backend must define it. |
-| `requires_open_access` | Whether the registry holds and serves only releases with open access. `False` only for `LocalRegistry`. |
+| `requires_open_access` | Whether the registry holds and serves only releases with open access. `False` for `LocalRegistry` and `RemoteRegistry`. `S3Registry` keeps `True`, because a bucket has no service that checks access. |
 | `find_manifest(release)` | The manifest of an exact release, or `None` if the registry does not hold it. Raises `TimeFFormatError` if the stored manifest names another release. |
 | `download_release(reference, directory, *, force=False, manifest=None, progress_cb=None)` | Download the files of one release, without its payload sources, into a local directory. A failed download leaves no partial copy, and it keeps the copy that was there before. |
 | `open_release(reference, *, manifest=None)` | A `DatasetVersion` of one exact release without its payload sources: the parsed manifest and a handle to the files. Pass `manifest` if you already read it from this registry. A local registry raises `TimeNetFileError` for a missing or resized file. |
@@ -157,11 +158,13 @@ A source gives one of these answers:
 
 The type `Found` covers `FoundInRegistry` and `FoundInConnector`. `FoundInRegistry` and
 `NotServed` also carry the `manifest` that the source read, or `None`, so that you do not need to
-fetch it again.
+fetch it again. The `manifest` of `NotServed` is `None` if a service refused the release.
 
-A `LocalRegistry` serves every release that it holds, so it never answers `NotServed`. A registry
-that is not local serves the files of a release only if its effective access is `open`, and
-answers `NotServed` otherwise.
+A `LocalRegistry` serves every release that it holds, so it never answers `NotServed`. A
+`RemoteRegistry` asks its service. The service decides which releases a caller can read, and a
+refusal becomes `NotServed` with the access level and the access page of the card. An `S3Registry`
+serves the files of a release only if its effective access is `open`, and answers `NotServed`
+otherwise.
 
 `InstalledConnectors()` answers `Found` only for the version that the card of a connector declares,
 because a connector builds only that version. For any other request, it answers `NotFound`.
@@ -246,8 +249,9 @@ information. It returns the directory that a `file://` URI or a plain path names
 `RemoteRegistry.put_dataset` compiles the dataset locally and then sends the files to the service.
 The data does not pass through the API. The service gives a presigned URL for each file, and the SDK
 uploads the file to the object store directly. You need a writer token in `$TIMENET_TOKEN`. The
-service refuses an anonymous or read-only caller. `RemoteRegistry.put_release` runs steps 2 to 4
-for a release directory that already exists.
+service refuses an anonymous or read-only caller. The service also decides which releases it
+accepts. A refused publish raises `TimeNetRegistryError` with the reason that the service gives.
+`RemoteRegistry.put_release` runs steps 2 to 4 for a release directory that already exists.
 
 1. Compile into a temporary staging directory with a [`TimeFWriter`](timef-writer.md), deriving the
    schema first if the dataset has none. An already-committed version returns early. The writer

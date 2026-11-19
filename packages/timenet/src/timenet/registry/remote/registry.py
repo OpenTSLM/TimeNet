@@ -13,12 +13,12 @@ import httpx
 import pyarrow.fs as pafs
 
 from timenet.config import settings
-from timenet.errors import TimeNetRegistryError
+from timenet.errors import TimeNetAccessError, TimeNetError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.remote._download import ByteCountCallback, download_version_files
-from timenet.registry.remote._http import RegistryHttpClient, _reaching
+from timenet.registry.remote._http import RegistryForbiddenError, RegistryHttpClient, _reaching
 from timenet.registry.remote.filesystem import RegistryFileSystem
 from timenet.registry.remote.models import (
     DatasetDetailModel,
@@ -27,7 +27,9 @@ from timenet.registry.remote.models import (
     UploadGrantModel,
 )
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata
+from timenet.sources import NotServed, ReleaseLookup
+from timenet.types import Access, DatasetMetadata, Version
+from timenet.types.access import AccessRequirement
 from timenet.types.references import DatasetRef, is_latest
 
 
@@ -63,6 +65,11 @@ class RemoteRegistry(LazyReadRegistry):
         """The registry service's base URL."""
         return self._base_url
 
+    @property
+    def requires_open_access(self) -> bool:
+        """Always ``False``. The service decides which releases it serves and accepts."""
+        return False
+
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
@@ -89,10 +96,52 @@ class RemoteRegistry(LazyReadRegistry):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
             TimeFFormatError: If the served manifest is not valid.
+            TimeNetAccessError: If the service does not serve the release to this caller.
+            TimeNetRegistryError: If the service refuses a release whose listed card is open.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the HTTP client and parse_manifest
         resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
-        text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
+        try:
+            text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
+        except RegistryForbiddenError as refusal:
+            raise self._refusal_error(DatasetRef.parse(f"{dataset_id}@{resolved}"), refusal) from None
         return parse_manifest(text, f"the manifest of {dataset_id}@{resolved} in {self}")
+
+    def _refusal_error(self, release: DatasetRef, refusal: RegistryForbiddenError) -> TimeNetError:
+        """Return the error for a release that the service refused, from the card that the service lists.
+
+        The service lists the card of the latest version only, so the error uses its access level and page.
+
+        Args:
+            release: The refused release.
+            refusal: The refusal of the service.
+
+        Returns:
+            A ``TimeNetAccessError``, or ``refusal`` if the listed card is open and so has no access level or page
+            to name.
+        """
+        detail = DatasetDetailModel.model_validate_json(self._http.get_text(f"/datasets/{release.dataset_id}"))
+        if detail.access is Access.OPEN:
+            return refusal
+        requirements = (AccessRequirement(release, detail.access, detail.access_url),) if detail.access_url else ()
+        return TimeNetAccessError(release, detail.access, requirements)
+
+    def resolve(self, dataset_id: str, version: Version | None) -> ReleaseLookup:
+        """Check whether the service serves a dataset release to this caller.
+
+        The service decides. The registry does not check the access level of the release.
+
+        Args:
+            dataset_id: The dataset ID.
+            version: An exact version, or ``None`` for the latest version.
+
+        Returns:
+            ``FoundInRegistry`` if served, ``NotFound`` if absent, or ``NotServed`` if the service refuses this
+            caller. ``NotServed`` has no manifest, because the service does not hand it out.
+        """
+        try:
+            return super().resolve(dataset_id, version)
+        except TimeNetAccessError as error:
+            return NotServed(error.dataset.version, error.access, error.requirements)
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
