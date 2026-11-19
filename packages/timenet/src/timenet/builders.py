@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
+DATASETS_ENTRY_POINT_GROUP = "timenet_connectors.datasets"
 
 
 @dataclass(frozen=True)
