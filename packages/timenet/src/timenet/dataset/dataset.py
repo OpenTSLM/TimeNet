@@ -385,25 +385,21 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         self._annotations.append(attached)
         return attached
 
-    def annotation_owners(self) -> Iterator[SupportsAnnotate]:
-        """Yield every object of the dataset that can hold annotations.
+    def walk_annotations(self) -> Iterator[Annotation]:
+        """Yield the annotation occurrences of the dataset, then of each Record, then of each task.
 
-        The order is the dataset, then the owners of each Record (see :meth:`Record.annotation_owners`),
-        then the owners of each task (see :meth:`Task.annotation_owners`). The tasks of a streamed dataset
-        (see :meth:`set_task_stream`) are not walked, so their owners do not come.
+        Each Record and task gives the occurrences of the objects it holds (see :meth:`Record.walk_annotations`
+        and :meth:`Task.walk_annotations`). The tasks of a streamed dataset (see :meth:`set_task_stream`) are
+        not walked, so their occurrences do not come.
 
         Yields:
-            Each owner, in the order above.
+            Each annotation occurrence, in the order above.
         """
-        yield self
+        yield from self.annotations
         for record in self._records:
-            yield from record.annotation_owners()
+            yield from record.walk_annotations()
         for task in self._tasks:
-            yield from task.annotation_owners()
-
-    def walk_annotations(self) -> Iterator[Annotation]:
-        """Yield the annotation occurrences of each object that :meth:`annotation_owners` yields."""
-        return (annotation for owner in self.annotation_owners() for annotation in owner.annotations)
+            yield from task.walk_annotations()
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
@@ -717,7 +713,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         """Walk the dataset's instances and build its :class:`DatasetSchema`.
 
         This method collects the distinct spec, annotation, and task types. Annotations come from every
-        owner that :meth:`annotation_owners` yields. It stores the result on the dataset, and it returns
+        occurrence that :meth:`walk_annotations` yields. It stores the result on the dataset, and it returns
         the result.
 
         The tasks of a streamed dataset (see :meth:`set_task_stream`) are not walked here.
