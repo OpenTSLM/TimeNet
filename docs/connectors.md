@@ -219,8 +219,7 @@ acme = "acme_connectors.datasets"
 The built-in `timenet_connectors.datasets` package is always a datasets root. Two packages can use
 the same org folder, but a dataset id must be unique. If two packages declare the same id, discovery
 warns and skips that id. An isolated build installs the package that owns the dataset in the build
-environment. Install that package from git or from a local directory, such as an editable checkout. A
-build refuses a package installed from an index.
+environment, pinned to the installed commit, local directory or version.
 
 ## Dependencies and credentials
 

@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from timenet.errors import TimeNetBuildError, TimeNetIsolationError
+from timenet.errors import TimeNetBuildError
 from timenet.manifest import PayloadSource
 from timenet.manifest.files import FilePart
 from timenet.provenance import TimeNetSnapshot
@@ -61,9 +61,8 @@ def test_env_spec_adds_the_editable_install_that_owns_the_dataset(monkeypatch, t
     assert _env_spec_with_owner(monkeypatch, direct_url)[2:4] == ("--with-editable", str(tmp_path))
 
 
-def test_env_spec_refuses_an_index_install_that_owns_the_dataset(monkeypatch):
-    with pytest.raises(TimeNetIsolationError, match="acme-datasets must be installed from git"):
-        _env_spec_with_owner(monkeypatch, None)
+def test_env_spec_pins_the_version_of_an_index_install_that_owns_the_dataset(monkeypatch):
+    assert _env_spec_with_owner(monkeypatch, None)[2:4] == ("--with", "acme-datasets==9.9.9")
 
 
 def test_env_spec_adds_no_owner_for_a_built_in_dataset():

@@ -51,13 +51,12 @@ def env_spec(dataset_id: str) -> EnvSpec:
 
     Raises:
         LookupError: If no connector exists for the id.
-        TimeNetIsolationError: If a base distribution is not installed, or the package that adds the
-            connector is installed neither from git nor from a local directory.
+        TimeNetIsolationError: If a base distribution is not installed.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
     base = _base_args()
     owner = owning_distribution(dataset_id)
     if owner is not None:
-        base += _install_args(owner, allow_version=False)
+        base += _install_args(owner)
     # The parent cannot read the connector's backend before the environment exists, so the
     # environment always includes the optional Zarr backend. Keep the parent's source/version pin;
     # the additional requirement only requests its extra.
@@ -210,24 +209,24 @@ def _base_args() -> tuple[str, ...]:
     # that reads them back. timenet-connectors depends on timenet[build], so the card-YAML
     # dependencies arrive transitively and the extra never needs naming here.
     for name in TimeNetSnapshot.package_names():
-        args += _install_args(name, allow_version=True)
+        args += _install_args(name)
     return args
 
 
-def _install_args(name: str, *, allow_version: bool) -> tuple[str, ...]:
+def _install_args(name: str) -> tuple[str, ...]:
     """Build the uv arguments that install the same code as an installed distribution.
+
+    A git install keeps its commit and a local directory installs as editable. Any other install
+    keeps its version.
 
     Args:
         name: The distribution name.
-        allow_version: Pin an install from an index as ``name==version``. If ``False``, such an
-            install raises instead.
 
     Returns:
         A flag/value pair for uv.
 
     Raises:
-        TimeNetIsolationError: If the distribution is not installed in this interpreter, or
-            ``allow_version`` is ``False`` and it is installed neither from git nor from a local directory.
+        TimeNetIsolationError: If the distribution is not installed in this interpreter.
     """
     try:
         installed = InstalledDistribution.from_name(name)
@@ -240,8 +239,4 @@ def _install_args(name: str, *, allow_version: bool) -> tuple[str, ...]:
         return ("--with", f"{name} @ {git_url}")
     if (source := installed.path_to_ondisk_project_directory()) is not None:
         return ("--with-editable", str(source))
-    if not allow_version:
-        raise TimeNetIsolationError(
-            f"cannot make a build environment: {name} must be installed from git or from a local directory."
-        )
     return ("--with", f"{name}=={installed.version}")
