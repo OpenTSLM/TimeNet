@@ -219,17 +219,6 @@ class SupportsAnnotate(Protocol):
         """Attach one occurrence of ``annotation`` and return it."""
         ...
 
-    def annotation(self, key: str) -> Annotation | None:
-        """Look up an annotation of this object by its key.
-
-        Args:
-            key: The annotation key, such as ``name``.
-
-        Returns:
-            The first annotation with this key, or ``None`` if there is none.
-        """
-        return next((annotation for annotation in self.annotations if annotation.key == key), None)
-
 
 class AnnotationDescriptor(TimeFModel):
     """Type-level projection of an annotation key, stored in the schema and manifest."""

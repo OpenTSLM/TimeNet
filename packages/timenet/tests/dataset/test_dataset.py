@@ -894,27 +894,6 @@ def test_walk_annotations_goes_from_the_dataset_to_records_to_tasks(make_series)
     assert [a.key for a in ds.walk_annotations()] == ["dataset", "record", "source", "signal", "task", "answer"]
 
 
-def test_annotation_finds_the_first_match_on_every_owner(make_series):
-    ds = _dataset()
-    signal = make_series()
-    source = Source(name="Source", signals=(signal,))
-    record = ds.add_record(record=Record(sources=(source,)))
-    task = _classification_task(record, "a")
-    owners = (ds, record, source, signal, task)
-    for owner in owners:
-        owner.annotate(Annotation(key="name", value=type(owner).__name__))
-        owner.annotate(Annotation(key="name", value="second"))
-    found = [owner.annotation("name") for owner in owners]
-    assert [None if one is None else one.value for one in found] == [
-        "TimeFDataset",
-        "Record",
-        "Source",
-        "Signal",
-        "ClassificationTask",
-    ]
-    assert ds.annotation("other") is None
-
-
 def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_series):
     # The deriving task is listed before its parent, so this only passes because the batch is validated
     # as a unit rather than task by task.

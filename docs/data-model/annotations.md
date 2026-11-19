@@ -25,8 +25,7 @@ occurrence = record.annotate(condition)
 `key` can be positional: `Annotation("condition", value="healthy")`. All other fields are keyword-only.
 
 `annotate()` returns the attached occurrence. A Task must refer to this occurrence, not the unattached
-content object. Every owner also has `annotation(key)`. It returns the first annotation with that key,
-or `None`.
+content object.
 
 ## Content and occurrence fields
 
