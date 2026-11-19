@@ -90,11 +90,15 @@ def test_annotate_attaches_an_occurrence_and_rejects_a_span():
         LabelSet(labels=(Label(name="F"),), annotations=(Annotation(key="x", span=TimePoint.seconds(1.0)),))
 
 
-def test_a_classification_task_yields_itself_then_its_label_set():
-    task = ClassificationTask(targets=("W",), label_set=STAGES)
-    assert list(task.annotatable_entities()) == [task, STAGES]
+def test_a_classification_task_walks_its_annotations_then_those_of_its_label_set():
+    task = ClassificationTask(
+        targets=("W",), label_set=LabelSet(["W", "R"], annotations=(Annotation(key="set", value="s"),))
+    )
+    task.annotate(Annotation(key="task", value="t"))
+    assert [annotation.key for annotation in task.walk_annotations()] == ["task", "set"]
     answer = AnswerTask(targets=("x",))
-    assert list(answer.annotatable_entities()) == [answer]
+    answer.annotate(Annotation(key="answer", value="a"))
+    assert [annotation.key for annotation in answer.walk_annotations()] == ["answer"]
 
 
 def test_a_copied_task_gets_its_own_label_set():

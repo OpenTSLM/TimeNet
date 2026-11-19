@@ -408,14 +408,14 @@ class ClassificationTask(Task):
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
 
-    def annotatable_entities(self) -> Iterator[SupportsAnnotate]:
-        """Yield the task, then its label set.
+    def walk_annotations(self) -> Iterator[Annotation]:
+        """Yield the annotation occurrences of the task, then those of its label set.
 
         Yields:
-            The task and its label set.
+            Each annotation occurrence, in the order above.
         """
-        yield self
-        yield self.label_set
+        yield from self.annotations
+        yield from self.label_set.annotations
 
     def with_references(self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]) -> Self:
         """Return a copy of the task that references the given Records and Signals, by ID.

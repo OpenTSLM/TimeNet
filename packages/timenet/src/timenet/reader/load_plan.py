@@ -17,7 +17,7 @@ from functools import singledispatch
 from timenet.dataset import Record, Signal, Source
 from timenet.format.stored_array import ChunkLocation, StoredArray
 from timenet.format.stored_values import PackedLocation, StoredOffsets, StoredText, StoredTextList
-from timenet.types import Annotation, LabelSet, Task
+from timenet.types import Annotation, Task
 from timenet.types.load_plan import Loading, LoadPlan
 
 
@@ -61,20 +61,13 @@ def _annotation_children(item: Annotation) -> tuple[object, ...]:
 
 
 @_load_plan_children.register
-def _label_set_children(item: LabelSet) -> tuple[object, ...]:
-    """Return a label set's annotations."""
-    return item.annotations
-
-
-@_load_plan_children.register
 def _task_children(item: Task) -> tuple[object, ...]:
-    """Return a task's text, annotations, the entities it holds, records, targets, and the annotations it references."""
+    """Return a task's text, annotations, input and candidate records, targets, and the annotations it references."""
     return (
         item.prompt,
         item.rationale,
         *(item.targets or ()),
-        *item.annotations,
-        *(entity for entity in item.annotatable_entities() if entity is not item),
+        *item.walk_annotations(),
         *item.inputs,
         *getattr(item, "candidate_records", ()),
         *item.input_annotations,
