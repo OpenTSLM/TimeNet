@@ -132,9 +132,17 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   field such as `sources`, `signals`, or `inputs` takes any iterable and stores a tuple. A
   windowed record says so through its axis: `RegularAxis.at_index(...)` moves the origin into the
   recording.
-- `record.annotate(Annotation("key", value=value))` attaches one annotation and returns it.
-  `record.add_annotations([...])` takes an iterable and returns a tuple. There is one annotation
-  class, and its `span` gives its shape. No span means the whole record.
+- Attach annotations when you build the owner. `TimeFDataset`, `Record`, `Source`, `Signal`, and
+  every task take `annotations=[...]`, a list of `Annotation` objects:
+  `Record(sources=[source], annotations=[Annotation("key", value=value)])`. `Annotation` takes
+  only `key` by position. For an annotation that is not always present, build the list first and
+  append to it.
+- Use `owner.annotate(annotation)` only in these cases. The owner exists already, for example a
+  Record that you import from a parent. A task refers to the annotation in `input_annotations` or
+  `target_annotations`, so you need the occurrence that the call returns. You attach one
+  `Annotation` object to several owners. `record.add_annotations([...])` does the same for a
+  batch and returns a tuple.
+- There is one annotation class, and its `span` gives its shape. No span means the whole record.
   `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
 - For text that the connector reads from a source file, use `LazyText(function)` as the
   annotation value. Import it from `timenet.types`. The function returns the string. If you know
@@ -242,11 +250,11 @@ class TSQAConnector(
                     )
                     for signal, values in enumerate(signals)
                 ]
-                record = Record(sources=[Source("TSQA series", signals=time_series)])
-                dataset.add_record(record)
-                record.annotate(Annotation("task", value=row.task))
+                annotations = [Annotation("task", value=row.task)]
                 if row.label:
-                    record.annotate(Annotation("label", value=row.label))
+                    annotations.append(Annotation("label", value=row.label))
+                record = Record(sources=[Source("TSQA series", signals=time_series)], annotations=annotations)
+                dataset.add_record(record)
                 dataset.add_task(AnswerTask(inputs=[record], prompt=row.question, targets=row.answer))
         return dataset
 

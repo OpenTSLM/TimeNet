@@ -74,12 +74,17 @@ Use an [Annotation](annotations.md) for a typed, searchable fact. Examples inclu
 firmware version, or an event on the timeline.
 
 ```python
+from timenet.dataset import Record
 from timenet.types import Annotation
 
-record.annotate(Annotation("condition", value="healthy"))
+record = Record(
+    sources=(source,),
+    annotations=[Annotation("condition", value="healthy")],
+)
 ```
 
-Sources and Signals also support `metadata` and `annotate()`.
+Sources and Signals also take `metadata` and `annotations`. To annotate an owner that exists
+already, call `annotate()`, as [Attach annotations](annotations.md#attach-annotations) shows.
 
 ## Add time information
 

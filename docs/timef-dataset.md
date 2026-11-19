@@ -76,7 +76,8 @@ An irregular Signal also needs its time offsets. Pass `time_offsets_us` to
 `time_offsets_us()`. Regular axes calculate their offsets from their cadence, and ordinal axes
 describe order without a clock.
 
-Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
+Pass `annotations=[...]` to the constructor to attach annotations when you build the Signal. Call
+`signal.annotate(annotation)` to attach an occurrence to a Signal that exists.
 
 ## Source
 
@@ -110,8 +111,9 @@ with two parents, and a Signal with two owners.
 
 Sources group Signals. All timed Signals in a Record use its common relative origin.
 
-Call `source.annotate(annotation)` for a Source annotation. A selection attaches annotation content
-to several Signals in one operation:
+Pass `annotations=[...]` to the constructor to attach annotations when you build the Source. Call
+`source.annotate(annotation)` to attach an occurrence to a Source that exists. A selection attaches
+annotation content to several Signals in one operation:
 
 ```python
 source.select(signals=(lead_i, lead_ii)).annotate(annotation)
@@ -128,9 +130,11 @@ annotations and metadata:
 
 ```python
 from timenet.dataset import Record
+from timenet.types import Annotation
 
 record = Record(
     sources=(imu,),
+    annotations=[Annotation("condition", value="healthy")],
     metadata={"site": "lab-a", "session": "record-123"},
 )
 ```
@@ -147,16 +151,19 @@ record = Record(
 `record.signals` flattens every Signal in the hierarchy. `walk_sources()` and `walk_signals()` expose
 the same deterministic traversal used by the writer.
 
-Call `record.annotate(annotation)` to attach an occurrence. `time_point()` and `time_interval()`
+Pass `annotations=[...]` to the constructor to attach annotations when you build the Record. Call
+`record.annotate(annotation)` to attach an occurrence to a Record that exists. `time_point()` and `time_interval()`
 convert wall-clock values against the Record origin. They require a known absolute timestamp.
 
 Store subject identifiers as a list-valued record annotation. Omit it for a record with no subjects:
 
 ```python
+from timenet.dataset import Record
 from timenet.types import Annotation
 
-record.annotate(
-    Annotation("subject_ids", value=["patient-1", "patient-2"])
+record = Record(
+    sources=(imu,),
+    annotations=[Annotation("subject_ids", value=["patient-1", "patient-2"])],
 )
 ```
 
@@ -197,11 +204,18 @@ Register complete Records independently of Tasks. This supports datasets with or
 
 ```python
 from timenet.dataset import TimeFDataset
+from timenet.types import Annotation
 
-dataset = TimeFDataset(metadata=metadata)
+dataset = TimeFDataset(
+    metadata=metadata,
+    annotations=[Annotation("source_revision", value="4f2a9c1")],
+)
 dataset.add_record(record)
 dataset.add_task(task)
 ```
+
+`annotations` is optional. It takes an iterable of `Annotation` objects and attaches each one to the
+dataset in order, as `dataset.annotate()` does. A dataset annotation cannot have a `span`.
 
 `add_record()` validates hierarchy ownership. It rejects a Record that is already in a dataset,
 and a Source or Signal that another Record owns. It then gives the Record and its Signals their IDs.
@@ -213,17 +227,22 @@ inserts that stream once without retaining every Task in memory.
 
 ## Annotations
 
-The same `Annotation` type can annotate a Dataset, Task, Record, Source, Signal, or label set. Annotation
-content is immutable and reusable. Every call to `annotate()` creates a separate occurrence, so a
+The same `Annotation` type can annotate a Dataset, Task, Record, Source, Signal, or label set. Each of
+them takes `annotations=[...]` at construction. This is the usual way to attach annotations. Use
+`annotate()` when the owner exists already, or when a Task refers to the occurrence that the call
+returns.
+
+Annotation content is immutable and reusable. Every call to `annotate()` creates a separate occurrence, so a
 long payload can be stored once while its occurrences carry independent placement, confidence, and
 provenance. `Annotation` is final: reuse content through a constant, or a builder function for
 content that varies, as [Annotations](data-model/annotations.md#reuse-content) shows.
 
 ```python
+from timenet.dataset import Record
 from timenet.types import Annotation, TimePoint
 
 male = Annotation("patient_sex", value="male")
-record.annotate(male)
+record = Record(sources=(imu,), annotations=[male])
 
 lead_i.annotate(
     Annotation(

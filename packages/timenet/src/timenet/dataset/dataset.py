@@ -33,6 +33,7 @@ from timenet.types import (
     read_value,
     value_type_of,
 )
+from timenet.types._fields import as_tuple
 from timenet.types.ids import IdCounters
 from timenet.types.load_plan import LoadPlan
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -71,12 +72,17 @@ class _TaskValidationIndex:
 class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
-    def __init__(self, *, metadata: DatasetMetadata) -> None:
-        """Create an empty dataset.
+    def __init__(self, *, metadata: DatasetMetadata, annotations: Iterable[Annotation] = ()) -> None:
+        """Create a dataset with no records and no tasks.
 
         Args:
             metadata: The dataset's descriptive identity.
-        """
+            annotations: The annotations to attach to the dataset, in order, as :meth:`annotate` does.
+
+        Raises:
+            TimeFValidationError: If ``annotations`` is a string, a mapping, or not iterable, or an
+                annotation has a time span.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by as_tuple and annotate
         self._metadata = metadata
         self._import_state = ImportState()
         """The parent cards, the lineage, and the import map of this dataset. :meth:`import_from`
@@ -99,6 +105,8 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+        for annotation in as_tuple(annotations):
+            self.annotate(annotation)
 
     def import_from(  # ruff: ignore[too-many-arguments] - one argument per selection
         self,

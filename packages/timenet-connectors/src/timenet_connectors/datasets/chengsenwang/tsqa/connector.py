@@ -94,11 +94,10 @@ class TSQAConnector(
                 time_axis=OrdinalAxis(),
             )
             signals.append(signal)
-        record = Record(sources=[Source("TSQA series", signals=signals)])
-        record.annotate(Annotation("task", value=sample.category))
+        annotations = [Annotation("task", value=sample.category)]
         if sample.label:
-            record.annotate(Annotation("label", value=sample.label))
-        return record
+            annotations.append(Annotation("label", value=sample.label))
+        return Record(sources=[Source("TSQA series", signals=signals)], annotations=annotations)
 
     @staticmethod
     def _make_task(sample: TSQASample, record: Record, *, split: Split) -> AnswerTask:

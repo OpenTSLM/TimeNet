@@ -669,11 +669,11 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
             loader=partial(loader, row, position),
         )
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
-        record = Record(sources=[Source("series", signals=[signal])], metadata=metadata)
-        if position == 0:
-            for key, value in row.contexts.on_input.items():
-                record.annotate(Annotation(key, value=value if isinstance(value, str) else list(value)))
-        records.append(record)
+        contexts = row.contexts.on_input if position == 0 else {}
+        annotations = [
+            Annotation(key, value=value if isinstance(value, str) else list(value)) for key, value in contexts.items()
+        ]
+        records.append(Record(sources=[Source("series", signals=[signal])], annotations=annotations, metadata=metadata))
     return tuple(records)
 
 

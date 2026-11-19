@@ -220,17 +220,14 @@ class MetricSeriesFiles:
                 if label in groups
             ]
             sources.append(Source(label or UNTAGGED, signals=signals))
-        record = Record(
+        return Record(
             metadata={"source_record_id": f"arfbench-{self.metric}"},
             start_time=TimeOrigin(origin_us),
             sources=sources,
-        )
-        record.add_annotations(
-            [
+            annotations=[
                 Annotation("metric_id", value=self.metric),
                 Annotation("incident_id", value=self.metric.partition("_")[0]),
                 Annotation("query_name", value=self.finest.read_query_name()),
                 Annotation("finest_interval_s", value=self.finest.interval_s, unit="second"),
-            ]
+            ],
         )
-        return record
