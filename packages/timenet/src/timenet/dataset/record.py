@@ -13,7 +13,7 @@ from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint
-from timenet.types._fields import ValueField, as_tuple
+from timenet.types._fields import TupleField, ValueField, as_tuple
 from timenet.types.clock import check_int64, offset_us, unix_us
 from timenet.types.ids import EntityId, assigned_id
 
@@ -30,12 +30,12 @@ class Record(SupportsAnnotate):
     also state a ``unit``, and it travels with every window drawn later from the record.
     """
 
-    sources: ValueField[Iterable[Source], tuple[Source, ...]] = field(default=ValueField(as_tuple, ()))
+    sources: TupleField[Source] = field(default=ValueField(as_tuple, ()))
     """The root sources that belong to this recording, each with a distinct name. Give any iterable.
     The record stores a tuple."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
-    annotations: ValueField[Iterable[Annotation], tuple[Annotation, ...]] = field(default=ValueField(as_tuple, ()))
+    annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
     """Annotations attached to the record. Give any iterable. The record stores a tuple."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible recording metadata."""

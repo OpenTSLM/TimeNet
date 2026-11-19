@@ -304,6 +304,12 @@ def test_a_bare_value_of_an_unsupported_type_is_not_a_target():
         AnswerTask(targets=np.int64(3))  # ty: ignore[invalid-argument-type]
 
 
+@pytest.mark.parametrize("value", [{"a": 1}, b"ab"])
+def test_a_bare_mapping_or_bytes_is_not_a_target(value):
+    with pytest.raises(TimeFValidationError, match="unsupported type"):
+        AnswerTask(targets=value)
+
+
 def test_a_list_handle_is_not_a_target():
     with pytest.raises(TimeFValidationError, match="unsupported type InlineTextList"):
         AnswerTask(targets=(InlineTextList(["a"]),))  # ty: ignore[invalid-argument-type]

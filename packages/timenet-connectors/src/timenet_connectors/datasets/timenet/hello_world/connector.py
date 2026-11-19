@@ -153,14 +153,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             name="b",
             time_axis=_AXIS,
         )
-        record0 = Record(
-            sources=(
-                Source(
-                    "Synthetic generator",
-                    signals=(shared, cosine),
-                ),
-            ),
-        )
+        record0 = Record(sources=[Source("Synthetic generator", signals=[shared, cosine])])
         dataset.add_record(record0)
         # The localization task below references these annotations instead of repeating the literal values.
         stimulus = Annotation("stimulus", span=TimePoint.seconds(0.5))
@@ -174,7 +167,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         )
         artifact = shared.annotate(artifact)
         classification = ClassificationTask(
-            inputs=(record0,),
+            inputs=[record0],
             targets="normal",
             label_set=_RHYTHM,
         )
@@ -182,7 +175,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             [
                 classification,
                 AnswerTask(
-                    inputs=(record0,),
+                    inputs=[record0],
                     prompt="What rhythm?",
                     targets="Normal.",
                     # Any task can carry a chain of thought. An answer task with a chain of thought is
@@ -194,7 +187,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     from_tasks=(classification,),
                 ),
                 ScalarPredictionTask(
-                    inputs=(record0,),
+                    inputs=[record0],
                     targets=60.0,
                     unit="bpm",
                     target_name="mean_rate",
@@ -203,7 +196,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 # regions are the output. Here, the task stores the answer by reference, so the target
                 # is the two temporal annotations above.
                 TemporalLocalizationTask(
-                    inputs=(record0,),
+                    inputs=[record0],
                     prompt="Locate the stimulus and the artifact.",
                     mode=LocalizationMode.SPARSE,
                     target_annotations=(stimulus, artifact),
@@ -221,10 +214,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             n_values=raw_refs[1].n_values,
         )
         record1 = Record(
-            sources=(
+            sources=[
                 Source(
                     "Synthetic generator",
-                    signals=(
+                    signals=[
                         Signal.from_values(
                             _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
                             spec=_SINE,
@@ -232,9 +225,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                             time_axis=_AXIS,
                         ),
                         long_series,
-                    ),
-                ),
-            ),
+                    ],
+                )
+            ]
         )
         dataset.add_record(record1)
         record1.annotate(cohort)  # equal content, so the writer stores it once
@@ -254,14 +247,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             name="a",
             time_axis=_AXIS.at_index(window_start),
         )
-        record2 = Record(
-            sources=(
-                Source(
-                    "Synthetic generator",
-                    signals=(window,),
-                ),
-            ),
-        )
+        record2 = Record(sources=[Source("Synthetic generator", signals=[window])])
         dataset.add_record(record2)
         # A scope narrows the input to a region. This task has the same task type as the whole-record
         # label above, but it supplies the window. Span times use the source recording timeline, so

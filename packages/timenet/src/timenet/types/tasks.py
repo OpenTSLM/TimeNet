@@ -10,7 +10,7 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types._fields import ValueField, as_tuple
+from timenet.types._fields import TupleField, ValueField, as_tuple
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import EntityId, assigned_id
 from timenet.types.label_sets import LabelSet, LabelSetRegistry
@@ -129,7 +129,7 @@ def _target_values(values: TargetInput | Iterable[TargetInput] | None) -> tuple[
     """
     if values is None:
         return None
-    single = isinstance(values, str) or _is_target_item(values) or not isinstance(values, Iterable)
+    single = isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable)
     items = cast("Iterable[TargetInput]", (values,) if single else values)
     return tuple(InlineText(value) if isinstance(value, str) else value for value in items)
 
@@ -159,9 +159,7 @@ class Task(SupportsAnnotate):
     task_type: ClassVar[TaskType]
     """The concrete task class's stable storage tag."""
 
-    inputs: ValueField[Iterable["Record"], tuple["Record", ...]] = field(
-        default=ValueField(as_tuple, ()), compare=False
-    )
+    inputs: TupleField["Record"] = field(default=ValueField(as_tuple, ()), compare=False)
     """Records supplied to the model, in semantic order."""
     targets: ValueField[TargetInput | Iterable[TargetInput] | None, tuple[TargetItem, ...] | None] = field(
         default=ValueField(_target_values, None), compare=False
@@ -177,21 +175,15 @@ class Task(SupportsAnnotate):
     """Optional override. None infers the input kinds when resolved or written."""
     scope: Span | None = None
     """Optional region of the inputs to which the task applies."""
-    input_annotations: ValueField[Iterable[Annotation], tuple[Annotation, ...]] = field(
-        default=ValueField(as_tuple, ()), compare=False
-    )
+    input_annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()), compare=False)
     """Existing annotation occurrences supplied to the model as context."""
-    target_annotations: ValueField[Iterable[Annotation], tuple[Annotation, ...]] = field(
-        default=ValueField(as_tuple, ()), compare=False
-    )
+    target_annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()), compare=False)
     """Existing annotation occurrences that form the expected output."""
     rationale: ValueField[str | TextHandle | None, TextHandle | None] = field(default=ValueField(optional_text, None))
     """Call ``read()`` for the explanation; ``None`` means no rationale is present."""
-    from_tasks: ValueField[Iterable["Task"], tuple["Task", ...]] = field(
-        default=ValueField(as_tuple, ()), compare=False
-    )
+    from_tasks: TupleField["Task"] = field(default=ValueField(as_tuple, ()), compare=False)
     """Tasks from which this task was derived."""
-    annotations: ValueField[Iterable[Annotation], tuple[Annotation, ...]] = field(default=ValueField(as_tuple, ()))
+    annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
     """Annotations describing this task itself."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
@@ -515,9 +507,7 @@ class TSCorrespondenceTask(Task):
     """Relate input recordings to an optional candidate pool."""
 
     task_type: ClassVar[TaskType] = TaskType.TS_CORRESPONDENCE
-    candidate_records: ValueField[Iterable["Record"], tuple["Record", ...]] = field(
-        default=ValueField(as_tuple, ()), compare=False
-    )
+    candidate_records: TupleField["Record"] = field(default=ValueField(as_tuple, ()), compare=False)
     """Optional candidate pool. An empty tuple means the dataset-wide pool."""
 
     def __post_init__(self) -> None:

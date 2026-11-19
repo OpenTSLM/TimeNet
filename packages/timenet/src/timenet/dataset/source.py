@@ -10,7 +10,7 @@ from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate
-from timenet.types._fields import ValueField, as_tuple
+from timenet.types._fields import TupleField, ValueField, as_tuple
 
 
 if TYPE_CHECKING:
@@ -50,11 +50,11 @@ class Source(SupportsAnnotate):
     name: str
     """Human-readable source name."""
     _: KW_ONLY
-    sources: ValueField[Iterable["Source"], tuple["Source", ...]] = field(default=ValueField(as_tuple, ()))
+    sources: TupleField["Source"] = field(default=ValueField(as_tuple, ()))
     """Direct child sources, each with a distinct name. Their order has no semantic meaning."""
-    signals: ValueField[Iterable[Signal], tuple[Signal, ...]] = field(default=ValueField(as_tuple, ()))
+    signals: TupleField[Signal] = field(default=ValueField(as_tuple, ()))
     """Signals produced directly by this source."""
-    annotations: ValueField[Iterable[Annotation], tuple[Annotation, ...]] = field(default=ValueField(as_tuple, ()))
+    annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
     """Annotations attached to this source."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible source metadata."""

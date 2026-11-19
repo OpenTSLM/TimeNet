@@ -1,7 +1,7 @@
 """Descriptor fields that normalize constructor inputs and later assignments."""
 
 from collections.abc import Callable, Iterable, Mapping
-from typing import Generic, TypeVar
+from typing import Generic, TypeAlias, TypeVar
 
 from timenet.errors import TimeFValidationError
 
@@ -45,3 +45,6 @@ class ValueField(Generic[_Input, _Output]):
     def __set__(self, instance: object, value: _Input) -> None:
         # dataclasses.field(default=descriptor) passes the descriptor for an omitted argument.
         instance.__dict__[self._slot] = self._default if value is self else self._convert(value)
+
+
+TupleField: TypeAlias = ValueField[Iterable[_Item], tuple[_Item, ...]]
