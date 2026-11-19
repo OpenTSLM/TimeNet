@@ -186,14 +186,17 @@ every 20 to 40 seconds and from sleep diaries.
 
 ## What a real build gave
 
-An earlier version of this connector applied the same rules across several modules.
-A full build of the pinned archive with that version produced:
+A full build of the pinned archive in November 2026 produced:
 
 - 151 Records and 159 Sources: 143 Records with one Source and 8 with two.
-- 1,869,524 classification tasks, which is 934,762 windows with two schemes each.
+- 13,298 activity annotations on the Sources, and four metadata annotations on each Record.
+- 1,869,524 classification tasks, which is 934,762 windows with two schemes each. The test split
+  holds 616,896 tasks and the train split holds 1,252,628.
+- A release of 1.99 GB in 124 Parquet value files. `TimeFReader.verify()` passed.
 
-This version of the connector has not run on the full archive yet. Its tests use a small fake
-release to exercise the same rules.
+A pandas port of the authors' `make_windows` at commit `f861b44` ran on the same files. On each of
+the 151 recordings, it keeps the same windows with the same classes as the connector. The tests use
+a small fake release to exercise the same rules.
 
 ## Known issues upstream
 
