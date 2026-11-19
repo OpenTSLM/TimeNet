@@ -1,17 +1,17 @@
 """A reusable base for connectors that read files from a pinned HuggingFace Hub dataset revision.
 
 Subclasses pass ``hf_repo``, ``source_revision``, and ``source_files`` as class keywords, ship a
-``dataset.yaml`` card beside the connector, and implement ``convert()`` over the :class:`HubFileRef` list ``download()``
-returns. The base checks that list before the subclass's ``convert()`` runs. It also fills
-``source_url`` and ``source_revision`` in the dataset metadata from ``HF_REPO`` and ``SOURCE_REVISION``.
+``dataset.yaml`` card beside the connector, and implement ``convert_files()``. ``download()`` returns a
+:class:`HubFileRef` list. The base's ``convert()`` checks that list, then passes
+``convert_files()`` the path of each part. The base also fills ``source_url`` and ``source_revision``
+in the dataset metadata from ``HF_REPO`` and ``SOURCE_REVISION``.
 :mod:`timenet_connectors.sources.huggingface_hub` describes how the files download. For the Hub's
 parquet conversion, pin the commit ``refs/convert/parquet`` points to.
 """
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import functools
 from pathlib import Path
 import re
 from types import MappingProxyType
@@ -19,7 +19,7 @@ from typing import Any, ClassVar
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetConnectorError, TimeNetDownloadError
+from timenet.errors import TimeFValidationError, TimeNetDownloadError
 from timenet.types import DatasetMetadata
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
@@ -33,18 +33,17 @@ class HubFileRef:
 
     path: Path
     part: str
-    """The connector's own name for this file, such as ``"hhar_v2"``: the key in ``SOURCE_FILES``, which
-    ``convert()`` branches on and builds ids from."""
+    """The connector's own name for this file, such as ``"hhar_v2"``: the key in ``SOURCE_FILES`` and in the
+    mapping that ``convert_files()`` receives."""
 
 
 class BaseHuggingFaceConnector(BaseConnector[list[HubFileRef]], ABC):
     """Base class for connectors that read files from a pinned Hub dataset revision.
 
     Subclasses pass ``hf_repo``, ``source_revision``, and ``source_files`` as class keywords, and
-    implement ``convert()`` over the returned :class:`HubFileRef` list. The base stores the keywords as
-    :attr:`HF_REPO`, :attr:`SOURCE_REVISION`, and :attr:`SOURCE_FILES`. A subclass that passes no
-    keywords keeps the values of its parent. The base wraps each subclass's ``convert()`` to run
-    :meth:`check_refs` first.
+    implement :meth:`convert_files`. The base stores the keywords as :attr:`HF_REPO`,
+    :attr:`SOURCE_REVISION`, and :attr:`SOURCE_FILES`. A subclass that passes no keywords keeps the
+    values of its parent. :meth:`convert` runs :meth:`check_refs` first.
     """
 
     HF_REPO: ClassVar[str]
@@ -78,16 +77,6 @@ class BaseHuggingFaceConnector(BaseConnector[list[HubFileRef]], ABC):
             )
         if not getattr(cls, "SOURCE_FILES", None):
             raise TimeFValidationError(f"{cls.__name__} source_files must declare at least one file")
-        # Every subclass's convert() checks its refs first, so no connector has to call check_refs itself
-        convert = cls.__dict__.get("convert")
-        if convert is not None:
-
-            @functools.wraps(convert)
-            def checked(self: BaseHuggingFaceConnector, raw_refs: list[HubFileRef]) -> TimeFDataset:
-                self.check_refs(raw_refs)
-                return convert(self, raw_refs)
-
-            cls.convert = checked
 
     def metadata(self) -> DatasetMetadata:
         """Return the card, with ``source_url`` and ``source_revision`` from :attr:`HF_REPO` and :attr:`SOURCE_REVISION`.
@@ -117,7 +106,7 @@ class BaseHuggingFaceConnector(BaseConnector[list[HubFileRef]], ABC):
         """Check that ``raw_refs`` is nonempty and names each part once, only parts :attr:`SOURCE_FILES` declares.
 
         Args:
-            raw_refs: The references ``convert()`` received.
+            raw_refs: The references :meth:`convert` received.
 
         Raises:
             TimeFValidationError: If ``raw_refs`` is empty, repeats a part, or names an undeclared part.
@@ -129,24 +118,31 @@ class BaseHuggingFaceConnector(BaseConnector[list[HubFileRef]], ABC):
         if unknown:
             raise TimeFValidationError(f"{type(self).__name__} has no source part {', '.join(unknown)}")
 
-    def ref_paths(self, raw_refs: Sequence[HubFileRef], *parts: str) -> dict[str, Path]:
-        """Map each part in ``raw_refs`` to its local path.
+    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+        """Check ``raw_refs``, then convert the files they name.
 
         Args:
-            raw_refs: The references ``convert()`` received.
-            *parts: The parts the caller needs.
+            raw_refs: The references from :meth:`download_async`.
 
         Returns:
-            The path of each part: a file, or the directory of a pattern part.
+            The dataset from :meth:`convert_files`.
 
         Raises:
-            TimeNetConnectorError: If one of ``parts`` is not in ``raw_refs``.
+            TimeFValidationError: If ``raw_refs`` is empty, repeats a part, or names an undeclared part.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by check_refs
+        self.check_refs(raw_refs)
+        return self.convert_files({ref.part: ref.path for ref in raw_refs})
+
+    @abstractmethod
+    def convert_files(self, files: Mapping[str, Path]) -> TimeFDataset:
+        """Convert the downloaded files into a dataset.
+
+        Args:
+            files: The local path of each part: a file, or the directory of a pattern part.
+
+        Returns:
+            The populated dataset.
         """
-        paths = {ref.part: ref.path for ref in raw_refs}
-        missing = [part for part in parts if part not in paths]
-        if missing:
-            raise TimeNetConnectorError(f"{self.HF_REPO} refs lack {', '.join(missing)}")
-        return paths
 
     async def download_async(self, cache_dir: Path) -> list[HubFileRef]:
         """Download :attr:`SOURCE_FILES` at :attr:`SOURCE_REVISION` concurrently.

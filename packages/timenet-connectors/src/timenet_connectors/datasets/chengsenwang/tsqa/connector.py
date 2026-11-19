@@ -6,11 +6,14 @@ to, pinned to one commit. Each row has the columns ``Task, Size, Question, Answe
 lists. Each row becomes one record that carries the series and an :class:`~timenet.types.AnswerTask`.
 """
 
+from collections.abc import Mapping
+from pathlib import Path
+
 from pydantic import ConfigDict, Field
 
 from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec, ureg
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.chengsenwang.tsqa.sample import TSQASample, get_category, get_signal_id
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 from timenet_connectors.splitting import Splitter, StratifiedSplitter
@@ -59,16 +62,16 @@ class TSQAConnector(
             seed=42,
         )
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert_files(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Build one record per row: the parsed series plus its question-and-answer task.
 
         Args:
-            raw_refs: The parquet files from :meth:`download`.
+            files: The parquet file of each part.
 
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        rows = (row for ref in raw_refs for row in ParquetDataReader(ref.path, _SourceRow).iter_rows())
+        rows = (row for path in files.values() for row in ParquetDataReader(path, _SourceRow).iter_rows())
         samples = [TSQASample.from_row(row.model_dump(by_alias=True)) for row in rows]
         splits = self.splitter.split(samples)
         dataset = TimeFDataset(metadata=self.metadata())

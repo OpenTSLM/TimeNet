@@ -295,6 +295,10 @@ falls back to throttled text lines. The `--quiet` flag silences all output.
 PhysioNet connectors extend `BasePhysioNetConnector` for WFDB record I/O. They use `ensure_archive` to
 pull their database archive.
 
+Hugging Face Hub connectors extend `BaseHuggingFaceConnector`. The base downloads the files in
+`SOURCE_FILES` and implements `convert`. The connector implements `convert_files(files)` instead, where
+`files` maps each part name to its local path.
+
 ## Example connectors
 
 - `timenet/hello-world` is a synthetic, offline reference connector. It needs no network and produces
