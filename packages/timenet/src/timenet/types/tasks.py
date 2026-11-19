@@ -281,17 +281,17 @@ class Task(SupportsAnnotate):
         self.annotations = (*self.annotations, attached)
         return attached
 
-    def annotation_owners(self) -> Iterator[SupportsAnnotate]:
-        """Yield the task and each object that it owns that can hold annotations.
+    def annotatable_entities(self) -> Iterator[SupportsAnnotate]:
+        """Yield the entities of this task that can carry annotations: the task, then any entity that it holds.
 
         Yields:
-            The task. A task class with an owned object yields it after the task.
+            The task. A task class that holds another annotatable entity yields it after the task.
         """
         yield self
 
     def walk_annotations(self) -> Iterator[Annotation]:
-        """Yield the annotation occurrences of each object that :meth:`annotation_owners` yields."""
-        return (annotation for owner in self.annotation_owners() for annotation in owner.annotations)
+        """Yield the annotation occurrences of each entity that :meth:`annotatable_entities` yields."""
+        return (annotation for entity in self.annotatable_entities() for annotation in entity.annotations)
 
     def spans(self) -> tuple[Span, ...]:
         """Return the task scope followed by every span-valued target."""
