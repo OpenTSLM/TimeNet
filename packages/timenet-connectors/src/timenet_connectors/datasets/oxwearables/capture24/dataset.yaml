@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset metadata for the oxwearables/capture24 connector.
+# The connector loads this card with DatasetMetadata.from_yaml(). The builder combines it with
+# the schema derived from the data to create manifest.json.
+#
+# Tasks follow the authors' benchmark. Each 10 s window kept by prepare_data.make_windows has one
+# ClassificationTask per scheme scored by benchmark.py: WillettsSpecific2018 and Walmsley2020.
+# P001-P100 are training participants. P101-P151 are test participants.
+# Signals use the published values at 100 Hz, in g, with one Source per segment between gaps.
+# The authors resampled and calibrated the recordings before release.
+yaml_schema_version: 1
+dataset_id: oxwearables/capture24
+dataset_version: 1.0.0
+# The SHA-256 of the one archive file, which connector.py pins as ARCHIVE_SHA256.
+source_revision: sha256:69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2
+name: CAPTURE-24
+description: >-
+  About a day of free-living wrist accelerometry from each of 151 participants, at 100 Hz, with
+  activity labels from body-camera images and sleep diaries. The archive's terms ask each user to
+  keep the participants' data confidential and not to try to identify them.
+license: CC-BY-4.0
+domains:
+  - activity
+  - motion
+tags:
+  - accelerometer
+  - wearable
+  - wrist
+  - activity-recognition
+source_url: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
+citation: >-
+  Chan, S., Hang, Y., Tong, C., Acquah, A., Schonfeldt, A., Gershuny, J., & Doherty, A. (2024).
+  CAPTURE-24: A large dataset of wrist-worn activity tracker data collected in the wild for human
+  activity recognition. Scientific Data, 11, 1135. https://doi.org/10.1038/s41597-024-03960-3.
+  Dataset: https://doi.org/10.5287/bodleian:NGx0JOMP5
