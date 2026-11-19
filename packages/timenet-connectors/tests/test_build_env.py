@@ -44,6 +44,10 @@ def test_uv_command_runs_without_the_project_environment():
     assert "--no-project" in command
 
 
+def test_uv_command_ignores_the_uv_sources_of_the_packages_it_installs():
+    assert "--no-sources" in uv_command(_spec(), ["timenet-build"])
+
+
 def test_uv_command_pins_the_parent_interpreter():
     command = uv_command(_spec(), ["timenet-build"])
     assert command[command.index("--python") + 1] == "/usr/bin/python3"
