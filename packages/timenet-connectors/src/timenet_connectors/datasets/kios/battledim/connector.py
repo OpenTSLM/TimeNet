@@ -141,9 +141,8 @@ class BattLeDIMConnector(BaseConnector[BattLeDIMSource]):
         )
         annotations = []
         for leak in release.leaks:
-            start_us = int((leak.start - release.start).total_seconds() * 1_000_000)
-            end_us = int((leak.end + STEP - release.start).total_seconds() * 1_000_000)
-            span = TimeInterval.micros(start_us, end_us)
+            # From the configured start to the step after the configured end.
+            span = TimeInterval.micros(release.micros(leak.start), release.micros(leak.end + STEP))
             outflow = release.leak_outflow[leak.pipe]
             annotations += [
                 Annotation(key="leak_pipe", value=leak.pipe, span=span, description="The leaking pipe's EPANET id."),
@@ -171,7 +170,7 @@ class BattLeDIMConnector(BaseConnector[BattLeDIMSource]):
                 Annotation(
                     key="leak_peak",
                     value=leak.pipe,
-                    span=TimePoint.micros(int((leak.peak - release.start).total_seconds() * 1_000_000)),
+                    span=TimePoint.micros(release.micros(leak.peak)),
                     description="When the leak reaches its full size; the start, for an abrupt leak.",
                 ),
             ]

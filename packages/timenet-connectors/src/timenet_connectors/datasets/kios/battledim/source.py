@@ -9,7 +9,7 @@ EPANET model of the network. :class:`Release` reads them all once and checks tha
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -50,7 +50,7 @@ def _parse_time(text: str, where: str) -> datetime:
         moment = datetime.strptime(text.strip(), _TIME_FORMAT).replace(tzinfo=UTC)
     except ValueError as error:
         raise TimeNetConnectorError(f"{where}: {text!r} is not a {_TIME_FORMAT} time") from error
-    if moment.minute % 5 or moment.second:
+    if moment.minute % 5:
         raise TimeNetConnectorError(f"{where}: {text!r} is not on the 5 minute grid")
     return moment
 
@@ -75,8 +75,8 @@ def read_table(path: Path) -> Table:
         The table, with every value column as float64.
 
     Raises:
-        TimeNetConnectorError: If the file has no value column, a step that is not 5 minutes, a
-            missing value, or a value that is not finite.
+        TimeNetConnectorError: If the file has no value column, a cell that is not a timestamp or a
+            number, a step that is not 5 minutes, a missing value, or a value that is not finite.
     """
     with path.open(encoding="utf-8") as handle:
         header = handle.readline().strip().split(";")
@@ -85,15 +85,18 @@ def read_table(path: Path) -> Table:
     names = header[1:]
     if len(set(names)) != len(names):
         raise TimeNetConnectorError(f"{path.name}: repeats a column name")
-    table = pacsv.read_csv(
-        path,
-        parse_options=pacsv.ParseOptions(delimiter=";"),
-        convert_options=pacsv.ConvertOptions(
-            decimal_point=",",
-            column_types={"Timestamp": pa.timestamp("s"), **dict.fromkeys(names, pa.float64())},
-            timestamp_parsers=["%Y-%m-%d %H:%M:%S"],
-        ),
-    )
+    try:
+        table = pacsv.read_csv(
+            path,
+            parse_options=pacsv.ParseOptions(delimiter=";"),
+            convert_options=pacsv.ConvertOptions(
+                decimal_point=",",
+                column_types={"Timestamp": pa.timestamp("s"), **dict.fromkeys(names, pa.float64())},
+                timestamp_parsers=["%Y-%m-%d %H:%M:%S"],
+            ),
+        )
+    except pa.ArrowInvalid as error:
+        raise TimeNetConnectorError(f"{path.name}: cannot be read as timestamps and numbers: {error}") from error
     times = table.column("Timestamp").to_numpy().astype("datetime64[s]").astype(np.int64)
     if len(times) == 0:
         raise TimeNetConnectorError(f"{path.name}: holds no rows")
@@ -217,7 +220,7 @@ class Network:
         queue = deque(hops)
         while queue:
             node = queue.popleft()
-            for neighbour in sorted(self._neighbours[node]):
+            for neighbour in self._neighbours[node]:
                 if neighbour not in hops:
                     hops[neighbour] = hops[node] + 1
                     queue.append(neighbour)
@@ -252,6 +255,8 @@ class Release:
             if not isinstance(listed, list) or not listed:
                 raise TimeNetConnectorError(f"dataset_configuration.yaml lists no {key}")
             self.sensors[kind] = [str(sensor) for sensor in listed]
+            if len(set(self.sensors[kind])) != len(self.sensors[kind]):
+                raise TimeNetConnectorError(f"dataset_configuration.yaml lists a {key} entry twice")
         self.scada = {kind: self._join(name, self.sensors[kind]) for kind, (name, _) in SCADA_FILES.items()}
         self.start = self.scada["pressure"][0]
         self.n_steps = len(next(iter(self.scada["pressure"][1].values())))
@@ -276,6 +281,10 @@ class Release:
     def step_of(self, moment: datetime) -> int:
         """The index of ``moment`` on the recording's 5 minute grid."""
         return int((moment - self.start) / STEP)
+
+    def micros(self, moment: datetime) -> int:
+        """The offset of ``moment`` from the start of the recording, in whole microseconds."""
+        return (moment - self.start) // timedelta(microseconds=1)
 
     def _path(self, name: str) -> Path:
         path = self.root / name
@@ -352,7 +361,8 @@ class Release:
             raise TimeNetConnectorError("dataset_configuration.yaml lists a pipe in two leaks")
         if {leak.pipe for leak in leaks} != set(self.leak_outflow):
             raise TimeNetConnectorError("the leak tables and dataset_configuration.yaml name different pipes")
-        report = self._yaml("2018_Fixed_Leakages_Report.txt")
+        # A report of comment lines only, with no repair, reads as an empty YAML document.
+        report = self._yaml("2018_Fixed_Leakages_Report.txt") or []
         if not isinstance(report, list):
             raise TimeNetConnectorError("2018_Fixed_Leakages_Report.txt is not a list of repairs")
         repairs = {}
@@ -360,6 +370,8 @@ class Release:
             fields = [field.strip() for field in str(line).split(",")]
             if len(fields) != _REPAIR_FIELDS:
                 raise TimeNetConnectorError(f"2018_Fixed_Leakages_Report.txt: line {line!r} is not 'linkID, endTime'")
+            if fields[0] in repairs:
+                raise TimeNetConnectorError(f"2018_Fixed_Leakages_Report.txt repairs {fields[0]} twice")
             repairs[fields[0]] = _parse_time(fields[1], "2018_Fixed_Leakages_Report.txt")
         checked = []
         for leak in leaks:
@@ -367,21 +379,14 @@ class Release:
                 raise TimeNetConnectorError(f"leak {leak.pipe} is outside the recording")
             if leak.pipe in repairs and repairs[leak.pipe] != leak.end:
                 raise TimeNetConnectorError(f"leak {leak.pipe}: the repair report and the configuration disagree")
+            # The report covers the historical year: every leak that ends within 2018 must be in it.
+            if leak.end.year == YEARS[0] and leak.pipe not in repairs:
+                raise TimeNetConnectorError(f"leak {leak.pipe} ends in {YEARS[0]} but the repair report lacks it")
             outflow = self.leak_outflow[leak.pipe]
             active = np.flatnonzero(outflow > 0)
             if len(active) == 0 or active[0] < self.step_of(leak.start) or active[-1] > self.step_of(leak.end) + 1:
                 raise TimeNetConnectorError(f"leak {leak.pipe}: its outflow lies outside its configured start and end")
-            checked.append(
-                Leak(
-                    pipe=leak.pipe,
-                    start=leak.start,
-                    end=leak.end,
-                    diameter_m=leak.diameter_m,
-                    leak_type=leak.leak_type,
-                    peak=leak.peak,
-                    repaired=leak.end < self.end,
-                )
-            )
+            checked.append(replace(leak, repaired=leak.end < self.end))
         if set(repairs) - {leak.pipe for leak in checked if leak.repaired}:
             raise TimeNetConnectorError("2018_Fixed_Leakages_Report.txt repairs a leak the configuration keeps open")
         return sorted(checked, key=lambda leak: (leak.start, leak.pipe))

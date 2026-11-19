@@ -199,6 +199,19 @@ def test_a_repair_and_a_quiet_week_are_explained(dataset) -> None:
     assert read_value(answer.targets[0]).startswith("No leak started or was repaired in the last 7 days.")
 
 
+def test_a_growing_leak_states_no_peak_after_the_window(dataset) -> None:
+    # p5 starts on 2018-11-01 and peaks on 2018-11-15, after this window ends on 2018-11-05.
+    classify, _, _, answer = _tasks_of_week(dataset, "2018-10-29 00:00")
+    assert classify.targets == ("incipient",)
+    text = read_value(answer.targets[0])
+    assert text.startswith(
+        "A gradually growing leak started on pipe p5 on 2018-11-01 00:00 and was still growing at the end of "
+        "this window, with a hole of 10.0 mm and an outflow of up to"
+    )
+    assert "2018-11-15" not in text
+    assert "At the end of the window 1 leak is active" in text
+
+
 def test_split_keeps_each_calendar_block_in_one_partition(dataset) -> None:
     tasks = list(dataset.get_all())
     partitions: dict[int, set] = {}
@@ -259,8 +272,27 @@ def _corrupt(release_dir: Path, tmp_path: Path, name: str, edit) -> Path:
         ("dataset_configuration.yaml", lambda text: text.replace("- p6,", "- p4,"), "different pipes"),
         ("2018_Fixed_Leakages_Report.txt", lambda text: text.replace("10:25", "10:30"), "disagree"),
         ("L-TOWN.inp", lambda text: text.replace(" p5   n4 n5", " p9   n4 n5"), "no pipe for the leaks"),
+        ("2018_SCADA_Flows.csv", lambda text: text.replace(";44,04", ";abc", 1), "cannot be read"),
+        ("2018_Fixed_Leakages_Report.txt", lambda text: text.replace("- p3, 2018-03-23 10:25\n", ""), "lacks it"),
+        ("2018_Fixed_Leakages_Report.txt", lambda text: text + "- p3, 2018-03-23 10:25\n", "twice"),
+        ("dataset_configuration.yaml", lambda text: text.replace("- n4\nflow", "- n1\nflow"), "twice"),
     ],
 )
 def test_inconsistent_release_raises(release_dir: Path, tmp_path: Path, name: str, edit, message: str) -> None:
     with pytest.raises(TimeNetConnectorError, match=message):
         Release(_corrupt(release_dir, tmp_path, name, edit))
+
+
+def test_a_leak_outside_every_target_week_raises(release_dir: Path, tmp_path: Path) -> None:
+    # A leak in the first week sits only in the context week of the first window.
+    release = _corrupt(
+        release_dir,
+        tmp_path,
+        "dataset_configuration.yaml",
+        lambda text: text.replace(
+            "- p3, 2018-03-05 15:45, 2018-03-23 10:25, 0.022916, abrupt, 2018-03-05 15:45",
+            "- p3, 2018-01-03 15:45, 2018-03-23 10:25, 0.022916, abrupt, 2018-01-03 15:45",
+        ),
+    )
+    with pytest.raises(TimeNetConnectorError, match="exactly one target week"):
+        BattLeDIMConnector().convert([BattLeDIMSource(release)])

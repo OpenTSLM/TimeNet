@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 from timenet.dataset import Record
+from timenet.errors import TimeNetConnectorError
 from timenet.json import JsonMapping, JsonValue
 from timenet.types import (
     AnswerTask,
@@ -39,6 +40,8 @@ STRIDE = timedelta(days=7)
 # Four ISO weeks make one calendar block. Windows whose target weeks share a block share a partition
 # in both years, because 2019 repeats most of the 2018 demand series (see README.md).
 WEEKS_PER_BLOCK = 4
+# The leak tables write two decimals, so a smaller outflow reads as none.
+_MEASURABLE = 0.05
 
 NEW_LEAK_TYPES = LabelSet(
     name="new_leak_types",
@@ -82,15 +85,15 @@ class Window:
         return (self.target_start.isocalendar().week - 1) // WEEKS_PER_BLOCK
 
 
-def _micros(release: Release, moment: datetime) -> int:
-    return int((moment - release.start) / timedelta(microseconds=1))
-
-
 def windows(release: Release) -> list[Window]:
     """List every window that fits in the recording, in time order.
 
     Returns:
         The windows, each with the leaks that start or are repaired in its target week.
+
+    Raises:
+        TimeNetConnectorError: If a leak starts or is repaired outside every target week, so that no
+            task would mention it.
     """
     found = []
     start = release.start
@@ -102,11 +105,16 @@ def windows(release: Release) -> list[Window]:
                 index=len(found),
                 start=start,
                 new=tuple(leak for leak in release.leaks if target_start <= leak.start < end),
-                # The release writes a repair time as the leak's end: its last step with outflow.
+                # The release writes a repair time as the leak's configured end.
                 repaired=tuple(leak for leak in release.leaks if leak.repaired and target_start <= leak.end < end),
             )
         )
         start += STRIDE
+    for leak in release.leaks:
+        if sum(leak in window.new for window in found) != 1:
+            raise TimeNetConnectorError(f"leak {leak.pipe} does not start in exactly one target week")
+        if leak.repaired and sum(leak in window.repaired for window in found) != 1:
+            raise TimeNetConnectorError(f"the repair of leak {leak.pipe} is not in exactly one target week")
     return found
 
 
@@ -145,15 +153,19 @@ def explain(release: Release, window: Window) -> str:
     sentences = []
     for leak in window.new:
         sensor, hops = release.network.nearest(leak.pipe, release.sensors["pressure"])
-        growth = (
-            "A sudden leak"
-            if leak.leak_type == "abrupt"
-            else f"A gradually growing leak, peaking on {leak.peak:%Y-%m-%d %H:%M},"
-        )
+        if leak.leak_type == "abrupt":
+            kind, growth = "A sudden leak", ""
+        elif leak.peak < window.end:
+            kind, growth = "A gradually growing leak", f" and peaked on {leak.peak:%Y-%m-%d %H:%M}"
+        else:
+            # A later peak is not in the window, so the text does not state it.
+            kind, growth = "A gradually growing leak", " and was still growing at the end of this window"
+        outflow = _outflow(release, leak, leak.start, window.end)
+        # The leak tables round an incipient leak's first hours to zero outflow.
+        flow = f"an outflow of up to {outflow:.1f} m3/h" if outflow >= _MEASURABLE else "no measurable outflow yet"
         sentences.append(
-            f"{growth} started on pipe {leak.pipe} on {leak.start:%Y-%m-%d %H:%M}, "
-            f"with a hole of {leak.diameter_m * 1000:.1f} mm and an outflow of up to "
-            f"{_outflow(release, leak, leak.start, window.end):.1f} m3/h in this window. "
+            f"{kind} started on pipe {leak.pipe} on {leak.start:%Y-%m-%d %H:%M}{growth}, "
+            f"with a hole of {leak.diameter_m * 1000:.1f} mm and {flow} in this window. "
             f"The nearest pressure sensor is {sensor}, {_hops(hops)} away."
         )
     for leak in window.repaired:
@@ -164,9 +176,10 @@ def explain(release: Release, window: Window) -> str:
         )
     if not sentences:
         sentences.append("No leak started or was repaired in the last 7 days.")
-    last = release.step_of(window.end) - 1
-    active = [pipe for pipe, outflow in release.leak_outflow.items() if outflow[last] > 0]
-    total = sum(float(release.leak_outflow[pipe][last]) for pipe in active)
+    # Active means the leak list's interval holds the last step, whatever the rounded outflow says.
+    last = window.end - STEP
+    active = [leak.pipe for leak in release.leaks if leak.start <= last <= leak.end]
+    total = sum(float(release.leak_outflow[pipe][release.step_of(last)]) for pipe in active)
     sentences.append(
         f"At the end of the window {len(active)} leak{'s are' if len(active) != 1 else ' is'} active, "
         f"with a total outflow of {total:.1f} m3/h."
@@ -180,7 +193,7 @@ def window_tasks(release: Release, record: Record, window: Window, split: Split)
     Returns:
         The classification, localization, outflow and text tasks, in that order.
     """
-    scope = TimeInterval.micros(_micros(release, window.start), _micros(release, window.end))
+    scope = TimeInterval.micros(release.micros(window.start), release.micros(window.end))
     target = slice(release.step_of(window.target_start), release.step_of(window.end))
     outflow = np.sum([series[target] for series in release.leak_outflow.values()], axis=0)
     new_leaks: list[JsonValue] = [leak.pipe for leak in window.new]
@@ -211,7 +224,7 @@ def window_tasks(release: Release, record: Record, window: Window, split: Split)
             metadata=metadata,
             prompt=LOCATE_PROMPT,
             mode=LocalizationMode.EXHAUSTIVE,
-            targets=tuple(TimePoint.micros(_micros(release, leak.start)) for leak in window.new),
+            targets=tuple(TimePoint.micros(release.micros(leak.start)) for leak in window.new),
         ),
         ScalarPredictionTask(
             inputs=inputs,
