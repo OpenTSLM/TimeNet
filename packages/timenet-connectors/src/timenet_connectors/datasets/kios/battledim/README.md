@@ -80,7 +80,7 @@ The configuration lists **33 leaks** *(measured)*:
 
 An **abrupt** leak appears at full size at its start. An **incipient** leak grows from its start until its `peakTime`.
 
-Each leak becomes a set of **record annotations** over its active interval. The interval runs from the start to the step after the last step with outflow.
+Each leak becomes a set of **record annotations** over its active interval. The interval runs from the configured start to the step after the configured end. For one leak, p800, the outflow runs one step past that end (see below).
 - `leak_pipe`: the pipe's EPANET id.
 - `leak_type`: `abrupt` or `incipient`.
 - `leak_hole_diameter`, in mm.
@@ -91,18 +91,18 @@ Each leak becomes a set of **record annotations** over its active interval. The 
 **These are answers, never task inputs.**
 
 **Consistency checks.** The build fails if any of these disagree:
-- the configuration, the two leak tables and the repair report;
+- the configuration, the two leak tables and the repair report, which must list every leak that ends in 2018, exactly once;
 - a leak's outflow and its configured start and end;
 - a leak pipe and the pipes of `L-TOWN.inp`.
 
-The release passes all of them.
+It also fails on a sensor listed twice in the configuration, or a CSV cell that is not a timestamp or a number. The release passes all of these checks.
 
 ## Windows and tasks
 
 **Windows:** a window is 14 days, starting every 7 days.
 - The first week is context; the second week is the **target week**.
 - The recording holds **103 windows** *(measured)*.
-- Every leak start and every repair falls in exactly one target week *(measured)*: 33 starts, 17 repairs.
+- Every leak start and every repair falls in exactly one target week: 33 starts, 17 repairs. The build checks this and fails otherwise, so no leak drops out of the tasks.
 - 33 windows have a new leak, 16 have a repair, and 59 have neither *(measured)*.
 
 **Tasks:** each window gives four tasks, all scoped to the window. That is 412 tasks.
@@ -121,7 +121,7 @@ The release passes all of them.
 > to {max outflow in the window} m3/h in this window. The nearest pressure sensor is {sensor}, {n}
 > links away.
 
-For an incipient leak, the sentence opens "A gradually growing leak, peaking on {peakTime},".
+For an incipient leak, the sentence opens "A gradually growing leak started on pipe {pipe} on {start}", followed by "and peaked on {peakTime}" if the peak lies inside the window, or "and was still growing at the end of this window" if it does not. A peak after the window is not stated, because the scoped input cannot show it. When the leak tables round the outflow in the window to zero (an incipient leak's first hours), the text says "no measurable outflow yet" instead of a number. This applies to 9 windows *(measured)*.
 
 *Repair:*
 > The leak on pipe {pipe} was repaired on {end}; its outflow before the repair was {outflow} m3/h.
@@ -131,6 +131,8 @@ For an incipient leak, the sentence opens "A gradually growing leak, peaking on 
 
 *Always last:*
 > At the end of the window {k} leaks are active, with a total outflow of {total} m3/h.
+
+A leak counts as active when the leak list's interval holds the window's last step. The total is the leak tables' outflow at that step.
 
 **Nearest sensor.** "Nearest" counts links in the `L-TOWN.inp` graph (pipes, pumps and valves) from the nearer end of the leaking pipe. Ties go to the sensor listed first in the configuration.
 
@@ -161,6 +163,8 @@ The release's own partition was 2018 for training and 2019 for evaluation. **Thi
 | test | 16 | 3 | 64 | 6, 12 |
 
 **Overlap:** the context week of a window can lie in a neighbouring block, so context weeks can overlap across partitions. Target weeks never do.
+
+**One leaked day per block boundary:** the 2019 demand repeats 2018 by calendar date, but 2019 weekdays fall one day later. A 2019 target week (Monday to Sunday) therefore shares one date with the 2018 week before it. Where a block boundary separates partitions, one day of a target week's demand background also appears in the neighbouring partition. Week-aligned windows cannot avoid this.
 
 ## Release details a user should know
 
