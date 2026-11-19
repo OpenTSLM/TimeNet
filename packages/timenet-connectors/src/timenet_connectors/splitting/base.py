@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Generic, TypeVar
 
-from timenet.types.splits import Split
+from timenet.types import Split
 
 
 T = TypeVar("T")

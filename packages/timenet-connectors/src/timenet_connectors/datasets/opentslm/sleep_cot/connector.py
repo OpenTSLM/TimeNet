@@ -17,8 +17,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError, model_validator
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
@@ -141,8 +140,8 @@ class SleepCotRow:
             The new record.
         """
         signal = Signal.from_values(self.eeg, spec=EEG, name="EEG Fpz-Cz", time_axis=SAMPLED_AT_50_HZ)
-        source = Source(name="EEG", signals=(signal,))
-        subject = Annotation(key="subject_ids", value=[self.subject_id])
+        source = Source("EEG", signals=[signal])
+        subject = Annotation("subject_ids", [self.subject_id])
         return Record(sources=(source,), annotations=(subject,), metadata={"recording_id": self.recording_id})
 
     def create_classification_task(self, record: Record, *, split: Split) -> ClassificationTask:
@@ -153,7 +152,7 @@ class SleepCotRow:
         """
         return ClassificationTask(
             inputs=(record,),
-            targets=(self.label,),
+            targets=self.label,
             label_set=SLEEP_STAGE,
             rationale=self.rationale,
             split=split,
@@ -290,8 +289,8 @@ class SleepCotConnector(BaseConnector[SleepCotReader]):
         splits = reader.read_splits(len(rows))
         dataset = TimeFDataset(metadata=self.metadata())
         for row, split in zip(rows, splits, strict=True):
-            record = dataset.add_record(record=row.create_record())
-            dataset.add_task(task=row.create_classification_task(record, split=split))
+            record = dataset.add_record(row.create_record())
+            dataset.add_task(row.create_classification_task(record, split=split))
         return dataset
 
 

@@ -121,7 +121,7 @@ def test_an_entry_off_the_epoch_boundary_names_its_onset_and_not_its_duration():
 
 
 def test_an_entry_with_no_span_raises_rather_than_being_dropped():
-    entry = Annotation(key="sleep_stage", value="Sleep stage W")
+    entry = Annotation("sleep_stage", "Sleep stage W")
     with pytest.raises(TimeFFormatError, match="states no span"):
         list(tasks.build_epoch_tasks(_RECORDING_ID, [entry]))
 
@@ -133,7 +133,7 @@ def test_a_label_the_release_does_not_write_raises():
 
 def _fact(key, value, at_s=None):
     span = None if at_s is None else TimePoint.micros(at_s * US_PER_S)
-    return Annotation(key=key, value=value, span=span)
+    return Annotation(key, value, span=span)
 
 
 _CASSETTE_FACTS = [

@@ -111,6 +111,8 @@ ignore = [
 ]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["assert"]
+# A connector sets SOURCE_FILES without an annotation: the base class declares its type.
+"packages/timenet-connectors/src/timenet_connectors/datasets/**/connector.py" = ["mutable-class-default"]
 # The ban on importing timenet_connectors applies only to the code of the timenet package.
 "!packages/timenet/src/**" = ["banned-api"]
 # Only the two CLIs load the CLI libraries at import. So the SDK loads the builder backend through

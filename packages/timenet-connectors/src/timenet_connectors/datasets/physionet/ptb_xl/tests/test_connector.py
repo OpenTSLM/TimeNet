@@ -9,8 +9,7 @@ import wfdb
 
 from timenet.errors import TimeNetConnectorError
 from timenet.reader import LoadPlan, TimeFReader
-from timenet.types import Annotation
-from timenet.types.text import read_value
+from timenet.types import Annotation, read_value
 from timenet.writer import TimeFWriter
 from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 

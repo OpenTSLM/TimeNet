@@ -2,6 +2,7 @@ import copy
 from dataclasses import dataclass
 import pickle
 
+import numpy as np
 import pytest
 
 from timenet.errors import TimeFValidationError
@@ -289,12 +290,18 @@ def test_string_targets_become_string_handles():
     assert task.targets[1] == 3
 
 
-def test_a_bare_string_is_not_a_target_sequence():
-    # Iterating "normal" would give one target per letter.
-    with pytest.raises(TimeFValidationError, match="sequence of items"):
-        AnswerTask(targets="normal")
-    with pytest.raises(TimeFValidationError, match="sequence of items"):
-        AnswerTask().targets = "normal"
+def test_a_bare_value_is_one_target():
+    # A bare string is one target. It does not split into one target per letter.
+    assert AnswerTask(targets="normal").targets == (InlineText("normal"),)
+    task = AnswerTask()
+    task.targets = "normal"
+    assert task.targets == (InlineText("normal"),)
+    assert AnswerTask(targets=3).targets == (3,)
+
+
+def test_a_bare_value_of_an_unsupported_type_is_not_a_target():
+    with pytest.raises(TimeFValidationError, match="unsupported type int64"):
+        AnswerTask(targets=np.int64(3))  # ty: ignore[invalid-argument-type]
 
 
 def test_a_list_handle_is_not_a_target():

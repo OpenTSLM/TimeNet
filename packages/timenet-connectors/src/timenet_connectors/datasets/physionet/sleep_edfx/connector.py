@@ -299,12 +299,12 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             recording_metadata = subject_tables.build_annotations(metadata_annotation, recording, file.header)
 
             record = Record(
-                sources=(Source(name="Sleep-EDF polysomnograph", signals=series),),
+                sources=[Source("Sleep-EDF polysomnograph", signals=series)],
                 time_span=TimeInterval.micros(0, session_end),
                 metadata={"recording_id": recording.recording_id},
             )
-            dataset.add_record(record=record)
-            record.annotate(Annotation(key="subject_ids", value=[recording.subject_id]))
+            dataset.add_record(record)
+            record.annotate(Annotation("subject_ids", [recording.subject_id]))
             annotations.attach(recording.recording_id, series, sleep_stages)
             record.add_annotations(recording_metadata)
 

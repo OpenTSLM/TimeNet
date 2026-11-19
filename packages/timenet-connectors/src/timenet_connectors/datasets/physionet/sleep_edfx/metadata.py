@@ -76,7 +76,7 @@ class MetadataAnnotation:
         """
         built = self._built.get((key, str(value)))
         if built is None:
-            built = Annotation(key=key, value=value, description=_DESCRIPTIONS[key])
+            built = Annotation(key, value, description=_DESCRIPTIONS[key])
             self._built[key, str(value)] = built
 
         return built

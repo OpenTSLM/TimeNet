@@ -13,7 +13,7 @@ manifest.
 """
 
 from collections.abc import Hashable
-from dataclasses import dataclass, field, replace
+from dataclasses import KW_ONLY, dataclass, field, replace
 from enum import StrEnum, unique
 import json
 from typing import Annotated, Any, Protocol, final
@@ -58,26 +58,27 @@ def _annotation_value(value: Any) -> AnnotationValue:
 
 
 @final
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class Annotation:
     """Contextual metadata attached to a record, optionally anchored to a region of its timeline.
 
     An annotation carries a ``value``, a ``span``, or both. With a span, it says where on the
     Record timeline it applies. Its owner determines which Signals it covers. Without a span, it is record-scoped
     context that has no place in time, like a subject's age. The span's own shape says whether the
-    annotation marks a time offset or covers a stretch. One class covers every shape::
+    annotation marks a time offset or covers a stretch. One class covers every shape. ``key`` and
+    ``value`` can be positional, in that order. All other fields are keyword-only::
 
-        Annotation(key="age", value=64)
-        Annotation(key="stimulus", span=TimePoint.seconds(0.5))
-        Annotation(key="artifact", value="motion", span=TimeInterval.seconds(0.0, 0.25))
+        Annotation("age", 64)
+        Annotation("stimulus", span=TimePoint.seconds(0.5))
+        Annotation("artifact", "motion", span=TimeInterval.seconds(0.0, 0.25))
 
     The class is final. Reuse content as a constant, or build content that varies with a function::
 
-        HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy")
+        HEALTHY_ANNOTATION = Annotation("condition", "healthy")
 
 
         def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
-            return Annotation(key="quality", value=level)
+            return Annotation("quality", level)
     """
 
     key: str
@@ -87,6 +88,7 @@ class Annotation:
 
     ``None`` makes it a pure marker, which needs a ``span`` to mark something.
     """
+    _: KW_ONLY
     span: TimePoint | TimeInterval | None = None
     """Where on the Record timeline this annotation applies. Its owner determines its scope.
     ``None`` means it is record-scoped context with no place in time."""

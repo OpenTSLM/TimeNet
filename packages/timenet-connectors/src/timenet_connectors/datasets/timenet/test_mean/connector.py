@@ -13,8 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.types import ClassificationTask, Label, LabelSet, TimeSeriesSpec, ureg
 
 
@@ -77,16 +76,10 @@ class TestMeanConnector(BaseConnector[None]):
                 name="signal",
                 time_axis=RegularAxis.from_rate_hz(16),
             )
-            record = Record(sources=(Source(name="Synthetic generator", signals=(series,)),))
-            dataset.add_record(record=record)
+            record = Record(sources=[Source("Synthetic generator", signals=[series])])
+            dataset.add_record(record)
             label = "above_zero" if offset > 0 else "below_zero"
-            dataset.add_task(
-                task=ClassificationTask(
-                    inputs=(record,),
-                    targets=(label,),
-                    label_set=_MEAN_SIGN,
-                )
-            )
+            dataset.add_task(ClassificationTask(inputs=[record], targets=label, label_set=_MEAN_SIGN))
         return dataset
 
 

@@ -365,10 +365,10 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             # Keep the sex and the age from PTB-XL, which have no span. Clear the other imported
             # annotations. Then the Records match our standalone ECG-QA-CoT 1.1.0, whose Records
             # have ``sex``, ``age``, and the split.
-            record.annotations = tuple(
+            record.annotations = [
                 annotation for annotation in record.annotations if annotation.key in _KEPT_ANNOTATIONS
-            )
-            record.add_annotations([Annotation(key="split", value=split.value)])
+            ]
+            record.add_annotations([Annotation("split", split.value)])
             records[ecg_id] = record
             contexts[ecg_id] = _clinical_context(recording)
 
@@ -400,18 +400,16 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             The attached annotations, keyed by the value that :meth:`_iter_tasks` looks them up by.
         """
         question_type_annotations = {
-            question_type: dataset.annotate(Annotation(key="question_type", value=question_type))
+            question_type: dataset.annotate(Annotation("question_type", question_type))
             for question_type in sorted(question_types)
         }
         answer_options_annotations: dict[int, Annotation] = {}
         for template_id in sorted(template_ids):
             options = answers.get(template_id)
             if options:
-                answer_options_annotations[template_id] = dataset.annotate(
-                    Annotation(key="answer_options", value=list(options))
-                )
+                answer_options_annotations[template_id] = dataset.annotate(Annotation("answer_options", list(options)))
         context_annotations = {
-            context: dataset.annotate(Annotation(key="clinical_context", value=context))
+            context: dataset.annotate(Annotation("clinical_context", context))
             for context in sorted(set(contexts.values()))
         }
         return _TaskAnnotations(
@@ -445,9 +443,9 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
                 yield AnswerTask(
                     inputs=(records[row.ecg_id],),
                     prompt=row.question,
-                    targets=(row.answer,),
+                    targets=row.answer,
                     rationale=row.rationale,
-                    input_annotations=tuple(input_annotations),
+                    input_annotations=input_annotations,
                     split=split,
                     metadata={"template_id": row.template_id},
                 )

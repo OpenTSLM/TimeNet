@@ -14,8 +14,7 @@ import pyarrow.parquet as pq
 
 from timenet.dataset import Record, RegularAxis, Signal, Source
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, MissingReason, MissingValues, TimeOrigin, TimeSeriesSpec
-from timenet.types.clock import US_PER_S
+from timenet.types import US_PER_S, Annotation, MissingReason, MissingValues, TimeOrigin, TimeSeriesSpec
 
 
 UNTAGGED = "untagged"  # the source name for the empty tag label of a metric with no grouping
@@ -215,23 +214,23 @@ class MetricSeriesFiles:
         origin_us = min(group.start_us for groups in series_by_rollup.values() for group in groups.values())
         sources = []
         for label in sorted({label for groups in series_by_rollup.values() for label in groups}):
-            signals = tuple(
+            signals = [
                 groups[label].to_signal(period_us=rollup.period_us, origin_us=origin_us, name=f"{rollup.interval_s}s")
                 for rollup, groups in series_by_rollup.items()
                 if label in groups
-            )
-            sources.append(Source(name=label or UNTAGGED, signals=signals))
+            ]
+            sources.append(Source(label or UNTAGGED, signals=signals))
         record = Record(
             metadata={"source_record_id": f"arfbench-{self.metric}"},
             start_time=TimeOrigin(origin_us),
-            sources=tuple(sources),
+            sources=sources,
         )
         record.add_annotations(
             [
-                Annotation(key="metric_id", value=self.metric),
-                Annotation(key="incident_id", value=self.metric.partition("_")[0]),
-                Annotation(key="query_name", value=self.finest.read_query_name()),
-                Annotation(key="finest_interval_s", value=self.finest.interval_s, unit="second"),
+                Annotation("metric_id", self.metric),
+                Annotation("incident_id", self.metric.partition("_")[0]),
+                Annotation("query_name", self.finest.read_query_name()),
+                Annotation("finest_interval_s", self.finest.interval_s, unit="second"),
             ]
         )
         return record

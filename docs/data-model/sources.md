@@ -24,8 +24,7 @@ Empatica EmbracePlus watch. Its accelerometer records three axes at 64 Hz.
 ```python
 import numpy as np
 
-from timenet.dataset import Record, Signal, Source
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source
 from timenet.types import TimeSeriesSpec, ureg
 
 # Stand-in for 60 s of a device export. A connector reads these values.
@@ -47,7 +46,7 @@ acceleration = TimeSeriesSpec(
 )
 
 chest_strap = Source(
-    name="Chest strap",
+    "Chest strap",
     signals=(
         Signal(
             name="ECG",
@@ -59,8 +58,8 @@ chest_strap = Source(
     metadata={"model": "Polar H10"},
 )
 accelerometer = Source(
-    name="Accelerometer",
-    signals=tuple(
+    "Accelerometer",
+    signals=[
         Signal(
             name=axis,
             spec=acceleration,
@@ -68,10 +67,10 @@ accelerometer = Source(
             data=values,
         )
         for axis, values in zip("xyz", wrist_values)
-    ),
+    ],
 )
 watch = Source(
-    name="Wrist watch",
+    "Wrist watch",
     sources=(accelerometer,),
     metadata={"model": "Empatica EmbracePlus"},
 )
@@ -92,14 +91,16 @@ print([signal.name for signal in record.signals])
 The device model goes in the `metadata` of its Source. The participant and the session go in the
 `metadata` of the Record.
 
-All fields are keyword-only:
+`name` can be positional, as in `Source("IMU", signals=[...])`. All other fields are keyword-only. The
+collection fields accept any iterable, such as a list, and store a tuple. A single item or a string
+raises `TimeFValidationError`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name` | `str` | required | Human-readable name. It must not be empty. |
-| `sources` | `tuple[Source, ...]` | `()` | Direct child Sources. Their order has no meaning. |
-| `signals` | `tuple[Signal, ...]` | `()` | Signals that this Source produces directly. |
-| `annotations` | `tuple[Annotation, ...]` | `()` | Annotation occurrences on this Source. |
+| `sources` | `Iterable[Source]`, stored as a tuple | `()` | Direct child Sources. Their order has no meaning. |
+| `signals` | `Iterable[Signal]`, stored as a tuple | `()` | Signals that this Source produces directly. |
+| `annotations` | `Iterable[Annotation]`, stored as a tuple | `()` | Annotation occurrences on this Source. |
 | `metadata` | JSON-compatible mapping | `{}` | Untyped device details. |
 
 ## Nest Sources
@@ -121,7 +122,7 @@ interval, for example a time when an electrode lost contact with the skin:
 ```python
 from timenet.types import Annotation, TimeInterval
 
-chest_strap.annotate(Annotation(key="firmware", value="3.1.1"))
+chest_strap.annotate(Annotation("firmware", "3.1.1"))
 chest_strap.annotate(
     Annotation(
         key="electrode_contact",
@@ -166,12 +167,12 @@ dataset = TimeFDataset(
         license="CC-BY-4.0",
     )
 )
-dataset.add_record(record=record)
+dataset.add_record(record)
 night_2 = Record(
     sources=(chest_strap,),
     metadata={"participant": "P017", "session": "night-2"},
 )
-dataset.add_record(record=night_2)
+dataset.add_record(night_2)
 ```
 
 ```text

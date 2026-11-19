@@ -1,11 +1,30 @@
 """Descriptor fields that normalize constructor inputs and later assignments."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Generic, TypeVar
+
+from timenet.errors import TimeFValidationError
 
 
 _Input = TypeVar("_Input")
 _Output = TypeVar("_Output")
+_Item = TypeVar("_Item")
+
+
+def as_tuple(value: Iterable[_Item]) -> tuple[_Item, ...]:
+    """Convert the input of a collection field to a tuple.
+
+    Returns:
+        The items in the order given.
+
+    Raises:
+        TimeFValidationError: If ``value`` is a string, a mapping, or not iterable.
+    """
+    if isinstance(value, (str, Mapping)) or not isinstance(value, Iterable):
+        raise TimeFValidationError(
+            f"a collection field takes an iterable of items such as a list or a tuple, got {type(value).__name__}"
+        )
+    return tuple(value)
 
 
 class ValueField(Generic[_Input, _Output]):

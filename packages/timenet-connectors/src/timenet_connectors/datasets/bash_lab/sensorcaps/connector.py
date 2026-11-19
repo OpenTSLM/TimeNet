@@ -245,9 +245,9 @@ def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[tuple[str, int],
             ]
             yield AnswerTask(
                 inputs=(record,),
-                targets=(row.caption,),
+                targets=row.caption,
                 prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
-                input_annotations=tuple(context),
+                input_annotations=context,
                 split=Split.TRAIN,
             )
 
@@ -265,9 +265,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         "shoaib_v2": 10500,
         "uci_v2": 2088,
     }
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {
-        partition: f"data/{partition}-00000-of-00001.jsonl" for partition in SOURCE_ROWS
-    }
+    SOURCE_FILES = {partition: f"data/{partition}-00000-of-00001.jsonl" for partition in SOURCE_ROWS}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Index local rows into six-channel Records and a re-iterable caption stream.
@@ -285,13 +283,13 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
             ("time_axis_reconstruction", "round(linspace(0, 119, 60)) / 20 seconds relative to window start"),
         ):
-            dataset.annotate(Annotation(key=key, value=value))
+            dataset.annotate(Annotation(key, value))
         records: dict[tuple[str, int], Record] = {}
         for file in raw_refs:
             count = 0
             for ref, row in _iter_rows(file):
                 record = self._make_record(ref, row)
-                dataset.add_record(record=record)
+                dataset.add_record(record)
                 records[ref.key] = record
                 count += 1
             # Every pinned count is nonzero, so this also rejects an empty partition.
@@ -309,7 +307,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         """
         channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
         # Retain published values, including upstream zero-filled PAMAP2 gaps.
-        signals = tuple(
+        signals = [
             Signal.from_irregular(
                 pa.array((sample[dimension] for sample in row.values[sensor]), type=pa.float32()),
                 name=name,
@@ -317,8 +315,8 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
                 time_offsets_us=_TIME_OFFSETS_US.to_numpy(),
             )
             for spec, name, sensor, dimension in channels
-        )
-        record = Record(sources=(Source(name="IMU", signals=signals),))
+        ]
+        record = Record(sources=[Source("IMU", signals=signals)])
         source = ref.file.part.rsplit("_", 1)[0]
         metadata: dict[str, str | int] = {
             "source_dataset": source,
@@ -330,7 +328,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         if row.location is not None:
             metadata["sensor_location"] = row.location
         for key, value in metadata.items():
-            record.annotate(Annotation(key=key, value=value))
+            record.annotate(Annotation(key, value))
         return record
 
 

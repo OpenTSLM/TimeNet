@@ -16,9 +16,8 @@ from timenet.engine import open_parents, store_dataset
 from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.types import AnswerTask, ObjectKind, Split
+from timenet.types import AnswerTask, ObjectKind, Split, read_value
 from timenet.types.reference_keys import ParentAlias
-from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotConnector, EcgQaCotSource
 from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 

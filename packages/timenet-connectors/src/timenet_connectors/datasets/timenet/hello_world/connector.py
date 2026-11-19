@@ -17,8 +17,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -145,7 +144,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         )
         # An annotation shared across two records. The writer stores equal content once, so they share
         # one content row.
-        cohort = Annotation(key="cohort", value="A")
+        cohort = Annotation("cohort", "A")
 
         # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = Signal.from_values(
@@ -157,18 +156,18 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         record0 = Record(
             sources=(
                 Source(
-                    name="Synthetic generator",
+                    "Synthetic generator",
                     signals=(shared, cosine),
                 ),
             ),
         )
-        dataset.add_record(record=record0)
+        dataset.add_record(record0)
         # The localization task below references these annotations instead of repeating the literal values.
-        stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5))
-        artifact = Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25))
+        stimulus = Annotation("stimulus", span=TimePoint.seconds(0.5))
+        artifact = Annotation("artifact", span=TimeInterval.seconds(0.0, 0.25))
         _, record0_cohort, stimulus = record0.add_annotations(
             [
-                Annotation(key="age", value=64, unit="years"),
+                Annotation("age", 64, unit="years"),
                 cohort,
                 stimulus,
             ]
@@ -176,16 +175,16 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         artifact = shared.annotate(artifact)
         classification = ClassificationTask(
             inputs=(record0,),
-            targets=("normal",),
+            targets="normal",
             label_set=_RHYTHM,
         )
         dataset.add_tasks(
-            tasks=[
+            [
                 classification,
                 AnswerTask(
                     inputs=(record0,),
                     prompt="What rhythm?",
-                    targets=("Normal.",),
+                    targets="Normal.",
                     # Any task can carry a chain of thought. An answer task with a chain of thought is
                     # the old reasoning task.
                     rationale="The peaks repeat once per cycle at a constant interval.",
@@ -196,7 +195,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 ),
                 ScalarPredictionTask(
                     inputs=(record0,),
-                    targets=(60.0,),
+                    targets=60.0,
                     unit="bpm",
                     target_name="mean_rate",
                 ),
@@ -224,7 +223,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         record1 = Record(
             sources=(
                 Source(
-                    name="Synthetic generator",
+                    "Synthetic generator",
                     signals=(
                         Signal.from_values(
                             _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
@@ -237,7 +236,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 ),
             ),
         )
-        dataset.add_record(record=record1)
+        dataset.add_record(record1)
         record1.annotate(cohort)  # equal content, so the writer stores it once
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
@@ -258,22 +257,22 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         record2 = Record(
             sources=(
                 Source(
-                    name="Synthetic generator",
+                    "Synthetic generator",
                     signals=(window,),
                 ),
             ),
         )
-        dataset.add_record(record=record2)
+        dataset.add_record(record2)
         # A scope narrows the input to a region. This task has the same task type as the whole-record
         # label above, but it supplies the window. Span times use the source recording timeline, so
         # this task's span sits inside the window's span.
         dataset.add_task(
-            task=ClassificationTask(
-                inputs=(record2,),
-                targets=("onset",),
+            ClassificationTask(
+                inputs=[record2],
+                targets="onset",
                 label_set=_EVENT,
                 scope=TimeInterval.seconds(0.5, 0.75, time_series=(window,)),
-            ),
+            )
         )
         return dataset
 

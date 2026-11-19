@@ -21,13 +21,12 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any, ClassVar, NamedTuple, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
+from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetConnectorError
 from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
@@ -670,10 +669,10 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
             loader=partial(loader, row, position),
         )
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
-        record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
+        record = Record(sources=[Source("series", signals=[signal])], metadata=metadata)
         if position == 0:
             for key, value in row.contexts.on_input.items():
-                record.annotate(Annotation(key=key, value=value if isinstance(value, str) else list(value)))
+                record.annotate(Annotation(key, value if isinstance(value, str) else list(value)))
         records.append(record)
     return tuple(records)
 
@@ -721,7 +720,7 @@ def _task(
         return ClassificationTask(
             inputs=inputs,
             prompt=row.prompt,
-            targets=(row.answer,),
+            targets=row.answer,
             split=_SPLITS[row.split],
             input_annotations=input_annotations,
             label_set=_TRUE_OR_FALSE_LABEL_SET,
@@ -732,7 +731,7 @@ def _task(
     return AnswerTask(
         inputs=inputs,
         prompt=row.prompt,
-        targets=(row.answer,),
+        targets=row.answer,
         split=_SPLITS[row.split],
         input_annotations=input_annotations,
         metadata=metadata,
@@ -744,7 +743,7 @@ class TSAQAConnector(BaseHuggingFaceConnector):
 
     HF_REPO = "TSAQA/TSAQA-Benchmark"
     SOURCE_REVISION = "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {split.value: split.filename for split in _SplitFile}
+    SOURCE_FILES = {split.value: split.filename for split in _SplitFile}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Convert each split file into lazy Records and a stream of one task per row.
@@ -777,12 +776,12 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         dataset = TimeFDataset(metadata=self.metadata())
         # The model reads the published task and question_type, so each distinct value is a dataset annotation.
         labels = {
-            label: dataset.annotate(Annotation(key=label[0], value=label[1]))
+            label: dataset.annotate(Annotation(label[0], label[1]))
             for label in sorted({label for row in rows for label in _published_labels(row)})
         }
         for row_records in records:
             for record in row_records:
-                dataset.add_record(record=record)
+                dataset.add_record(record)
 
         def tasks() -> Iterator[Task]:
             for row, inputs in zip(rows, records, strict=True):
