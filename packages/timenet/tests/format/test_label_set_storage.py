@@ -142,9 +142,7 @@ def test_a_filtered_read_still_loads_the_label_set_annotations(release):
 
     first, second = _label_sets(tasks.values())
     assert first is second
-    annotation = first.annotation("name")
-    assert annotation is not None
-    assert annotation.value == "stage"
+    assert [(annotation.key, annotation.value) for annotation in first.annotations] == [("name", "stage")]
 
 
 def test_the_batches_of_a_task_stream_share_one_label_set_object(release):

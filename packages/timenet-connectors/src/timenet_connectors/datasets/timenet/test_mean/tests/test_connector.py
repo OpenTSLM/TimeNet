@@ -46,8 +46,8 @@ def test_has_balanced_binary_labels():
 
 def test_every_task_shares_the_mean_sign_label_set():
     label_sets = [task.label_set for task in _convert().tasks_of(ClassificationTask)]
-    names = [label_set.annotation("name") for label_set in label_sets]
-    assert {None if name is None else read_value(name.value) for name in names} == {"mean_sign"}
+    names = {read_value(a.value) for label_set in label_sets for a in label_set.annotations if a.key == "name"}
+    assert names == {"mean_sign"}
     assert len({id(label_set) for label_set in label_sets}) == 1
 
 

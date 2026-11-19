@@ -110,7 +110,7 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert task.metadata["source_issues"] == _EXPECTED_ISSUES.get(_row_of(task), [])
     if isinstance(task, ClassificationTask):
         assert task.label_set.names == ("T", "F")
-        assert task.label_set.annotation("name").value == "true_or_false"
+        assert [(a.key, a.value) for a in task.label_set.annotations] == [("name", "true_or_false")]
 
 
 def test_every_task_holds_its_published_row():

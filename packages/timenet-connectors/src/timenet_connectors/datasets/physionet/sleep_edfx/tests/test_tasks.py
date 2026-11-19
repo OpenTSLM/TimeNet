@@ -154,7 +154,8 @@ def _pick(built, kind, label_set=None):
 
 
 def _label_sets(built):
-    return {read_value(one.label_set.annotation("name").value) for one in built if isinstance(one, ClassificationTask)}
+    tasks = [one for one in built if isinstance(one, ClassificationTask)]
+    return {read_value(a.value) for one in tasks for a in one.label_set.annotations if a.key == "name"}
 
 
 def test_age_is_a_scalar_with_a_unit():

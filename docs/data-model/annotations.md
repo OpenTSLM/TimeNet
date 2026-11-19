@@ -129,7 +129,6 @@ SLEEP_STAGE = LabelSet(
     annotations=(Annotation(key="name", value="sleep_stage"),),
 )
 SLEEP_STAGE.annotate(Annotation(key="description", value="Sleep stage of one epoch."))
-SLEEP_STAGE.annotation("name")
 ```
 
 A label set annotation has no span. Annotations are not part of the identity of a set. TimeF stores
