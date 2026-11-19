@@ -489,14 +489,14 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         declared = set(self._streamed_task_types)
         label_sets = LabelSetRegistry()
         schema = self._schema
-        descriptors = None if schema is None else {descriptor.key: descriptor for descriptor in schema.annotations}
+        descriptors = {} if schema is None else {descriptor.key: descriptor for descriptor in schema.annotations}
         for position, task in enumerate(self.iter_tasks(), start=1):
             task._id = self._ids.claim(ObjectKind.TASK, self._streamed_task_base + position)
             self._validate_streamed_task(task, index, declared, label_sets)
-            if descriptors is not None:
+            if schema is not None:
                 self._add_descriptors(descriptors, task.walk_annotations())
             yield task
-        if schema is not None and descriptors is not None:
+        if schema is not None:
             self._schema = schema.model_copy(update={"annotations": tuple(descriptors.values())})
 
     def _validate_streamed_task(
