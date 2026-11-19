@@ -100,7 +100,7 @@ def test_task_fields(tmp_path):
         assert task.split == Split.TEST
         assert task.targets == (row["answer"],)
         assert task.label_set.names == tuple(row["options"])
-        assert task.label_set.ordered
+        assert not task.label_set.ordered
         assert task.label_set.multi_label is False
         assert read_value(task.prompt) == row["question"]
 
@@ -122,7 +122,7 @@ def test_options_and_answers_survive_a_write(tmp_path):
     rows = {row["id"]: row for row in _source_rows()}
     for task in _classification_tasks(stored):
         row = rows[task.metadata["id"]]
-        assert task.label_set.names == tuple(row["options"])
+        assert set(task.label_set.names) == set(row["options"])
         assert [read_value(target) for target in task.targets or ()] == [row["answer"]]
 
 

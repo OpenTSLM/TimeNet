@@ -4,8 +4,9 @@ The source repository is ``AutonLab/TimeSeriesExam1``. The connector pins one co
 test split. A row has a question, its options, the answer, and one series (``ts``) or two (``ts1`` and ``ts2``).
 Each series becomes a Record.
 
-Each row becomes one :class:`~timenet.types.ClassificationTask`. Its labels are the option texts, in an ordered label
-set that keeps the published option order. Its target is the published answer text.
+Each row becomes one :class:`~timenet.types.ClassificationTask`. Its labels are the option texts, and its target is
+the published answer text. The same options are in a different order in different rows, so the order has no meaning
+and the label set is not ordered.
 
 The task metadata holds the other published columns. It is provenance and never model input.
 The prompt is the question alone. The options are the labels of the task, and ``format_hint`` names option
@@ -63,28 +64,13 @@ class _SourceRow(DataRow):
             raise ValueError(f"row id {self.id}: expected ts, or ts1 and ts2, found {list(self.series)}")
         return self
 
-    def add_to(self, dataset: TimeFDataset) -> None:
-        """Add one Record per series of the row, and the classification task of the row, to the dataset.
 
-        The labels of the task are the options, and its target is the answer.
-        """
-        records = []
-        for column, values in self.series.items():
-            signal = Signal.from_values(values, spec=_SPEC, name="series", time_axis=_AXIS)
-            record = Record(
-                sources=(Source(name="series", signals=(signal,)),),
-                metadata={"row_id": self.id, "role": column},
-            )
-            records.append(dataset.add_record(record=record))
-        task = ClassificationTask(
-            inputs=tuple(records),
-            prompt=self.question,
-            label_set=LabelSet(self.options, ordered=True),
-            targets=(self.answer,),
-            split=Split.TEST,
-            metadata=self.model_dump(exclude=_NOT_METADATA),
-        )
-        dataset.add_task(task=task)
+def _record(row_id: int, role: str, values: list[float]) -> Record:
+    signal = Signal.from_values(values, spec=_SPEC, name="series", time_axis=_AXIS)
+    return Record(
+        sources=(Source(name="series", signals=(signal,)),),
+        metadata={"row_id": row_id, "role": role},
+    )
 
 
 class TimeSeriesExam1Connector(BaseHuggingFaceConnector):
@@ -105,7 +91,19 @@ class TimeSeriesExam1Connector(BaseHuggingFaceConnector):
         """
         dataset = TimeFDataset(metadata=self.metadata())
         for row in ParquetDataReader(raw_refs[0].path, _SourceRow).iter_rows():
-            row.add_to(dataset)
+            inputs = tuple(
+                dataset.add_record(record=_record(row.id, role, values)) for role, values in row.series.items()
+            )
+            dataset.add_task(
+                task=ClassificationTask(
+                    inputs=inputs,
+                    prompt=row.question,
+                    label_set=LabelSet(row.options),
+                    targets=(row.answer,),
+                    split=Split.TEST,
+                    metadata=row.model_dump(exclude=_NOT_METADATA),
+                )
+            )
         return dataset
 
 
