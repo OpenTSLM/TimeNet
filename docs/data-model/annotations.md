@@ -126,7 +126,7 @@ from timenet.types import Annotation, LabelSet
 
 SLEEP_STAGE = LabelSet(
     ["W", "N1", "R"],
-    annotations=(Annotation(key="name", value="sleep_stage"),),
+    annotations=[Annotation("name", "sleep_stage")],
 )
 SLEEP_STAGE.annotate(Annotation(key="description", value="Sleep stage of one epoch."))
 ```

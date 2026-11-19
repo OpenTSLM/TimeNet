@@ -27,7 +27,7 @@ _MEAN_SIGN = LabelSet(
         Label(name="above_zero", description="The mean of the signal is above zero."),
         Label(name="below_zero", description="The mean of the signal is below zero."),
     ],
-    annotations=(Annotation(key="name", value="mean_sign"),),
+    annotations=[Annotation("name", "mean_sign")],
 )
 
 _SIGNAL = TimeSeriesSpec(

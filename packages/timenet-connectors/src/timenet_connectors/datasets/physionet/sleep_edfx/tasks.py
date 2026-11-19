@@ -52,7 +52,7 @@ SLEEP_STAGES = LabelSet(
         Label(name="Movement time", description="An epoch that body movement obscures, so it has no stage."),
         Label(name="Sleep stage ?", description="An epoch with no sleep-stage score from data collection."),
     ],
-    annotations=(Annotation(key="name", value=str(AnnotationKey.SLEEP_STAGE)),),
+    annotations=[Annotation("name", str(AnnotationKey.SLEEP_STAGE))],
 )
 STAGE_LABELS = SLEEP_STAGES.names
 
@@ -63,7 +63,7 @@ ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 # meanings, so a raw code never reaches a task.
 SEXES = LabelSet(
     [Label(name="F", description="Female."), Label(name="M", description="Male.")],
-    annotations=(Annotation(key="name", value=str(AnnotationKey.SEX)),),
+    annotations=[Annotation("name", str(AnnotationKey.SEX))],
 )
 SEX_LABELS = SEXES.names
 
@@ -71,7 +71,7 @@ SEX_LABELS = SEXES.names
 CONDITION_LABELS = tuple(Condition)
 CONDITIONS = LabelSet(
     [str(one) for one in Condition],
-    annotations=(Annotation(key="name", value=str(AnnotationKey.CONDITION)),),
+    annotations=[Annotation("name", str(AnnotationKey.CONDITION))],
 )
 
 

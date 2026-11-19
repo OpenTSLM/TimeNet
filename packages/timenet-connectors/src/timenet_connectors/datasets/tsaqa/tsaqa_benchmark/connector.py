@@ -75,7 +75,7 @@ class _Role(StrEnum):
 
 _TRUE_OR_FALSE_LABEL_SET = LabelSet(
     [Label(name="T", description="True."), Label(name="F", description="False.")],
-    annotations=(Annotation(key="name", value="true_or_false"),),
+    annotations=[Annotation("name", "true_or_false")],
 )
 """The label set that every true-or-false task shares."""
 _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
