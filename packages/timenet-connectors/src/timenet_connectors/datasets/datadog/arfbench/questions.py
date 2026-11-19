@@ -214,7 +214,7 @@ class ARFBenchQuestion:
         Returns:
             The task, not yet added to a dataset.
         """
-        task = ClassificationTask(
+        return ClassificationTask(
             inputs=inputs,
             prompt=self.question,
             targets=self.correct_answer,
@@ -222,12 +222,13 @@ class ARFBenchQuestion:
             split=Split.TEST,
             metadata={"question_index": self.index},
             label_set=LabelSet(self.answer_options, ordered=True),
+            annotations=[
+                Annotation("task_category", value=self.task_category.value),
+                Annotation("difficulty", value=self.difficulty.value),
+                Annotation("interpolate_1", value=self.interpolate_1),
+                Annotation("interpolate_2", value=self.interpolate_2),
+            ],
         )
-        task.annotate(Annotation("task_category", value=self.task_category.value))
-        task.annotate(Annotation("difficulty", value=self.difficulty.value))
-        task.annotate(Annotation("interpolate_1", value=self.interpolate_1))
-        task.annotate(Annotation("interpolate_2", value=self.interpolate_2))
-        return task
 
 
 def read_questions(qa_csv: Path) -> Iterator[ARFBenchQuestion]:
