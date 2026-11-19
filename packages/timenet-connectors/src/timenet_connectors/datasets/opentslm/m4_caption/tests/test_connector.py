@@ -1,3 +1,4 @@
+from collections import Counter
 import csv
 import json
 import lzma
@@ -132,11 +133,18 @@ def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, changes, me
         _convert(tmp_path, splits=_SPLITS | changes)
 
 
-def test_the_frozen_split_is_of_the_pinned_release_and_has_the_paper_counts():
+_RELEASE_SERIES_COUNTS = {"D": 4227, "H": 414, "M": 48000, "Q": 24000, "W": 359, "Y": 23000}
+"""The number of series of each frequency in the release, by the letter that starts their M4 ids."""
+
+
+def test_the_frozen_split_is_of_the_pinned_release_and_has_a_tenth_of_each_frequency_in_validation_and_test():
     splits = M4CaptionSplits.read_from_file(SPLITS_PATH)
     assert splits.source_sha256 == M4_CAPTION_SHA256
-    # The 80/10/10 split of 100,000 series that the OpenTSLM paper reports.
-    assert (len(splits.validation), len(splits.test)) == (10_000, 10_000)
+    for m4_ids in (splits.validation, splits.test):
+        counts = Counter(m4_id[0] for m4_id in m4_ids)
+        for letter, release_count in _RELEASE_SERIES_COUNTS.items():
+            # A tenth of the series of each frequency, rounded down or up.
+            assert release_count // 10 <= counts[letter] <= -(-release_count // 10)
 
 
 @pytest.mark.parametrize(

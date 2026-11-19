@@ -2,8 +2,8 @@
 
 The OpenTSLM release holds the train part of all 100,000 M4 series, one CSV of series and one CSV of
 captions for each of the six M4 frequencies. Each series becomes one Record and one AnswerTask. The
-target is the caption. The release archive stores no split. OpenTSLM's loader makes one when it loads
-the data, and the connector reads that split from splits.json.xz, which generate_splits.py wrote.
+target is the caption. The release archive stores no split. generate_splits.py made an 80/10/10 split,
+stratified by frequency, and wrote it to splits.json.xz. The connector reads that file.
 """
 
 from collections import Counter
@@ -32,7 +32,7 @@ M4_CAPTION_SHA256 = "4acb748d94d7287fe58dbb5c3cf6314ea259010b7720f42506739269dec
 RELEASE_FOLDER = "M4TimeSeriesCaptionDataset"
 """The folder in the archive that holds the CSV files."""
 SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
-"""The split of OpenTSLM's loader for the release, as generate_splits.py wrote it."""
+"""The stratified split of the release, as generate_splits.py wrote it."""
 
 CAPTION_PROMPT = "Please generate a detailed caption for this time-series, describing it as accurately as possible."
 """The prompt of OpenTSLM's loader, the same for every series: the post-prompt of ``M4QADataset``."""
@@ -141,11 +141,11 @@ class M4CaptionSeries:
 
 
 class M4CaptionSplits(BaseModel):
-    """The validation and test series of OpenTSLM's split, by M4 id.
+    """The validation and test series of the split, by M4 id.
 
-    The release archive stores no split. OpenTSLM's loader makes one when it loads the data.
-    generate_splits.py ran the calls of the loader once and wrote this split to splits.json.xz. Every
-    series that the file does not name is in the train split.
+    The release archive stores no split. generate_splits.py made an 80/10/10 split, stratified by
+    frequency, and wrote it to splits.json.xz. Every series that the file does not name is in the train
+    split.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -236,6 +236,14 @@ class M4CaptionReader:
             )
             for (frequency, series), split in zip(captioned, splits, strict=True)
         ]
+
+    def read_m4_ids(self) -> list[str]:
+        """Read the M4 id of every series, in the order of :meth:`read_series`, without the split.
+
+        Returns:
+            The M4 ids, such as ``M1``.
+        """
+        return [series.m4_id for frequency in M4Frequency for series in self._read_frequency(frequency)]
 
     def _read_frequency(self, frequency: M4Frequency) -> Iterator[_CaptionedSeries]:
         """Read the series of one frequency, paired with the caption in the same row of its caption file.

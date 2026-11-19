@@ -11,11 +11,16 @@ an annotation. The task target is the caption. The task prompt is the prompt of 
 
 ## Split
 
-The release archive stores no split. The OpenTSLM loader splits the series at load time with the
-`train_test_split` function of the datasets library, so the split depends on the versions of
-datasets and NumPy. `generate_splits.py` ran the calls of the loader once, with the library versions
-of the OpenTSLM `uv.lock`. It wrote the 10,000 validation and 10,000 test series, by M4 id, to
-`splits.json.xz`. The connector reads that file and puts every other series in the train split.
+The release archive stores no split. `generate_splits.py` makes an 80/10/10 split with
+`StratifiedSplitter`, stratified by M4 frequency. Validation and test each hold a tenth of every
+frequency, so the small hourly and weekly frequencies keep their share in each split. The result
+depends on the version of scikit-learn, so the script ran once. It wrote the 10,000 validation and
+10,000 test series, by M4 id, to `splits.json.xz`. The connector reads that file and puts every
+other series in the train split.
+
+This split is not the split of the OpenTSLM paper. The OpenTSLM loader makes a random split of all
+frequencies together, so its share of the small frequencies drifts. For example, its test split
+holds 6.5% of the hourly series.
 
 The file is JSON compressed with xz, about 19 KB. Python reads it with the `lzma` module of the
 standard library. To read it yourself, run `xz -dc splits.json.xz`. The file also states the SHA-256
