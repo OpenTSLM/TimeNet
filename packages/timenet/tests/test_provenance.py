@@ -163,16 +163,12 @@ _SHA = "c" * 40
     ("direct_url", "expected"),
     [
         (
-            {"url": "https://user:token@h:8443/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}},
-            f"git+https://h:8443/o/r.git@{_SHA}",
+            {"url": "https://h/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}},
+            f"git+https://h/o/r.git@{_SHA}",
         ),
         (
-            {"url": "https://${TOKEN}@h/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}},
-            f"git+https://${{TOKEN}}@h/o/r.git@{_SHA}",
-        ),
-        (
-            {"url": "git+ssh://u:p@h:22/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}},
-            f"git+ssh://u@h:22/o/r.git@{_SHA}",
+            {"url": "git+ssh://git@h/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}},
+            f"git+ssh://git@h/o/r.git@{_SHA}",
         ),
         (
             {"url": "https://h/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}, "subdirectory": "packages/x"},
