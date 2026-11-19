@@ -300,14 +300,6 @@ def test_the_writer_checks_a_label_set_changed_after_it_was_built(tmp_path, fiel
         _write(dataset, tmp_path / "control.duckdb")
 
 
-def test_the_reader_rejects_an_annotation_of_a_missing_label_set(release_copy):
-    with connect_control(release_copy) as connection:
-        connection.execute("UPDATE annotation_occurrences SET object_id = 99 WHERE object_type = 'LabelSet'")
-
-    with pytest.raises(TimeFFormatError, match="refers to missing LabelSet 99"):
-        _read_tasks(release_copy)
-
-
 def test_the_reader_rejects_a_task_that_names_a_missing_label_set(release_copy):
     with connect_control(release_copy) as connection:
         connection.execute("UPDATE tasks SET label_set_id = 99 WHERE task_id = 1")
@@ -372,6 +364,10 @@ def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
         ("UPDATE tasks SET label_set_id = 1 WHERE task_type = 'answer'", "tasks.label_set_id"),
         ("UPDATE tasks SET label_set_id = NULL WHERE task_id = 1", "tasks.label_set_id"),
         ("UPDATE tasks SET label_set_id = 99 WHERE task_id = 1", "label_sets.label_set_id"),
+        (
+            "UPDATE annotation_occurrences SET object_id = 99 WHERE object_type = 'LabelSet'",
+            "refers to missing LabelSet 99",
+        ),
         ("UPDATE task_targets SET text_value = 'BOGUS' WHERE task_id = 1", "task 1 has a label that is not"),
         (
             "INSERT INTO task_targets (task_id, position, target_kind, text_value) VALUES (1, 1, 'text', 'R')",

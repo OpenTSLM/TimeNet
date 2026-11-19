@@ -23,7 +23,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -1853,8 +1853,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             _TaskRow._make,
         )
 
-    def _read_label_sets(self) -> dict[int, LabelSet]:
-        """Read every stored label set with its annotations.
+    def _read_label_sets(self, label_set_ids: Collection[int]) -> dict[int, LabelSet]:
+        """Read the label sets with these ids, with their annotations.
 
         Returns:
             The label sets by id.
@@ -1862,24 +1862,19 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         Raises:
             TimeFFormatError: If a stored label set or one of its annotations is not valid.
         """
-        columns = ", ".join(TABLES["label_sets"].column_names)
-        # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
-        rows = self._query_table(f"SELECT {columns} FROM label_sets").to_pylist()
-        annotations = self._read_annotations({ObjectKind.LABEL_SET: None})
-        stored_ids = {row["label_set_id"] for row in rows}
-        for _, label_set_id in annotations:
-            if label_set_id not in stored_ids:
-                raise TimeFFormatError(
-                    f"annotation occurrence refers to missing {ObjectKind.LABEL_SET} {label_set_id!r}"
-                )
+        rows = self._query(
+            "SELECT label_set_id, labels, multi_label, ordered FROM label_sets "
+            "WHERE label_set_id IN (SELECT unnest(?))",
+            [sorted(label_set_ids)],
+        )
+        annotations = self._read_annotations({ObjectKind.LABEL_SET: label_set_ids})
         label_sets: dict[int, LabelSet] = {}
-        for row in rows:
-            label_set_id = row["label_set_id"]
+        for label_set_id, labels, multi_label, ordered in rows:
             try:
                 label_sets[label_set_id] = LabelSet(
-                    [Label.model_validate(label) for label in row["labels"]],
-                    multi_label=row["multi_label"],
-                    ordered=row["ordered"],
+                    [Label.model_validate(label) for label in labels],
+                    multi_label=multi_label,
+                    ordered=ordered,
                     annotations=annotations.get((ObjectKind.LABEL_SET, label_set_id), ()),
                 )
             except (ValidationError, TimeFValidationError) as exc:
@@ -2301,7 +2296,7 @@ class _TaskBuilder:
         self.dataset_occurrences: list[Annotation] = []
         """The occurrences of the dataset itself that the scope read for its tasks' references."""
         self.retained: _TasksById = {}
-        self._label_sets: dict[int, LabelSet] | None = None
+        self._label_sets: dict[int, LabelSet] = {}
         """The stored label sets by id, which the read builds once and all its tasks share."""
         # The lookups of the caller's objects that a stream's batches share, or None for one pass.
         self._given: _Lookups | None = None
@@ -2454,7 +2449,7 @@ class _TaskBuilder:
     def _label_set(self, task_id: int, label_set_id: int | None) -> LabelSet:
         """Return the stored label set that a classification task names.
 
-        The read builds every label set once. Tasks that use the same set share one object.
+        The read builds each label set once. Tasks that use the same set share one object.
 
         Returns:
             The shared label set.
@@ -2465,8 +2460,6 @@ class _TaskBuilder:
         """
         if label_set_id is None:
             raise TimeFFormatError(f"classification task {task_id!r} has no label set")
-        if self._label_sets is None:
-            self._label_sets = self.reader._read_label_sets()
         label_set = self._label_sets.get(label_set_id)
         if label_set is None:
             raise TimeFFormatError(f"classification task {task_id!r} refers to missing label set {label_set_id!r}")
@@ -2509,6 +2502,10 @@ class _TaskBuilder:
         if task_ids is None:
             reader._check_owners(task_annotations.keys(), {ObjectKind.TASK: {row.task_id for row in task_rows}})
 
+        label_set_ids = {row.label_set_id for row in task_rows if row.label_set_id is not None}
+        label_set_ids -= self._label_sets.keys()
+        if label_set_ids:
+            self._label_sets.update(reader._read_label_sets(label_set_ids))
         self._ensure_records(
             {record_id for refs in record_refs.values() for ids in refs.values() for record_id in ids}
             | {row.record_id for row in target_rows if row.record_id is not None}

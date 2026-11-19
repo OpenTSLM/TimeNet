@@ -236,10 +236,6 @@ If `multi_label=False`, the default, a target must contain exactly one label. If
 a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
 label applies.
 
-By default the order of labels does not matter. Set `ordered=True` when it does. Then the label order is
-part of the identity of the set. Use it for ordinal labels, such as `low`, `medium` and `high`, or for
-answer options whose order matters.
-
 When the dataset adds or streams a task, it makes sure that the target follows the rules of its
 label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
 must contain exactly one label.
@@ -251,9 +247,10 @@ A label set has no name. TimeF stores equal sets once. For this, two sets are eq
 same labels, label descriptions, `multi_label`, and `ordered`. The annotations do not matter. The
 order of labels matters only for an ordered set. `==` follows the same rule.
 
-Use `ordered=True` when the label order has a meaning, for example for ordinal labels or for answer
-options that a model sees in a fixed order. Then each order is its own set, and the stored set keeps
-it. An unordered set keeps the label order of the first equal set that the writer meets.
+By default the order of labels does not matter. Use `ordered=True` when it has a meaning, for example
+for ordinal labels such as `low`, `medium` and `high`, or for answer options that a model sees in a
+fixed order. Then each order is its own set, and the stored set keeps it. An unordered set keeps the
+label order of the first equal set that the writer meets.
 
 The stored set gets one integer id, `label_set_id`. If equal sets carry different annotation
 occurrences, the stored set keeps each distinct occurrence. In one read, the reader gives tasks that
