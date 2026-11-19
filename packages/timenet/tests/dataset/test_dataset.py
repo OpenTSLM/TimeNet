@@ -881,14 +881,17 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     assert ds.tasks == ()  # all-or-nothing: the valid one is not registered either
 
 
-def test_annotation_owners_walks_the_dataset_then_records_then_tasks(make_series):
+def test_walk_annotations_goes_from_the_dataset_to_records_to_tasks(make_series):
     ds = _dataset()
     signal = make_series()
     source = Source(name="Source", signals=(signal,))
     record = ds.add_record(record=Record(sources=(source,)))
     task = ds.add_task(task=_classification_task(record, "a"))
     answer = ds.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
-    assert list(ds.annotation_owners()) == [ds, record, source, signal, task, answer]
+    for owner, key in ((answer, "answer"), (task, "task"), (signal, "signal"), (source, "source"), (record, "record")):
+        owner.annotate(Annotation(key=key, value=key))
+    ds.annotate(Annotation(key="dataset", value="dataset"))
+    assert [a.key for a in ds.walk_annotations()] == ["dataset", "record", "source", "signal", "task", "answer"]
 
 
 def test_annotation_finds_the_first_match_on_every_owner(make_series):
