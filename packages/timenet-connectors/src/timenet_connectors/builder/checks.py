@@ -28,39 +28,6 @@ def connectors(roots: Iterable[Path]) -> list[tuple[str, Path]]:
     return found
 
 
-def overlay(connector: Path, command: list[str]) -> list[str]:
-    """Build the uv command that runs ``command`` in the environment of a connector.
-
-    The overlay adds the requirements of the connector to the current project environment, which
-    supplies ``timenet``, pytest and ``ty``. The overlay is ephemeral, so the requirements never
-    stay in the project environment and never mix with the requirements of another connector.
-
-    Args:
-        connector: The connector directory.
-        command: The command to run in the environment.
-
-    Returns:
-        The full uv argument vector.
-    """
-    uv = ["uv", "run"]
-    requirements = connector / "requirements.txt"
-    if requirements.is_file():
-        uv += ["--with-requirements", str(requirements)]
-    return [*uv, *command]
-
-
-def commands(connector: Path) -> list[list[str]]:
-    """Return the pytest and ``ty`` commands for one connector.
-
-    Args:
-        connector: The connector directory.
-
-    Returns:
-        The commands to run in the overlay, pytest first.
-    """
-    return [["pytest", str(connector / "tests"), "-q"], ["ty", "check", str(connector)]]
-
-
 def run_checks(found: list[tuple[str, Path]], echo: Callable[[str], None]) -> list[str]:
     """Run pytest and ``ty`` for each connector.
 
@@ -76,9 +43,12 @@ def run_checks(found: list[tuple[str, Path]], echo: Callable[[str], None]) -> li
     failures: list[str] = []
     for name, connector in found:
         echo(f"\n=== {name} ===")
-        for command in commands(connector):
+        overlay = ["uv", "run"]
+        if (requirements := connector / "requirements.txt").is_file():
+            overlay += ["--with-requirements", str(requirements)]
+        for command in (["pytest", str(connector / "tests"), "-q"], ["ty", "check", str(connector)]):
             # ruff: ignore[subprocess-without-shell-equals-true]
-            result = subprocess.run(overlay(connector, command), env=env, check=False)
+            result = subprocess.run([*overlay, *command], env=env, check=False)
             if result.returncode != 0:
                 failures.append(f"{name}: {command[0]}")
     return failures
