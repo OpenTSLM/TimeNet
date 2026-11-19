@@ -33,6 +33,7 @@ from timenet.registry import LocalRegistry, WritableRegistry
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
 from timenet.sources import InstalledConnectors
 from timenet.types.references import DatasetRef, is_latest, split_ref
+from timenet_connectors.builder import checks
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.discovery import known_ids
 
@@ -248,6 +249,37 @@ def _plan_lines(plan: Plan) -> list[str]:
         if step.release not in needed:
             draw(step, "", "")
     return lines
+
+
+@app.command()
+def check(
+    roots: list[Path] | None = typer.Argument(
+        None, metavar="[DATASETS_DIR]...", help="A datasets directory (default: every discovered datasets package)."
+    ),
+) -> None:
+    """Run the tests and type-check of each connector in an environment built from its requirements.
+
+    Each connector with a ``tests`` directory gets its own ``uv run --with-requirements`` overlay of
+    its ``requirements.txt`` on the current project environment. Then pytest runs its tests and ``ty``
+    checks its directory. Run the command from the project whose environment has ``timenet``, pytest
+    and ``ty``.
+    \f
+
+    Raises:
+        BadParameter: If no connector with a ``tests`` directory is found.
+        Exit: With code 1 if a check failed.
+    """  # ruff: ignore[escape-sequence-in-docstring] - the form feed ends the help text
+    searched = roots or checks.discovered_roots()
+    found = checks.connectors(searched)
+    if not found:
+        raise typer.BadParameter(f"found no connectors with a tests directory under {', '.join(map(str, searched))}")
+    failures = checks.run_checks(found, typer.echo)
+    if failures:
+        typer.echo("\nconnector checks failed:")
+        for failure in failures:
+            typer.echo(f"  - {failure}")
+        raise typer.Exit(1)
+    typer.echo("\nall connector checks passed")
 
 
 @app.command("build-prepared-release", hidden=True)
