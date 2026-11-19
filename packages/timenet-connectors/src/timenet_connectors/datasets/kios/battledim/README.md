@@ -168,7 +168,6 @@ The release's own partition was 2018 for training and 2019 for evaluation. **Thi
 - **Leaks almost never stop.** At least one leak is active in 97.8 % of 2018 and in 100 % of 2019, with up to 16 at once *(measured)*. There is almost no leak-free baseline.
 - **Incipient onsets are not visible at once.** For incipient leaks, the leak tables show the first non-zero outflow 3 hours to 2.5 days after the configured start, because the early ramp rounds to zero *(measured)*. The localization target is the configured start.
 - **One end time differs.** For p800, the last non-zero outflow is 5 minutes after the configured end *(measured)*. The connector keeps the configured end.
-- **Small signatures.** Our own preliminary check, outside this connector, found that a 30 m³/h leak lowers night pressure by at most about 0.5 m at the nearest sensors. Leaks under about 5 m³/h are hard to see.
 
 ## Limitations and intended use
 
