@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argument vectors, never a shell string
 
+from uv import find_uv_bin
+
 
 def connectors(roots: Iterable[Path]) -> list[tuple[str, Path]]:
     """Find every connector directory that has a ``tests`` directory.
@@ -40,10 +42,11 @@ def run_checks(found: list[tuple[str, Path]], echo: Callable[[str], None]) -> li
     """
     # Drop VIRTUAL_ENV so uv does not warn that it ignores an active environment.
     env = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
+    uv = find_uv_bin()
     failures: list[str] = []
     for name, connector in found:
         echo(f"\n=== {name} ===")
-        overlay = ["uv", "run"]
+        overlay = [uv, "run"]
         if (requirements := connector / "requirements.txt").is_file():
             overlay += ["--with-requirements", str(requirements)]
         for command in (["pytest", str(connector / "tests"), "-q"], ["ty", "check", str(connector)]):

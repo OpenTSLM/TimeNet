@@ -10,6 +10,11 @@ from timenet_connectors.builder.cli import app
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _uv_on_path(monkeypatch):
+    monkeypatch.setattr(checks, "find_uv_bin", lambda: "uv")
+
+
 def _connector(root, org, name, *, requirements=False):
     directory = root / org / name
     (directory / "tests").mkdir(parents=True)
