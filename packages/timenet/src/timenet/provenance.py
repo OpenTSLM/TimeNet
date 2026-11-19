@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from importlib.metadata import Distribution, PackageNotFoundError
 from pathlib import Path
+import re
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the commands are fixed argument vectors
 import sys
@@ -18,6 +19,7 @@ from timenet.manifest import GitSource, GitSourceMap, PackageName
 
 
 _GIT_TIMEOUT_S = 30
+_ENV_VAR_USERINFO = re.compile(r"\$\{[A-Za-z0-9_-]+\}(:\$\{[A-Za-z0-9_-]+\})?")
 
 
 @dataclass(frozen=True)
@@ -315,7 +317,9 @@ class _DirectUrl(BaseModel):
             return None
         parts = urlsplit(self.url.removeprefix("git+"))
         userinfo, _, host = parts.netloc.rpartition("@")
-        if userinfo and parts.scheme not in {"http", "https"}:
+        if _ENV_VAR_USERINFO.fullmatch(userinfo):
+            host = parts.netloc
+        elif userinfo and parts.scheme not in {"http", "https"}:
             host = f"{userinfo.partition(':')[0]}@{host}"
         url = f"git+{urlunsplit((parts.scheme, host, parts.path, '', ''))}@{commit_id}"
         return url if self.subdirectory is None else f"{url}#subdirectory={self.subdirectory}"
