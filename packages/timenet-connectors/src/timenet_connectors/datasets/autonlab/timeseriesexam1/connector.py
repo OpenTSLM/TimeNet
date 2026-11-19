@@ -4,8 +4,8 @@ The source repository is ``AutonLab/TimeSeriesExam1``. The connector pins one co
 test split. A row has a question, its options, the answer, and one series (``ts``) or two (``ts1`` and ``ts2``).
 Each series becomes a Record.
 
-Each row becomes one :class:`~timenet.types.ClassificationTask`. Its labels are the option texts. Its target is the
-published answer text.
+Each row becomes one :class:`~timenet.types.ClassificationTask`. Its labels are the option texts, in an ordered label
+set that keeps the published option order. Its target is the published answer text.
 
 The task metadata holds the other published columns. It is provenance and never model input.
 The prompt is the question alone. The options are the labels of the task, and ``format_hint`` names option
@@ -79,7 +79,7 @@ class _SourceRow(DataRow):
         task = ClassificationTask(
             inputs=tuple(records),
             prompt=self.question,
-            label_set=LabelSet(self.options),
+            label_set=LabelSet(self.options, ordered=True),
             targets=(self.answer,),
             split=Split.TEST,
             metadata=self.model_dump(exclude=_NOT_METADATA),

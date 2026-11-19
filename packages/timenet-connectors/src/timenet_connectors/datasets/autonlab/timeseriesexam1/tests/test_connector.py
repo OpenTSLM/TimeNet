@@ -139,31 +139,28 @@ def test_the_dataset_has_no_annotations(tmp_path):
     assert _convert(tmp_path).annotations == ()
 
 
-def test_reordered_options_have_the_same_label_content(tmp_path):
+def test_reordered_options_are_different_label_sets(tmp_path):
     dataset = _convert(tmp_path)
     yes_no, no_yes = _task_for(dataset, 30), _task_for(dataset, 18)
     assert yes_no.label_set.names == ("Yes", "No")
     assert no_yes.label_set.names == ("No", "Yes")
-    first, reordered = _task_for(dataset, 1), _task_for(dataset, 5)
-    assert set(first.label_set.names) == set(reordered.label_set.names)
-    assert set(first.label_set.names) != set(yes_no.label_set.names)
+    assert yes_no.label_set.ordered
+    assert yes_no.label_set != no_yes.label_set
 
 
-def test_label_sets_are_stored_once_after_a_write(tmp_path):
+def test_each_option_order_is_stored_once_after_a_write(tmp_path):
     dataset = _convert(tmp_path)
     registry = LocalRegistry(tmp_path / "registry")
     registry.put_dataset(dataset)
     with TimeFReader(open_local_version(registry.root / "autonlab/timeseriesexam1/1.0.0")) as reader:
         stored = reader.read()
     tasks = {task.metadata["id"]: task for task in _classification_tasks(stored)}
-    assert tasks[1].label_set is tasks[5].label_set
-    assert tasks[18].label_set is tasks[30].label_set
-    assert len({id(task.label_set) for task in tasks.values()}) == 6
-    assert tasks[1].label_set.names == (
-        "No, they have different underlying distribution",
-        "Yes, they have the same underlying distribution: Gaussian White Noise",
-    )
     rows = {row["id"]: row for row in _source_rows()}
+    assert tasks[1].label_set is not tasks[5].label_set
+    assert tasks[18].label_set is not tasks[30].label_set
+    assert len({id(task.label_set) for task in tasks.values()}) == len({tuple(row["options"]) for row in rows.values()})
+    for row_id, task in tasks.items():
+        assert task.label_set.names == tuple(rows[row_id]["options"])
     for row_id, task in tasks.items():
         answer = rows[row_id]["answer"]
         assert [read_value(target) for target in task.targets or ()] == [answer]
