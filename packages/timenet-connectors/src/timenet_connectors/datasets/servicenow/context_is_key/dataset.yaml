@@ -14,7 +14,9 @@
 # this order, with empty parts left out and a blank line between parts. The task metadata keeps the
 # three parts separately, so a consumer can ablate one kind of context. It also keeps the fields
 # that the benchmark's metric (RCRPS) needs: region_of_interest, metric_scaling, the constraint
-# fields, seasonal_period, and weight.
+# fields, seasonal_period, and weight. The source writes a missing constraint bound as an infinity,
+# which JSON cannot hold, so the dataset stores it as null. A seasonal_period of -1 is kept as the
+# source writes it: the series has no seasonal period.
 #
 # The source stores naive timestamps in three formats: "2024-07-01T00:00:00.000",
 # "2006-10-08 23:50", and "2022-07" for monthly series. The dataset reads them as UTC and reads a

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from fractions import Fraction
 import json
 
@@ -231,16 +231,69 @@ def test_task_metadata_keeps_the_metric_fields(tmp_path):
     assert monthly["constraint_variable_max_values"] == [9.0, 9.5]
 
 
-def test_unknown_timestamp_format_is_rejected(tmp_path):
-    row = _row(past_time=json.dumps({"0": {"01/02/2020": 1.0}}))
-    with pytest.raises(TimeNetConnectorError, match="01/02/2020"):
-        _convert(tmp_path, [row])
+def _source_moment(stamp: str) -> datetime:
+    # Read a source timestamp independently of the connector: a month is its first day, all in UTC.
+    return datetime.fromisoformat(f"{stamp}-01" if len(stamp) == len("2021-07") else stamp).replace(tzinfo=UTC)
 
 
-def test_empty_history_is_rejected(tmp_path):
-    row = _row(past_time=json.dumps({"0": {}}))
-    with pytest.raises(TimeNetConnectorError, match="no history"):
-        _convert(tmp_path, [row])
+def _value_moments(record: Record) -> list[datetime]:
+    # The absolute time of every value of the record's one signal, read back from its axis.
+    (signal,) = record.signals
+    axis = signal.time_axis
+    if isinstance(axis, RegularAxis):
+        offsets = [axis.time_offset_us(index) for index in range(signal.n_values)]
+    else:
+        offsets = signal.time_offsets_us().tolist()
+    assert record.start_time.timestamp is not None
+    origin_us = unix_us(record.start_time.timestamp)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    return [epoch + timedelta(microseconds=origin_us + offset) for offset in offsets]
+
+
+@pytest.mark.parametrize("row", _FIXTURE_ROWS, ids=lambda row: row["name"])
+def test_every_value_sits_at_its_source_timestamp(row, tmp_path):
+    history, future = _records(_task(_convert(tmp_path, [row]), row["name"]))
+    for record, encoded in ((history, row["past_time"]), (future, row["future_time"])):
+        (cells,) = json.loads(encoded).values()
+        assert _value_moments(record) == [_source_moment(stamp) for stamp in cells]
+
+
+def test_monthly_series_with_equal_months_stay_irregular(tmp_path):
+    # July, August and September start 31 days apart, so the steps alone look regular.
+    row = _row(
+        past_time=json.dumps({"value": {"2021-07": 1.0, "2021-08": 2.0, "2021-09": 3.0}}),
+        future_time=json.dumps({"value": {"2021-10": 4.0}}),
+        region_of_interest=[],
+    )
+    history, _ = _records(_task(_convert(tmp_path, [row]), row["name"]))
+    assert isinstance(history.signals[0].time_axis, IrregularAxis)
+    assert history.signals[0].time_offsets_us().tolist() == [0, 31 * _DAY_US, 62 * _DAY_US]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        pytest.param({"past_time": json.dumps({"0": {"01/02/2020": 1.0}})}, "01/02/2020", id="unknown-format"),
+        pytest.param({"past_time": json.dumps({"0": {"2020-13": 1.0}})}, "not a valid date", id="impossible-date"),
+        pytest.param({"past_time": json.dumps({"0": {}})}, "past_time", id="empty-column"),
+        pytest.param({"past_time": json.dumps({})}, "past_time", id="no-columns"),
+        pytest.param({"past_time": json.dumps({"0": {"2020-01-01T00:00:00.000": None}})}, "past_time", id="null-value"),
+        pytest.param(
+            {"future_time": json.dumps({"0": {"2020-01-01T03:00:00.000": float("nan")}})}, "future_time", id="nan-value"
+        ),
+        pytest.param({"past_time": '{"0": {"2020-01-01T00:00:00.000": 1.0'}, "past_time", id="malformed-json"),
+        pytest.param({"context_sources": ["c_unknown"]}, "context_sources", id="unknown-context-source"),
+        pytest.param({"weight": "half"}, "weight", id="weight-not-a-fraction"),
+        pytest.param({"seasonal_period": 0}, "seasonal_period", id="zero-season"),
+        pytest.param({"constraint_min": float("inf")}, "constraint_min", id="lower-bound-plus-infinity"),
+        pytest.param({"constraint_max": float("-inf")}, "constraint_max", id="upper-bound-minus-infinity"),
+        pytest.param({"region_of_interest": [2]}, "past the 2 future values", id="index-past-the-future"),
+        pytest.param({"constraint_variable_max_index": [0]}, "differ in length", id="bound-without-value"),
+    ],
+)
+def test_invalid_rows_are_rejected(overrides, message, tmp_path):
+    with pytest.raises(TimeNetConnectorError, match=message):
+        _convert(tmp_path, [_row(**overrides)])
 
 
 def test_tasks_survive_storage_round_trip(tmp_path):
