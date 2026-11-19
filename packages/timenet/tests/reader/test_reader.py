@@ -437,12 +437,15 @@ def test_loaded_and_lazy_datasets_are_picklable(tmp_path, monkeypatch, backend, 
     restored = pickle.loads(pickle.dumps(dataset))
     signals = [signal for record in restored.records for signal in record.signals]
     actual = [signal.to_arrow() for signal in signals]
-    handles = [signal._values for signal in signals]
     # The restored dataset holds a reader of its own, which nothing else closes.
-    for handle in handles:
+    readers = {}
+    for restored_signal in signals:
+        handle = restored_signal._values
         assert isinstance(handle, StoredArray)
         assert isinstance(handle.reader, TimeFReader)
-        handle.reader.close()
+        readers[id(handle.reader)] = handle.reader
+    for restored_reader in readers.values():
+        restored_reader.close()
     assert len(actual) == len(expected)
     assert all(left.equals(right) for left, right in zip(actual, expected, strict=True))
     assert len(calls) == (0 if eager else 1)
