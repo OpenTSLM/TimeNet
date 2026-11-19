@@ -50,6 +50,9 @@ jobs:
     - name: Unit tests
       id: unit
       continue-on-error: true
+      env:
+        # Lists the slowest tests at the end of the log.
+        PYTEST_ADDOPTS: --durations=25
       run: make test-unit
     # Both steps above run to completion even when one fails, so the report lists every outcome
     # instead of stopping at the first.
@@ -76,6 +79,9 @@ jobs:
     - name: Test with pytest (Python 3.13)
       id: pytest
       continue-on-error: true
+      env:
+        # Lists the slowest tests at the end of the log.
+        PYTEST_ADDOPTS: --durations=25
       run: make test
     - name: Test connectors in per-connector environments
       # Each connector's tests and type-check run in an environment built from its own
@@ -113,6 +119,9 @@ jobs:
     - name: Install dependencies
       run: make sync
     - name: Test with pytest (Python 3.11)
+      env:
+        # Lists the slowest tests at the end of the log.
+        PYTEST_ADDOPTS: --durations=25
       run: make test
 
   # The ruleset on main requires one status check context named exactly `check`, and a check run

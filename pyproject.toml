@@ -151,6 +151,8 @@ markers = [
     "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
     "real_provenance: read the real commit of every install type instead of the stub in packages/conftest.py",
 ]
+# Remove the tmp_path folder of a test that passed when the test ends. A full run writes about 7.5 GB.
+tmp_path_retention_policy = "failed"
 
 [tool.ty.src]
 # Local git worktrees carry their own (possibly unrelated) copies of the code.
