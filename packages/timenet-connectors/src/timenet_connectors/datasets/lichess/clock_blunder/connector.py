@@ -11,7 +11,7 @@ A blunder follows Lichess's own rule: the move drops the mover's winning chances
 winning chances are ``2 / (1 + exp(-0.00368208 * centipawns)) - 1`` and a forced mate counts as +1 or -1.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 import hashlib
 import io
@@ -52,11 +52,11 @@ EVAL_CLIP_PAWNS = 10.0
 """The stored evaluation is clipped here, so one mate does not dwarf the rest of the window."""
 
 BLUNDER = LabelSet(
-    name="blunder_within_three_moves",
-    labels=(
+    [
         Label(name="no", description="None of the player's next three moves is a blunder."),
         Label(name="yes", description="At least one of the player's next three moves is a blunder."),
-    ),
+    ],
+    annotations=[Annotation("name", value="blunder_within_three_moves")],
 )
 CLOCK = TimeSeriesSpec(spec_type="chess_clock", name="Chess clock", unit_value=ureg.second, dtype="float64")
 EVALUATION = TimeSeriesSpec(
@@ -327,32 +327,32 @@ def create_window(game: Game, ply: int) -> tuple[Record, ClassificationTask]:
     """
     white, black, evals = game.series_until(ply)
     record = Record(
-        sources=(
+        sources=[
             Source(
                 name="Clocks",
-                signals=(
+                signals=[
                     Signal.from_values(white, spec=CLOCK, name="white_clock", time_axis=PER_PLY),
                     Signal.from_values(black, spec=CLOCK, name="black_clock", time_axis=PER_PLY),
-                ),
+                ],
             ),
             Source(
                 name="Engine",
-                signals=(Signal.from_values(evals, spec=EVALUATION, name="evaluation_pawns", time_axis=PER_PLY),),
+                signals=[Signal.from_values(evals, spec=EVALUATION, name="evaluation_pawns", time_axis=PER_PLY)],
             ),
-        ),
-        annotations=(
-            Annotation(key="time_control", value=game.time_control),
-            Annotation(key="white_elo", value=game.white_elo),
-            Annotation(key="black_elo", value=game.black_elo),
-            Annotation(key="side_to_move", value="white" if ply % 2 == 0 else "black"),
-            Annotation(key="ply", value=ply),
-        ),
+        ],
+        annotations=[
+            Annotation("time_control", value=game.time_control),
+            Annotation("white_elo", value=game.white_elo),
+            Annotation("black_elo", value=game.black_elo),
+            Annotation("side_to_move", value="white" if ply % 2 == 0 else "black"),
+            Annotation("ply", value=ply),
+        ],
         metadata={"lichess_game_id": game.game_id},
     )
     answer = bool(game.blunders()[ply : ply + 2 * HORIZON_MOVES : 2].any())
     task = ClassificationTask(
-        inputs=(record,),
-        targets=("yes" if answer else "no",),
+        inputs=[record],
+        targets="yes" if answer else "no",
         label_set=BLUNDER,
         prompt=prompt(game, ply),
         rationale=rationale(game, ply, answer),
@@ -361,7 +361,7 @@ def create_window(game: Game, ply: int) -> tuple[Record, ClassificationTask]:
     return record, task
 
 
-class ClockBlunderConnector(BaseConnector[DumpPrefix]):
+class ClockBlunderConnector(BaseConnector[list[DumpPrefix]]):
     """Connector for windows of real Lichess games with clocks and evaluations."""
 
     async def download_async(self, cache_dir: Path) -> list[DumpPrefix]:  # ruff: ignore[no-self-use]
@@ -382,11 +382,11 @@ class ClockBlunderConnector(BaseConnector[DumpPrefix]):
         (path,) = await download_files([artifact])
         return [DumpPrefix(path)]
 
-    def convert(self, raw_refs: Sequence[DumpPrefix]) -> TimeFDataset:
+    def convert(self, prefixes: list[DumpPrefix]) -> TimeFDataset:
         """Create one Record and one ClassificationTask for each window of each kept game.
 
         Args:
-            raw_refs: The byte range from :meth:`download_async`.
+            prefixes: The byte range from :meth:`download_async`.
 
         Returns:
             The populated dataset.
@@ -396,12 +396,12 @@ class ClockBlunderConnector(BaseConnector[DumpPrefix]):
         """
         dataset = TimeFDataset(metadata=self.metadata())
         windows = 0
-        for prefix in raw_refs:
+        for prefix in prefixes:
             for game in prefix.iter_games():
                 for ply in game.decision_plies():
                     record, task = create_window(game, ply)
-                    dataset.add_record(record=record)
-                    dataset.add_task(task=task)
+                    dataset.add_record(record)
+                    dataset.add_task(task)
                     windows += 1
         if windows == 0:
             raise TimeNetConnectorError("the dump prefix held no complete game with clocks and evaluations")
