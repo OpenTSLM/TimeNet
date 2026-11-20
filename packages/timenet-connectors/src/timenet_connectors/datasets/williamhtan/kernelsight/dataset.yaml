@@ -6,24 +6,25 @@ name: KernelSight
 description: >-
   1,444 GPU workload snapshots profiled on one NVIDIA H100 80GB HBM3 (sm_90a). Each snapshot is
   24 hardware-counter channels over 512 equal-width bins that cover the kernel-active window, so
-  the bin width differs per snapshot (about 0.2 ms to 68 ms). The channels form five groups: pipe
+  the bin width differs per snapshot (0.2 ms to 43 ms). The channels form five groups: pipe
   signature, memory access, discriminators, system bandwidth (Nsight Systems) and SASS modality
   (NVBit). The values are kept as released. The authors divided each channel by a fixed
   physical-scale divisor (for example 100 for a percent, 64 for a warp-stall ratio, 8 for
   sectors per warp load), so most values are in [0, 1], but pred_on_per_inst_ratio reaches about
   32. Each labeled segment is a time-interval annotation with its L1 class (12 classes, of which
   `other` never occurs) and its L2 class (73 classes). In the 472 cutlass_ws_overlap snapshots,
-  an overlapping memory_movement interval exists only in the source's multi-hot track; it is
-  added as a workload_l1 annotation with occurrence metadata track=multihot. Each snapshot has
-  one classification task whose target is the authors' dominant_l1 field, which can differ from
-  the L1 class with the most labeled bins (34 snapshots). The released train/val/test split
-  puts dtype and seed variants of one KernelBench problem into different partitions, so this
-  dataset assigns its own split instead. It is grouped by problem (a KernelBench problem keeps
-  all its variants together; any other variant directory is its own group), stratified by
-  dominant_l1, with 3/1/1 folds and seed 42. CUTLASS shape sweeps of one binary can still cross
-  partitions; each record's metadata keeps the authors' split memberships (train, val, test,
-  iid, param_ood, composed, length_ood) so the released benchmark stays reproducible. softmax has only two
-  problems and cannot appear in all three partitions.
+  an overlapping memory_movement (L2 memory_movement_copy) interval exists only in the source's
+  multi-hot track; it is added as a workload_l1 and a workload_l2 annotation with occurrence
+  metadata track=multihot. Each snapshot has one classification task whose target is the
+  authors' dominant_l1 field, which can differ from the L1 class with the most labeled bins (34
+  snapshots). The released train/val/test split puts dtype and seed variants of one KernelBench
+  problem into different partitions, so this dataset assigns its own split instead. It is
+  grouped by problem, which is the variant without its dtype, seed and launch options (the
+  CUTLASS schedule suffix such as _rH_s8_b1, and a microbenchmark's thread-block size such as
+  _T256), so no problem crosses partitions. It is stratified by dominant_l1, with 3/1/1 folds and
+  seed 42. softmax has only two problems and has no validation snapshot. Each record's metadata
+  keeps the authors' split memberships under release_splits (train, val, test, iid, param_ood,
+  composed, length_ood), so the released benchmark stays reproducible.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/williamhtan/kernelsight
 citation: >-

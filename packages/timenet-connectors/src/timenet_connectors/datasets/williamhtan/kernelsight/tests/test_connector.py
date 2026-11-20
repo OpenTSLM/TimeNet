@@ -15,8 +15,11 @@ from timenet.types.text import read_value
 from timenet_connectors.datasets.williamhtan.kernelsight.connector import (
     CHANNEL_GROUPS,
     COUNTER_NAMES,
+    INPUT_SUFFIX,
+    LABELS_SUFFIX,
     MULTIHOT_TRACK,
     N_BINS,
+    RELEASE_SPLITS,
     VOCAB_L1,
     VOCAB_L2,
     WORKLOAD_L1,
@@ -27,14 +30,20 @@ from timenet_connectors.datasets.williamhtan.kernelsight.connector import (
 )
 
 
+FIXTURES = Path(__file__).parent / "fixtures"
+"""One real Snapshot of the pinned release: a warp-specialized GEMM with a multi-hot-only TMA track."""
 _BIN_NS = 1_000_000
 """One millisecond per bin, so bin ``i`` starts at ``i * 1000`` microseconds."""
 _MATMUL, _MEMORY = VOCAB_L1.index("matmul"), VOCAB_L1.index("memory_movement")
-_GEMM = VOCAB_L2.index("matmul_gemm")
+_GEMM, _COPY = VOCAB_L2.index("matmul_gemm"), VOCAB_L2.index("memory_movement_copy")
 
 
 def _trace(path: str, motif: str, dominant: str) -> dict:
     return {"path": path, "motif": motif, "dominant_l1": dominant}
+
+
+def _snapshot(path: str, motif: str, dominant: str = "matmul") -> Snapshot:
+    return Snapshot(path=path, motif=motif, dominant_l1=dominant, official_split="train", release_splits=("train",))
 
 
 def _write_snapshot(
@@ -43,7 +52,7 @@ def _write_snapshot(
     *,
     seed: int,
     segments: list[tuple[int, int, int, int]],
-    multihot: np.ndarray | None = None,
+    overlap: bool = False,
 ) -> np.ndarray:
     # Synthetic files in the shape of the release, including its pickled object arrays, which the
     # connector must never read.
@@ -56,9 +65,14 @@ def _write_snapshot(
         np.array(column, dtype=dtype)
         for column, dtype in zip(zip(*segments, strict=True), (np.int64, np.int64, np.int32, np.int32), strict=True)
     )
-    if multihot is None:
-        multihot = np.zeros((N_BINS, len(VOCAB_L1)), dtype=np.uint8)
-    labels_path = root / path.replace("/input/tensor_input.npz", "/labels/labels.npz")
+    l1_multihot = np.zeros((N_BINS, len(VOCAB_L1)), dtype=np.uint8)
+    l2_multihot = np.zeros((N_BINS, len(VOCAB_L2)), dtype=np.uint8)
+    if overlap:
+        # A GEMM in bins [100, 200) with TMA loads in [120, 130) and [150, 160) that no Segment holds.
+        l1_multihot[100:200, _MATMUL] = l2_multihot[100:200, _GEMM] = 1
+        for start, end in ((120, 130), (150, 160)):
+            l1_multihot[start:end, _MEMORY] = l2_multihot[start:end, _COPY] = 1
+    labels_path = root / (path.removesuffix(INPUT_SUFFIX) + LABELS_SUFFIX)
     labels_path.parent.mkdir(parents=True)
     np.savez(
         labels_path,
@@ -66,7 +80,8 @@ def _write_snapshot(
         segment_ends=ends,
         segment_label_l1=l1,
         segment_label_l2=l2,
-        workload_l1_multihot=multihot,
+        workload_l1_multihot=l1_multihot,
+        workload_l2_multihot=l2_multihot,
         vocab_l1=np.array(VOCAB_L1, dtype=object),
         vocab_l2=np.array(VOCAB_L2, dtype=object),
     )
@@ -76,8 +91,7 @@ def _write_snapshot(
 def _write_splits(root: Path, official: dict[str, list[dict]], extra: dict[str, list[dict]] | None = None) -> None:
     splits = root / "splits"
     splits.mkdir()
-    files = {"train": [], "val": [], "test": [], "iid": [], "param_ood": [], "composed": [], "length_ood": []}
-    files |= official | (extra or {})
+    files = {name: [] for name in RELEASE_SPLITS} | official | (extra or {})
     for name, traces in files.items():
         (splits / f"{name}.json").write_text(json.dumps({"split": name, "n": len(traces), "traces": traces}))
 
@@ -87,29 +101,25 @@ def _files(root: Path) -> dict[str, Path]:
 
 
 def _gemm_path(index: int) -> str:
-    return f"kernels/cutlass_gemm/_out/m{index}/input/tensor_input.npz"
-
-
-def _overlap_multihot() -> np.ndarray:
-    # A GEMM in bins [100, 200) with TMA loads in [120, 130) and [150, 160) that no segment holds.
-    multihot = np.zeros((N_BINS, len(VOCAB_L1)), dtype=np.uint8)
-    multihot[100:200, _MATMUL] = 1
-    multihot[120:130, _MEMORY] = 1
-    multihot[150:160, _MEMORY] = 1
-    return multihot
+    return f"kernels/cutlass_gemm/_out/m{index}{INPUT_SUFFIX}"
 
 
 def _convert(root: Path) -> tuple[TimeFDataset, dict[str, np.ndarray]]:
-    # Five problems, the fewest that the 3/1/1 split accepts.
+    # Five Problems, the fewest that the 3/1/1 split accepts.
     values = {}
     traces = []
     for index in range(5):
         path = _gemm_path(index)
-        multihot = _overlap_multihot() if index == 0 else None
-        values[path] = _write_snapshot(root, path, seed=index, segments=[(100, 200, _MATMUL, _GEMM)], multihot=multihot)
+        values[path] = _write_snapshot(
+            root, path, seed=index, segments=[(100, 200, _MATMUL, _GEMM)], overlap=index == 0
+        )
         traces.append(_trace(path, "cutlass_gemm", "matmul"))
     _write_splits(root, {"train": traces[:3], "val": traces[3:4], "test": traces[4:]}, {"param_ood": traces[:1]})
     return KernelSightConnector().convert(_files(root)), values
+
+
+def _found(annotations) -> set:
+    return {(a.key, read_value(a.value), a.span, a.occurrence_metadata.get("track")) for a in annotations}
 
 
 def test_each_snapshot_becomes_a_record_and_a_classification_task(tmp_path):
@@ -143,34 +153,51 @@ def test_record_metadata_keeps_the_released_split_memberships(tmp_path):
         "problem": "cutlass_gemm/m0",
         "variant": "m0",
         "official_split": "train",
-        "kernelsight_splits": ["train", "param_ood"],
+        "release_splits": ["train", "param_ood"],
     }
 
 
 def test_segments_and_multihot_only_runs_become_interval_annotations(tmp_path):
     dataset, _ = _convert(tmp_path)
     by_path = {task.inputs[0].metadata["path"]: task.inputs[0] for task in dataset.tasks_of(ClassificationTask)}
-    annotations = by_path[_gemm_path(0)].annotations
-    found = {(a.key, read_value(a.value), a.span, a.occurrence_metadata.get("track")) for a in annotations}
     segment = TimeInterval.micros(100_000, 200_000)
-    assert found == {
+    loads = (TimeInterval.micros(120_000, 130_000), TimeInterval.micros(150_000, 160_000))
+    assert _found(by_path[_gemm_path(0)].annotations) == {
         ("workload_l1", "matmul", segment, None),
         ("workload_l2", "matmul_gemm", segment, None),
-        ("workload_l1", "memory_movement", TimeInterval.micros(120_000, 130_000), MULTIHOT_TRACK),
-        ("workload_l1", "memory_movement", TimeInterval.micros(150_000, 160_000), MULTIHOT_TRACK),
+        *(("workload_l1", "memory_movement", span, MULTIHOT_TRACK) for span in loads),
+        *(("workload_l2", "memory_movement_copy", span, MULTIHOT_TRACK) for span in loads),
     }
-    # A snapshot without an overlap track has only its segment.
+    # A Snapshot without an overlap track has only its Segment.
     assert len(by_path[_gemm_path(1)].annotations) == 2
+
+
+def test_a_real_snapshot_of_the_release_becomes_a_record():
+    path = f"kernels/cutlass_ws_overlap/_out/m1024_n1024_k1024_rH_s1_b0{INPUT_SUFFIX}"
+    record = _snapshot(path, "cutlass_ws_overlap").create_record(FIXTURES)
+    signals = [signal for source in record.sources for signal in source.signals]
+    assert len(signals) == len(COUNTER_NAMES)
+    with np.load(FIXTURES / path, allow_pickle=False) as archive:
+        np.testing.assert_array_equal(signals[5].to_numpy(), archive["data"][5])
+    axis = signals[0].time_axis
+    assert isinstance(axis, RegularAxis)
+    assert axis.period_us == pytest.approx(203.73275)
+    segment = TimeInterval.micros(49_914, 54_396)
+    loads = (TimeInterval.micros(49_914, 53_785), TimeInterval.micros(53_989, 54_396))
+    assert _found(record.annotations) == {
+        ("workload_l1", "matmul", segment, None),
+        ("workload_l2", "matmul_gemm", segment, None),
+        *(("workload_l1", "memory_movement", span, MULTIHOT_TRACK) for span in loads),
+        *(("workload_l2", "memory_movement_copy", span, MULTIHOT_TRACK) for span in loads),
+    }
 
 
 def test_variants_of_one_kernelbench_problem_share_a_partition():
     snapshots = [
-        Snapshot(
-            path=f"kernels/kernelbench/_out/L1_P{problem}/dt-{dtype}_s42/input/tensor_input.npz",
-            motif="kernelbench",
-            dominant_l1="conv" if problem % 2 else "matmul",
-            official_split="train",
-            memberships=("train",),
+        _snapshot(
+            f"kernels/kernelbench/_out/L1_P{problem}/dt-{dtype}_s42{INPUT_SUFFIX}",
+            "kernelbench",
+            "conv" if problem % 2 else "matmul",
         )
         for problem in range(20)
         for dtype in ("bf16", "fp16", "fp32")
@@ -181,22 +208,42 @@ def test_variants_of_one_kernelbench_problem_share_a_partition():
         assert len({split for path, split in partition_of.items() if f"/L1_P{problem}/" in path}) == 1
 
 
-def test_a_snapshot_directly_in_the_output_directory_is_the_baseline_variant():
-    snapshot = Snapshot(
-        path="kernels/cutlass_ws_overlap/_out/input/tensor_input.npz",
-        motif="cutlass_ws_overlap",
-        dominant_l1="matmul",
-        official_split="train",
-        memberships=("train",),
-    )
-    assert snapshot.problem == "cutlass_ws_overlap/baseline"
+@pytest.mark.parametrize(
+    ("motif", "variant", "problem"),
+    [
+        ("cutlass_gemm", "m1024_n1024_k8192_rH_s8_b1", "cutlass_gemm/m1024_n1024_k8192"),
+        ("cutlass_ws_overlap", "m512_n512_k8192_rM_s1_b0", "cutlass_ws_overlap/m512_n512_k8192"),
+        ("cutlass_ws_overlap", "m1024_k2048", "cutlass_ws_overlap/m1024_k2048"),
+        ("vector_add", "N16M_T1024", "vector_add/N16M"),
+        ("reduction", "N16M_T256_I4", "reduction/N16M_I4"),
+        ("cutlass_fmha", "b2h16_q1024_d64_causal", "cutlass_fmha/b2h16_q1024_d64_causal"),
+        ("cutlass_ws_overlap", "", "cutlass_ws_overlap/baseline"),
+    ],
+)
+def test_the_problem_of_a_variant_drops_its_launch_options(motif, variant, problem):
+    directory = f"{variant}/" if variant else ""
+    assert _snapshot(f"kernels/{motif}/_out/{directory}{INPUT_SUFFIX.lstrip('/')}", motif).problem == problem
 
 
-def test_a_trace_in_two_official_partitions_raises(tmp_path):
+def test_a_snapshot_in_two_official_partitions_raises(tmp_path):
     trace = _trace(_gemm_path(0), "cutlass_gemm", "matmul")
     _write_splits(tmp_path, {"train": [trace], "test": [trace]})
     with pytest.raises(TimeNetConnectorError, match="more than one official partition"):
         read_snapshots(tmp_path / "splits")
+
+
+def test_a_malformed_split_file_raises(tmp_path):
+    _write_splits(tmp_path, {"train": [{"path": _gemm_path(0)}]})
+    with pytest.raises(TimeNetConnectorError, match=r"train\.json is not a KernelSight split file"):
+        read_snapshots(tmp_path / "splits")
+
+
+def test_a_corrupt_labels_file_raises(tmp_path):
+    _write_snapshot(tmp_path, _gemm_path(0), seed=0, segments=[(0, 10, _MATMUL, _GEMM)])
+    labels = tmp_path / _snapshot(_gemm_path(0), "cutlass_gemm").labels_path
+    labels.write_bytes(b"not a zip archive")
+    with pytest.raises(TimeNetConnectorError, match="cannot read segment_starts"):
+        _snapshot(_gemm_path(0), "cutlass_gemm").create_record(tmp_path)
 
 
 def test_an_l2_class_outside_its_l1_class_raises(tmp_path):
