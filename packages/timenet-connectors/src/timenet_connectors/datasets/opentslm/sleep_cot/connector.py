@@ -6,6 +6,7 @@ ClassificationTask. The target is the sleep stage. The rationale is the GPT-4o t
 the stage.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -13,7 +14,6 @@ import re
 from typing import Self
 
 import numpy as np
-from pydantic import NonNegativeInt
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -22,7 +22,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
-from timenet_connectors.splitting import PrecomputedSplits
+from timenet_connectors.splitting import DatasetSplits, PrecomputedSplitter
 
 
 SLEEP_COT_URL = "https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R/download"
@@ -187,14 +187,14 @@ class SleepCotReader:
                 raise TimeNetConnectorError(f"{self.csv_path.name} data row {number}: {exc}") from exc
         return rows
 
-    def read_splits(self, n_rows: int) -> list[Split]:
-        """Read the split of each row from the splits file.
+    def split_rows(self, rows: Sequence[SleepCotRow]) -> DatasetSplits[SleepCotRow]:
+        """Put each row in the split that the splits file names for its position.
 
         Returns:
-            The split for each of the n_rows rows, in file order.
+            The rows of each split, in file order.
         """
-        splits = PrecomputedSplits[NonNegativeInt].read_from_file(self.splits_path)
-        return splits.assign_splits(range(n_rows), source_sha256=SLEEP_COT_SHA256)
+        splitter = PrecomputedSplitter[SleepCotRow].from_file(self.splits_path, source_sha256=SLEEP_COT_SHA256)
+        return splitter.split(rows)
 
 
 class SleepCotConnector(BaseConnector[SleepCotReader]):
@@ -223,12 +223,11 @@ class SleepCotConnector(BaseConnector[SleepCotReader]):
             The populated dataset.
         """
         (reader,) = raw_refs
-        rows = reader.read_rows()
-        splits = reader.read_splits(len(rows))
         dataset = TimeFDataset(metadata=self.metadata())
-        for row, split in zip(rows, splits, strict=True):
-            record = dataset.add_record(record=row.create_record())
-            dataset.add_task(task=row.create_classification_task(record, split=split))
+        for split, rows in reader.split_rows(reader.read_rows()).items():
+            for row in rows:
+                record = dataset.add_record(record=row.create_record())
+                dataset.add_task(task=row.create_classification_task(record, split=split))
         return dataset
 
 

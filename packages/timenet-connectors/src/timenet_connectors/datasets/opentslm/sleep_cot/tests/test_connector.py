@@ -74,8 +74,10 @@ def _write_release(
 
 def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
     tasks = SleepCotConnector().convert([_write_release(tmp_path)]).tasks_of(ClassificationTask)
-    assert [task.split for task in tasks] == [Split.TRAIN, Split.VALIDATION, Split.TRAIN, Split.TEST]
-    for task, row in zip(tasks, _ROWS, strict=True):
+    # The tasks come split by split, each split in file order.
+    assert [task.split for task in tasks] == [Split.TRAIN, Split.TRAIN, Split.VALIDATION, Split.TEST]
+    rows_in_task_order = [_ROWS[0], _ROWS[2], _ROWS[1], _ROWS[3]]
+    for task, row in zip(tasks, rows_in_task_order, strict=True):
         (record,) = task.inputs
         (signal,) = record.signals
         assert signal.name == "EEG Fpz-Cz"

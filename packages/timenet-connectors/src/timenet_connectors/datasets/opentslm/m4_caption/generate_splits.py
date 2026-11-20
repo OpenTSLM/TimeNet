@@ -30,8 +30,8 @@ from timenet_connectors.datasets.opentslm.m4_caption.connector import (
     M4_CAPTION_SHA256,
     RELEASE_FOLDER,
     SPLITS_PATH,
-    M4CaptionedSeries,
     M4CaptionReader,
+    M4CaptionSeries,
     M4Frequency,
 )
 from timenet_connectors.splitting import StratifiedSplitter
@@ -40,7 +40,7 @@ from timenet_connectors.splitting import StratifiedSplitter
 SEED = 42
 
 
-def frequency(series: M4CaptionedSeries) -> M4Frequency:
+def frequency(series: M4CaptionSeries) -> M4Frequency:
     """Return the frequency of a series, which the split stratifies by.
 
     Returns:
@@ -49,7 +49,7 @@ def frequency(series: M4CaptionedSeries) -> M4Frequency:
     return series.frequency
 
 
-def values_digest(series: M4CaptionedSeries) -> str:
+def values_digest(series: M4CaptionSeries) -> str:
     """Return the SHA-256 digest of the values of a series. Series with the same values form one group.
 
     Returns:
@@ -80,9 +80,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as directory, zipfile.ZipFile(archive_path) as archive:
         archive.extractall(directory)
         reader = M4CaptionReader(directory=Path(directory) / RELEASE_FOLDER, splits_path=SPLITS_PATH)
-        captioned = reader.read_captioned_series()
+        captioned = reader.read_series()
 
-    splitter = StratifiedSplitter[M4CaptionedSeries](
+    splitter = StratifiedSplitter[M4CaptionSeries](
         train_folds=8,
         validation_folds=1,
         test_folds=1,
