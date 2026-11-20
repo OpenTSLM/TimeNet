@@ -8,7 +8,12 @@ from collections.abc import Callable
 from pathlib import Path
 import tempfile
 
-from timenet.errors import TimeFValidationError, TimeNetMissingParentError, TimeNetVersionConflictError
+from timenet.errors import (
+    TimeFValidationError,
+    TimeNetAccessError,
+    TimeNetMissingParentError,
+    TimeNetVersionConflictError,
+)
 from timenet.manifest import Manifest
 from timenet.progress import BytesMoved, ProgressCallback, StepFinished, StepStarted
 from timenet.registry._paths import release_dir
@@ -235,12 +240,16 @@ def _needs_copy(
         dest: The registry to copy to.
 
     Returns:
-        ``True`` if ``dest`` lacks the release or its local copy has a missing or resized file.
+        ``True`` if ``dest`` lacks the release or its local copy has a missing or resized file. Also ``True`` if
+        ``dest`` does not serve the release to this caller. Then the write to ``dest`` gives the answer.
 
     Raises:
         TimeNetVersionConflictError: If ``dest`` holds the same version with other files or another card.
     """
-    held = dest.find_manifest(reference)
+    try:
+        held = dest.find_manifest(reference)
+    except TimeNetAccessError:
+        held = None
     if held is None:
         return True
     difference = held.difference_from(manifest)
