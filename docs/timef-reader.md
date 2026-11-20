@@ -112,8 +112,8 @@ Tasks have four useful read paths:
   The Record, Signal, and Task columns hold the ids that the dataset assigned, for example
   `task_id`, `input_record_ids`, `from_task_ids`, and `span_signal_ids`. `occurrence_id` and
   `content_id` are storage row numbers of this version. The next write numbers them again. In
-  `read_annotation_table()`, `object_id` is a Record, Signal, or Task id, a storage row number for
-  a Source, or `NULL` for the dataset.
+  `read_annotation_table()`, `object_id` is a Record, Signal, or Task id, a label set id, a storage
+  row number for a Source, or `NULL` for the dataset.
 
 One call returns one consistent set of objects. A Record that two tasks use is one object, and the
 Signals on one irregular axis share one handle to its time offsets. `read_tasks(inputs=records)`

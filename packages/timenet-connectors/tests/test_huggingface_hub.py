@@ -4,13 +4,13 @@ import asyncio
 from fnmatch import fnmatchcase
 from pathlib import Path
 import sys
+import types
 from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
 
-from timenet.errors import TimeFValidationError, TimeNetConnectorError, TimeNetDownloadError
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.download.progress import DownloadProgress, progress_sink
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
@@ -18,13 +18,14 @@ from timenet_connectors.sources.huggingface_hub import hub_snapshot
 _SHA = "0" * 40
 
 
-class _Pinned(BaseHuggingFaceConnector):
-    HF_REPO = "org/repo"
-    SOURCE_REVISION = _SHA
-    SOURCE_FILES: ClassVar = {"train": "data/train.jsonl", "test": "data/test.jsonl"}
-
-    def convert(self, raw_refs):
-        return raw_refs
+class _Pinned(
+    BaseHuggingFaceConnector,
+    hf_repo="org/repo",
+    source_revision=_SHA,
+    source_files={"train": "data/train.jsonl", "test": "data/test.jsonl"},
+):
+    def convert(self, files):
+        return files
 
 
 class _HubTqdm:
@@ -73,15 +74,15 @@ def _snapshot_bars(tqdm_class):
     file_bytes.update(6)
 
 
-def test_download_returns_one_ref_per_source_file_in_declared_order(monkeypatch, tmp_path):
+def test_download_returns_the_path_of_each_part_in_declared_order(monkeypatch, tmp_path):
     # No sink is installed, so the progress class must stay silent without one.
     calls = _fake_hub(monkeypatch, tmp_path, bars=_snapshot_bars)
 
-    refs = asyncio.run(_Pinned().download_async(tmp_path / "cache"))
+    files = asyncio.run(_Pinned().download_async(tmp_path / "cache"))
 
-    assert refs == [
-        HubFileRef(tmp_path / "snapshot" / "data/train.jsonl", "train"),
-        HubFileRef(tmp_path / "snapshot" / "data/test.jsonl", "test"),
+    assert list(files.items()) == [
+        ("train", tmp_path / "snapshot" / "data/train.jsonl"),
+        ("test", tmp_path / "snapshot" / "data/test.jsonl"),
     ]
     ((repo, kwargs),) = calls
     assert issubclass(kwargs.pop("tqdm_class"), _HubTqdm)
@@ -126,51 +127,36 @@ def test_missing_hub_library_states_the_fix(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("revision", ["main", "refs/convert/parquet", "A" * 40, "0" * 39])
 def test_subclass_rejects_mutable_or_malformed_revisions(revision):
-    with pytest.raises(TimeFValidationError, match=r"SOURCE_REVISION must be a 40-character commit"):
-        type("_Branch", (_Pinned,), {"SOURCE_REVISION": revision})
+    with pytest.raises(TimeFValidationError, match=r"source_revision must be a 40-character commit"):
+        types.new_class("_Branch", (_Pinned,), {"source_revision": revision})
 
 
 @pytest.mark.parametrize(
-    ("attr", "value"),
-    [("SOURCE_REVISION", None), ("SOURCE_FILES", None), ("SOURCE_FILES", {})],
+    ("keyword", "value"),
+    [("hf_repo", None), ("source_revision", None), ("source_files", None), ("source_files", {})],
 )
-def test_subclass_rejects_a_missing_or_empty_declaration(attr, value):
-    attrs = {"HF_REPO": "org/repo", "SOURCE_REVISION": _SHA, "SOURCE_FILES": {"a": "a.jsonl"}}
+def test_subclass_rejects_a_missing_or_empty_keyword(keyword, value):
+    keywords = {"hf_repo": "org/repo", "source_revision": _SHA, "source_files": {"a": "a.jsonl"}}
     if value is None:
-        del attrs[attr]
+        del keywords[keyword]
     else:
-        attrs[attr] = value
-    with pytest.raises(TimeFValidationError, match=attr):
-        type("_Invalid", (BaseHuggingFaceConnector,), attrs)
+        keywords[keyword] = value
+    with pytest.raises(TimeFValidationError, match=keyword):
+        types.new_class("_Invalid", (BaseHuggingFaceConnector,), keywords)
 
 
-@pytest.mark.parametrize(
-    ("parts", "message"),
-    [
-        ((), r"requires nonempty, distinct part references"),
-        (("train", "train"), r"requires nonempty, distinct part references"),
-        (("train", "valid", "dev"), r"has no source part dev, valid$"),
-    ],
-)
-def test_check_refs_rejects_empty_repeated_or_undeclared_parts(parts, message):
-    refs = [HubFileRef(Path(f"{part}.jsonl"), part) for part in parts]
-    with pytest.raises(TimeFValidationError, match=message):
-        _Pinned().check_refs(refs)
-
-
-def test_convert_checks_refs_before_the_subclass_runs():
-    with pytest.raises(TimeFValidationError, match=r"has no source part dev$"):
-        _Pinned().convert([HubFileRef(Path("dev.jsonl"), "dev")])
-    refs = [HubFileRef(Path("test.jsonl"), "test")]
-    assert _Pinned().convert(refs) is refs
-    assert _Pinned.convert.__name__ == "convert"
-
-
-def test_ref_paths_maps_parts_and_names_the_repo_when_one_is_missing():
-    refs = [HubFileRef(Path("train.jsonl"), "train")]
-    assert _Pinned().ref_paths(refs, "train") == {"train": Path("train.jsonl")}
-    with pytest.raises(TimeNetConnectorError, match=r"^org/repo refs lack test$"):
-        _Pinned().ref_paths(refs, "train", "test")
+def test_subclass_stores_the_keywords_and_inherits_them():
+    assert _Pinned.HF_REPO == "org/repo"
+    assert _Pinned.SOURCE_REVISION == _SHA
+    assert dict(_Pinned.SOURCE_FILES) == {"train": "data/train.jsonl", "test": "data/test.jsonl"}
+    with pytest.raises(TypeError):
+        _Pinned.SOURCE_FILES["dev"] = "data/dev.jsonl"  # ty: ignore[invalid-assignment]
+    child = type("_Child", (_Pinned,), {})
+    assert (child.HF_REPO, child.SOURCE_REVISION, child.SOURCE_FILES) == (
+        _Pinned.HF_REPO,
+        _Pinned.SOURCE_REVISION,
+        _Pinned.SOURCE_FILES,
+    )
 
 
 def test_snapshot_downloads_the_matching_files_and_returns_the_snapshot_root(monkeypatch, tmp_path):
@@ -185,24 +171,22 @@ def test_snapshot_downloads_the_matching_files_and_returns_the_snapshot_root(mon
     assert calls[0][1]["allow_patterns"] == ["data/*.parquet"]
 
 
-class _Patterned(BaseHuggingFaceConnector):
-    HF_REPO = "org/repo"
-    SOURCE_REVISION = _SHA
-    SOURCE_FILES: ClassVar = {"questions": "qa.csv", "series": "data/*.parquet"}
-
-    def convert(self, raw_refs):
-        return raw_refs
+class _Patterned(
+    BaseHuggingFaceConnector,
+    hf_repo="org/repo",
+    source_revision=_SHA,
+    source_files={"questions": "qa.csv", "series": "data/*.parquet"},
+):
+    def convert(self, files):
+        return files
 
 
 def test_a_pattern_part_resolves_to_the_directory_of_its_files(monkeypatch, tmp_path):
     calls = _fake_hub(monkeypatch, tmp_path, files=("qa.csv", "data/a.parquet", "data/b.parquet", "README.md"))
 
-    refs = asyncio.run(_Patterned().download_async(tmp_path / "cache"))
+    files = asyncio.run(_Patterned().download_async(tmp_path / "cache"))
 
-    assert refs == [
-        HubFileRef(tmp_path / "snapshot" / "qa.csv", "questions"),
-        HubFileRef(tmp_path / "snapshot" / "data", "series"),
-    ]
+    assert files == {"questions": tmp_path / "snapshot" / "qa.csv", "series": tmp_path / "snapshot" / "data"}
     assert calls[0][1]["allow_patterns"] == ["qa.csv", "data/*.parquet"]
 
 
@@ -210,3 +194,35 @@ def test_a_declared_file_or_pattern_without_a_match_fails(monkeypatch, tmp_path)
     _fake_hub(monkeypatch, tmp_path, files=("qa.csv", "README.md"))
     with pytest.raises(TimeNetDownloadError, match=rf"org/repo@{_SHA} has no data/\*\.parquet$"):
         asyncio.run(_Patterned().download_async(tmp_path / "cache"))
+
+
+_TSQA_CARD = Path(__file__).parents[1] / "src/timenet_connectors/datasets/chengsenwang/tsqa/dataset.yaml"
+
+
+def _card(tmp_path: Path, **fields: str) -> Path:
+    lines = [line for line in _TSQA_CARD.read_text().splitlines() if not line.startswith("source_")]
+    path = tmp_path / "dataset.yaml"
+    path.write_text("\n".join([*lines, *(f'{key}: "{value}"' for key, value in fields.items())]) + "\n")
+    return path
+
+
+def test_metadata_takes_the_source_from_the_connector(tmp_path):
+    connector = type("_Carded", (_Pinned,), {"CARD": _card(tmp_path)})()
+    metadata = connector.metadata()
+    assert metadata.source_url == "https://huggingface.co/datasets/org/repo"
+    assert metadata.source_revision == _SHA
+
+
+def test_metadata_accepts_a_card_that_repeats_the_source(tmp_path):
+    card = _card(tmp_path, source_url="https://huggingface.co/datasets/org/repo", source_revision=_SHA)
+    assert type("_Carded", (_Pinned,), {"CARD": card})().metadata().source_revision == _SHA
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("source_url", "https://huggingface.co/datasets/org/other"), ("source_revision", "1" * 40)],
+)
+def test_metadata_rejects_a_card_source_that_differs(tmp_path, field, value):
+    connector = type("_Carded", (_Pinned,), {"CARD": _card(tmp_path, **{field: value})})()
+    with pytest.raises(TimeFValidationError, match=f"card sets {field}"):
+        connector.metadata()

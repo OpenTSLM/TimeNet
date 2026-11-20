@@ -178,8 +178,7 @@ Signals. The reader replaces these IDs with the Signals that it reads back.
 ```python
 import numpy as np
 
-from timenet.dataset import Signal
-from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.dataset import OrdinalAxis, RegularAxis, Signal
 from timenet.types import StepInterval, TimeInterval, TimePoint
 
 accelerometer = Signal(

@@ -31,7 +31,7 @@ database, and Parquet or Zarr Signal values. Reading it never runs connector cod
 
 ```mermaid
 flowchart LR
-    D["download()<br/><i>I/O · fetch raw refs</i>"]
+    D["download()<br/><i>I/O · fetch raw files</i>"]
     C["convert()<br/><i>CPU only</i>"]
     S["derive_schema()<br/><i>types from data</i>"]
     W["store_dataset()<br/><i>TimeFWriter</i>"]

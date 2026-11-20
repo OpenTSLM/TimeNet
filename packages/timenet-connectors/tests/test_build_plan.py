@@ -270,7 +270,7 @@ def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_p
         _parent_steps(CHILD.dataset_id, LocalRegistry(tmp_path), parents_from=[InstalledConnectors()])
 
 
-class _Grand(BaseConnector[str]):
+class _Grand(BaseConnector[list[str]]):
     """Rebuilds GRAND, the demo dataset."""
 
     def metadata(self):

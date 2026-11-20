@@ -1,17 +1,15 @@
 from collections import Counter
-from pathlib import Path
 from typing import cast
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.testing import assert_datasets_equal
-from timenet.types import ClassificationTask
-from timenet.types.text import read_value
+from timenet.types import ClassificationTask, read_value
 from timenet_connectors.datasets.timenet.test_mean import TestMeanConnector
 
 
 def _convert() -> TimeFDataset:
-    return TestMeanConnector().convert([])
+    return TestMeanConnector().convert(None)
 
 
 def _labels_by_record(dataset: TimeFDataset) -> dict[int | None, str | None]:
@@ -31,11 +29,6 @@ def test_metadata():
     assert TestMeanConnector().metadata().dataset_id == "timenet/test-mean"
 
 
-def test_download_defaults_to_no_op():
-    # Synthetic connector: it generates everything in convert and inherits the no-op download.
-    assert TestMeanConnector().download(Path("cache")) == []
-
-
 def test_convert_is_deterministic():
     assert_datasets_equal(_convert(), _convert())
 
@@ -47,7 +40,8 @@ def test_has_balanced_binary_labels():
 
 def test_every_task_shares_the_mean_sign_label_set():
     label_sets = [task.label_set for task in _convert().tasks_of(ClassificationTask)]
-    assert {label_set.name for label_set in label_sets} == {"mean_sign"}
+    names = {read_value(a.value) for label_set in label_sets for a in label_set.annotations if a.key == "name"}
+    assert names == {"mean_sign"}
     assert len({id(label_set) for label_set in label_sets}) == 1
 
 

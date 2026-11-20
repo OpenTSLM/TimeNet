@@ -9,10 +9,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.types import AnswerTask
-from timenet.types.splits import Split
-from timenet.types.text import read_value
-from timenet_connectors.bases.huggingface import HubFileRef
+from timenet.types import AnswerTask, Split, read_value
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 
 
@@ -66,7 +63,7 @@ def _refs(tmp_path, rows):
     # Write the rows to a parquet file shaped like the Hub's converted copy; convert() reads it back.
     path = tmp_path / f"rows-{len(list(tmp_path.iterdir()))}.parquet"
     pq.write_table(pa.Table.from_pylist(rows), path)
-    return [HubFileRef(path, "train")]
+    return {"train": path}
 
 
 def _convert(tmp_path) -> TimeFDataset:

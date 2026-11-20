@@ -222,7 +222,7 @@ def _demo_card(dataset_id: str, **update) -> DatasetMetadata:
     )
 
 
-class _Parent(BaseConnector[str]):
+class _Parent(BaseConnector[list[str]]):
     """Builds the demo dataset as test/parent."""
 
     def metadata(self):

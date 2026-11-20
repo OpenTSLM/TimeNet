@@ -19,7 +19,6 @@ from timenet.types import (
     Annotation,
     ClassificationTask,
     DatasetMetadata,
-    Label,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -31,7 +30,7 @@ from timenet.writer.encodings import applied_matches, values_encoding_of
 from timenet.writer.value_encoding import ValueEncoding
 
 
-LABELS = LabelSet(name="labels", labels=(Label(name="x"),))
+LABELS = LabelSet(["x"])
 
 
 def _written(tmp_path, dataset=None, **kwargs):
@@ -106,6 +105,26 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
     # files listed in the manifest all exist
     for rel in manifest.files.all_parts():
         assert (version_dir / rel).exists()
+
+
+def test_the_manifest_schema_lists_the_annotation_keys_of_streamed_label_sets(tmp_path):
+    dataset = make_dataset()
+    record = dataset.records[0]
+    streamed = TimeFDataset.from_parts(
+        metadata=dataset.metadata,
+        records=dataset.records,
+        tasks=(),
+        schema=dataset.derive_schema(),
+        last_ids=dataset.last_ids,
+    )
+    label_set = LabelSet(["x"], annotations=(Annotation(key="label_set_note", value="letters"),))
+    task = ClassificationTask(inputs=(record,), targets=("x",), label_set=label_set)
+    streamed.set_task_stream([ClassificationTask], lambda: iter((task,)))
+
+    version_dir = _written(tmp_path, streamed)
+
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    assert "label_set_note" in [descriptor.key for descriptor in manifest.dataset_schema.annotations]
 
 
 def test_manifest_counts_match_the_control_database(tmp_path):
