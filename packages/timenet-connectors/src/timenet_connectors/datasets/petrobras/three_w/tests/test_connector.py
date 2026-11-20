@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.types import US_PER_S, ClassificationTask, Split, TemporalLocalizationTask, TimeInterval
@@ -84,6 +84,12 @@ def test_one_record_per_instance_with_only_recorded_variables(tmp_path):
         "event_code": 2,
     }
     assert record.start_time.timestamp == int(_START.timestamp()) * US_PER_S
+    signals = {signal.name: signal for source in record.sources for signal in source.signals}
+    assert signals["P-TPT"].spec.spec_type == "pressure"
+    assert signals["T-TPT"].spec.spec_type == "temperature"
+    assert signals["P-TPT"].metadata == {
+        "description": "Subsea Xmas-tree pressure at the TPT (temperature and pressure transducer)"
+    }
 
 
 def test_constant_variable_is_kept_and_flagged(tmp_path):
@@ -162,13 +168,13 @@ def test_real_instances_split_by_well_and_others_train(tmp_path):
 
 def test_label_outside_the_event_is_rejected(tmp_path):
     refs = [*_five_wells(tmp_path), _write_instance(tmp_path, 2, "WELL-00006_20131104004101", [0, 105])]
-    with pytest.raises(TimeFFormatError, match="label 105"):
+    with pytest.raises(TimeNetConnectorError, match="label 105"):
         ThreeWConnector().convert(refs)
 
 
 def test_irregular_timestamps_are_rejected(tmp_path):
     refs = [*_five_wells(tmp_path), _write_instance(tmp_path, 0, "WELL-00006_20170201010207", [0] * 3, step_s=2)]
-    with pytest.raises(TimeFFormatError, match="one second apart"):
+    with pytest.raises(TimeNetConnectorError, match="one second apart"):
         ThreeWConnector().convert(refs)
 
 

@@ -1,20 +1,41 @@
 """The 3W process variables, grouped by where they are measured on the well.
 
 Names, descriptions and units come from ``[PARQUET_FILE_PROPERTIES]`` in ``dataset/dataset.ini``.
-Every variable can have gaps in a real well, so every spec declares missing values. The source
-leaves a gap empty and the connector keeps it empty.
 """
 
 from dataclasses import dataclass
 
-from pint import Unit
-
 from timenet.types import MissingReason, MissingValues, TimeSeriesSpec, ureg
 
 
+# A real well rarely has every sensor, and a sensor can stop reporting for a while. The release
+# leaves such a timestep empty. In v2.0.0, a real instance records a median of 11 of the 27
+# variables, and four variables (PT-P, P-JUS-BS, QBS and P-MON-SDV-P) are empty in every instance.
 _MISSING = MissingValues(
     reason=MissingReason.NOT_RECORDED,
-    description="3W leaves a timestep empty when the well's system recorded no value for it.",
+    description="The well's system recorded no value for this timestep.",
+)
+
+PRESSURE = TimeSeriesSpec(
+    spec_type="pressure", name="Pressure", unit_value=ureg.pascal, dtype="float64", missing=_MISSING
+)
+TEMPERATURE = TimeSeriesSpec(
+    spec_type="temperature", name="Temperature", unit_value=ureg.degC, dtype="float64", missing=_MISSING
+)
+FLOW_RATE = TimeSeriesSpec(
+    spec_type="flow_rate", name="Flow rate", unit_value=ureg.meter**3 / ureg.second, dtype="float64", missing=_MISSING
+)
+OPENING = TimeSeriesSpec(
+    spec_type="valve_opening", name="Choke opening", unit_value=ureg.percent, dtype="float64", missing=_MISSING
+)
+# The release states a valve as 0 (closed), 0.5 (in transition) or 1 (open).
+VALVE_STATE = TimeSeriesSpec(
+    spec_type="valve_state", name="Valve state", unit_value=ureg.dimensionless, dtype="float64", missing=_MISSING
+)
+# The release keeps the well's operational status as integer codes 0-8 and does not state their
+# meaning in the dataset files, so the codes are kept as they are.
+WELL_STATUS = TimeSeriesSpec(
+    spec_type="well_status", name="Well status code", unit_value=ureg.dimensionless, dtype="float64", missing=_MISSING
 )
 
 
@@ -23,33 +44,13 @@ class Variable:
     """One process variable of 3W."""
 
     column: str
-    """The column name in the 3W Parquet files."""
+    """The column name in the 3W Parquet files, which is also the signal name."""
     source: str
-    """The measuring point the variable belongs to, used as the TimeNet source name."""
+    """The measuring point, used as the TimeNet source name."""
     spec: TimeSeriesSpec
-    """The spec of the signal built from the column."""
-
-
-def _variable(column: str, source: str, description: str, unit: Unit) -> Variable:
-    """Build one variable with a float64 spec that allows missing values.
-
-    Args:
-        column: The 3W column name.
-        source: The measuring point.
-        description: The description from ``dataset.ini``.
-        unit: The physical unit.
-
-    Returns:
-        The variable.
-    """
-    spec = TimeSeriesSpec(
-        spec_type=f"3w_{column.lower().replace('-', '_')}",
-        name=description,
-        unit_value=unit,
-        dtype="float64",
-        missing=_MISSING,
-    )
-    return Variable(column=column, source=source, spec=spec)
+    """The kind of quantity the variable measures."""
+    description: str
+    """The variable's description in ``dataset.ini``, kept in the signal's metadata."""
 
 
 DOWNHOLE = "Downhole gauge (PDG)"
@@ -60,44 +61,40 @@ SERVICE_LINE = "Service line"
 VALVES = "Valve states"
 WELL = "Well status"
 
-_PA = ureg.pascal
-_DEG_C = ureg.degC
-_PERCENT = ureg.percent
-_FLOW = ureg.meter**3 / ureg.second
-_STATE = ureg.dimensionless
-
 VARIABLES: tuple[Variable, ...] = (
-    _variable("P-PDG", DOWNHOLE, "Downhole pressure at the PDG (permanent downhole gauge)", _PA),
-    _variable("T-PDG", DOWNHOLE, "Downhole temperature at the PDG (permanent downhole gauge)", _DEG_C),
-    _variable("P-TPT", XMAS_TREE, "Subsea Xmas-tree pressure at the TPT (temperature and pressure transducer)", _PA),
-    _variable(
-        "T-TPT", XMAS_TREE, "Subsea Xmas-tree temperature at the TPT (temperature and pressure transducer)", _DEG_C
+    Variable("P-PDG", DOWNHOLE, PRESSURE, "Downhole pressure at the PDG (permanent downhole gauge)"),
+    Variable("T-PDG", DOWNHOLE, TEMPERATURE, "Downhole temperature at the PDG (permanent downhole gauge)"),
+    Variable(
+        "P-TPT", XMAS_TREE, PRESSURE, "Subsea Xmas-tree pressure at the TPT (temperature and pressure transducer)"
     ),
-    _variable("PT-P", XMAS_TREE, "Subsea Xmas-tree pressure downstream of the PWV in the production line", _PA),
-    _variable("P-ANULAR", XMAS_TREE, "Pressure in the well annulus", _PA),
-    _variable("P-MON-CKP", PRODUCTION_CHOKE, "Upstream pressure of the PCK (production choke)", _PA),
-    _variable("P-JUS-CKP", PRODUCTION_CHOKE, "Downstream pressure of the PCK (production choke)", _PA),
-    _variable("T-MON-CKP", PRODUCTION_CHOKE, "Upstream temperature of the PCK (production choke)", _DEG_C),
-    _variable("T-JUS-CKP", PRODUCTION_CHOKE, "Downstream temperature of the PCK (production choke)", _DEG_C),
-    _variable("ABER-CKP", PRODUCTION_CHOKE, "Opening of the PCK (production choke)", _PERCENT),
-    _variable("P-MON-SDV-P", PRODUCTION_CHOKE, "Upstream pressure of the production SDV (shutdown valve)", _PA),
-    _variable("P-MON-CKGL", GAS_LIFT, "Upstream pressure of the GLCK (gas lift choke)", _PA),
-    _variable("P-JUS-CKGL", GAS_LIFT, "Downstream pressure of the GLCK (gas lift choke)", _PA),
-    _variable("ABER-CKGL", GAS_LIFT, "Opening of the GLCK (gas lift choke)", _PERCENT),
-    _variable("QGL", GAS_LIFT, "Gas lift flow rate", _FLOW),
-    _variable("P-JUS-BS", SERVICE_LINE, "Downstream pressure of the SP (service pump)", _PA),
-    _variable("QBS", SERVICE_LINE, "Flow rate at the SP (service pump)", _FLOW),
-    _variable("ESTADO-DHSV", VALVES, "State of the DHSV (downhole safety valve)", _STATE),
-    _variable("ESTADO-M1", VALVES, "State of the PMV (production master valve)", _STATE),
-    _variable("ESTADO-M2", VALVES, "State of the AMV (annulus master valve)", _STATE),
-    _variable("ESTADO-PXO", VALVES, "State of the PXO (pig-crossover) valve", _STATE),
-    _variable("ESTADO-SDV-GL", VALVES, "State of the gas lift SDV (shutdown valve)", _STATE),
-    _variable("ESTADO-SDV-P", VALVES, "State of the production SDV (shutdown valve)", _STATE),
-    _variable("ESTADO-W1", VALVES, "State of the PWV (production wing valve)", _STATE),
-    _variable("ESTADO-W2", VALVES, "State of the AWV (annulus wing valve)", _STATE),
-    _variable("ESTADO-XO", VALVES, "State of the XO (crossover) valve", _STATE),
-    _variable("state", WELL, "Well operational status code", _STATE),
+    Variable(
+        "T-TPT", XMAS_TREE, TEMPERATURE, "Subsea Xmas-tree temperature at the TPT (temperature and pressure transducer)"
+    ),
+    Variable("PT-P", XMAS_TREE, PRESSURE, "Subsea Xmas-tree pressure downstream of the PWV in the production line"),
+    Variable("P-ANULAR", XMAS_TREE, PRESSURE, "Pressure in the well annulus"),
+    Variable("P-MON-CKP", PRODUCTION_CHOKE, PRESSURE, "Upstream pressure of the PCK (production choke)"),
+    Variable("P-JUS-CKP", PRODUCTION_CHOKE, PRESSURE, "Downstream pressure of the PCK (production choke)"),
+    Variable("T-MON-CKP", PRODUCTION_CHOKE, TEMPERATURE, "Upstream temperature of the PCK (production choke)"),
+    Variable("T-JUS-CKP", PRODUCTION_CHOKE, TEMPERATURE, "Downstream temperature of the PCK (production choke)"),
+    Variable("ABER-CKP", PRODUCTION_CHOKE, OPENING, "Opening of the PCK (production choke)"),
+    Variable("P-MON-SDV-P", PRODUCTION_CHOKE, PRESSURE, "Upstream pressure of the production SDV (shutdown valve)"),
+    Variable("P-MON-CKGL", GAS_LIFT, PRESSURE, "Upstream pressure of the GLCK (gas lift choke)"),
+    Variable("P-JUS-CKGL", GAS_LIFT, PRESSURE, "Downstream pressure of the GLCK (gas lift choke)"),
+    Variable("ABER-CKGL", GAS_LIFT, OPENING, "Opening of the GLCK (gas lift choke)"),
+    Variable("QGL", GAS_LIFT, FLOW_RATE, "Gas lift flow rate"),
+    Variable("P-JUS-BS", SERVICE_LINE, PRESSURE, "Downstream pressure of the SP (service pump)"),
+    Variable("QBS", SERVICE_LINE, FLOW_RATE, "Flow rate at the SP (service pump)"),
+    Variable("ESTADO-DHSV", VALVES, VALVE_STATE, "State of the DHSV (downhole safety valve)"),
+    Variable("ESTADO-M1", VALVES, VALVE_STATE, "State of the PMV (production master valve)"),
+    Variable("ESTADO-M2", VALVES, VALVE_STATE, "State of the AMV (annulus master valve)"),
+    Variable("ESTADO-PXO", VALVES, VALVE_STATE, "State of the PXO (pig-crossover) valve"),
+    Variable("ESTADO-SDV-GL", VALVES, VALVE_STATE, "State of the gas lift SDV (shutdown valve)"),
+    Variable("ESTADO-SDV-P", VALVES, VALVE_STATE, "State of the production SDV (shutdown valve)"),
+    Variable("ESTADO-W1", VALVES, VALVE_STATE, "State of the PWV (production wing valve)"),
+    Variable("ESTADO-W2", VALVES, VALVE_STATE, "State of the AWV (annulus wing valve)"),
+    Variable("ESTADO-XO", VALVES, VALVE_STATE, "State of the XO (crossover) valve"),
+    Variable("state", WELL, WELL_STATUS, "Well operational status"),
 )
-"""Every variable, in measuring-point order. ``state`` keeps the integer codes of the release."""
+"""Every variable, in measuring-point order."""
 
 SOURCE_ORDER: tuple[str, ...] = (DOWNHOLE, XMAS_TREE, PRODUCTION_CHOKE, GAS_LIFT, SERVICE_LINE, VALVES, WELL)

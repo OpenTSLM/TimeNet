@@ -25,9 +25,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.errors import TimeNetConnectorError
 from timenet.types import (
     US_PER_S,
     Annotation,
@@ -81,11 +80,11 @@ class InstanceFile:
         """The provenance, ``real``, ``simulated`` or ``drawn``, from the file name prefix.
 
         Raises:
-            TimeFFormatError: If the prefix is not one 3W uses.
+            TimeNetConnectorError: If the prefix is not one 3W uses.
         """
         prefix = self.instance.split("_", 1)[0].split("-", 1)[0]
         if prefix not in _PROVENANCES:
-            raise TimeFFormatError(f"{self.instance}: unknown instance prefix {prefix!r}")
+            raise TimeNetConnectorError(f"{self.instance}: unknown instance prefix {prefix!r}")
         return _PROVENANCES[prefix]
 
     @property
@@ -154,19 +153,19 @@ def _signals(file: InstanceFile, metadata: pq.FileMetaData) -> list[tuple[Variab
         variable order.
 
     Raises:
-        TimeFFormatError: If a column is missing or has no statistics.
+        TimeNetConnectorError: If a column is missing or has no statistics.
     """
     n_rows = metadata.num_rows
     columns = {metadata.schema.column(j).name: j for j in range(metadata.num_columns)}
     built: list[tuple[Variable, Signal, bool]] = []
     for variable in VARIABLES:
         if variable.column not in columns:
-            raise TimeFFormatError(f"{file.instance}: has no column {variable.column!r}")
+            raise TimeNetConnectorError(f"{file.instance}: has no column {variable.column!r}")
         nulls, lowest, highest = 0, None, None
         for group in range(metadata.num_row_groups):
             stats = metadata.row_group(group).column(columns[variable.column]).statistics
             if stats is None or not stats.has_null_count:
-                raise TimeFFormatError(f"{file.instance}: column {variable.column!r} has no statistics")
+                raise TimeNetConnectorError(f"{file.instance}: column {variable.column!r} has no statistics")
             nulls += stats.null_count
             if stats.has_min_max:
                 lowest = stats.min if lowest is None else min(lowest, stats.min)
@@ -180,6 +179,7 @@ def _signals(file: InstanceFile, metadata: pq.FileMetaData) -> list[tuple[Variab
             loader=_column_loader(file.path, variable.column),
             n_values=n_rows,
             null_count=nulls,
+            metadata={"description": variable.description},
         )
         built.append((variable, signal, lowest == highest))
     return built
@@ -196,11 +196,11 @@ def _start_time(table: pa.Table, file: InstanceFile) -> datetime:
         The first timestamp, in UTC.
 
     Raises:
-        TimeFFormatError: If the timestamps are not one second apart.
+        TimeNetConnectorError: If the timestamps are not one second apart.
     """
     seconds = table.column(_TIMESTAMP).cast(pa.timestamp("s")).cast(pa.int64()).to_pylist()
     if any(later - earlier != 1 for earlier, later in pairwise(seconds)):
-        raise TimeFFormatError(f"{file.instance}: timestamps are not one second apart")
+        raise TimeNetConnectorError(f"{file.instance}: timestamps are not one second apart")
     return datetime.fromtimestamp(seconds[0], tz=UTC)
 
 
@@ -225,10 +225,10 @@ def _build_record(dataset: TimeFDataset, file: InstanceFile) -> _Built:
         The record and the facts its tasks need.
 
     Raises:
-        TimeFFormatError: If the folder names no 3W event or a label does not belong to it.
+        TimeNetConnectorError: If the folder names no 3W event or a label does not belong to it.
     """
     if file.event_code not in EVENTS_BY_CODE:
-        raise TimeFFormatError(f"{file.instance}: folder {file.event_code} is not a 3W event")
+        raise TimeNetConnectorError(f"{file.instance}: folder {file.event_code} is not a 3W event")
     event = EVENTS_BY_CODE[file.event_code]
     metadata = pq.read_metadata(file.path)
     signals = _signals(file, metadata)
@@ -267,7 +267,7 @@ def _build_record(dataset: TimeFDataset, file: InstanceFile) -> _Built:
             continue
         phase = phase_of(label, event)
         if phase is None:
-            raise TimeFFormatError(f"{file.instance}: label {label} at {begin} s is not part of {event.name!r}")
+            raise TimeNetConnectorError(f"{file.instance}: label {label} at {begin} s is not part of {event.name!r}")
         span = TimeInterval.micros(begin * US_PER_S, end * US_PER_S)
         record.annotate(Annotation(key="event_phase", value=str(phase), span=span))
         if phase is Phase.TRANSIENT:
