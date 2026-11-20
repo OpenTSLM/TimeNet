@@ -77,7 +77,7 @@ class LabelSet(SupportsAnnotate):
     ordered: bool = False
     """If ``True``, the label order is part of the identity of the set. If ``False``, the order does not matter.
 
-    An ordered set needs labels in a fixed order, so pass a list or a tuple, not a Python set."""
+    Pass the labels as a list or a tuple, not a Python set, so that the stored order is fixed."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations that describe the set, such as ``Annotation(key="name", value="sleep_stage")``.
 
@@ -103,12 +103,12 @@ class LabelSet(SupportsAnnotate):
         Raises:
             TimeFValidationError: If the set is not valid (see :meth:`_validate`).
         """
-        if ordered and isinstance(labels, (set, frozenset)):
-            raise TimeFValidationError("an ordered label set needs labels in a fixed order, got a set")
-        self.labels = tuple(_as_label(label) for label in as_tuple(labels, item_type=Label))  # ty: ignore[invalid-assignment]
+        if isinstance(labels, (set, frozenset)):
+            raise TimeFValidationError("a label set needs labels in a fixed order, got a set")
+        self.labels = tuple(_as_label(label) for label in as_tuple(labels))  # ty: ignore[invalid-assignment]
         self.multi_label = multi_label
         self.ordered = ordered
-        self.annotations = as_tuple(annotations, item_type=Annotation)
+        self.annotations = as_tuple(annotations)
         self._validate()
         self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
 
@@ -186,12 +186,11 @@ class LabelSet(SupportsAnnotate):
         Returns:
             The hashable key.
         """
-        labels = ((label.name, label.description) for label in self.labels)
         annotations = Counter(_occurrence_key(annotation) for annotation in self.annotations)
         return (
             self.multi_label,
             self.ordered,
-            tuple(labels) if self.ordered else frozenset(labels),
+            self.labels if self.ordered else frozenset(self.labels),
             frozenset(annotations.items()),
         )
 

@@ -212,7 +212,7 @@ class _LabelSetRows:
     """The ``label_sets`` rows of one write, one row for each distinct label set.
 
     Equal sets (see :meth:`LabelSet._content_key`) get one id, in the order that tasks first use them.
-    The row keeps the labels and the annotations of the first set.
+    The row keeps the labels and the annotations of the first set. Each set object is checked once per write.
     """
 
     def __init__(self, ids: Iterator[int]) -> None:
@@ -222,7 +222,8 @@ class _LabelSetRows:
             ids: The storage ids for new label sets.
         """
         self._new_ids = ids
-        self._sets: dict[Hashable, tuple[dict[str, object], tuple[Annotation, ...]]] = {}
+        self._sets: dict[Hashable, tuple[int, dict[str, object], tuple[Annotation, ...]]] = {}
+        self._by_object: dict[int, tuple[LabelSet, int]] = {}
 
     def register(self, label_set: LabelSet) -> int:
         """Add a label set.
@@ -233,18 +234,23 @@ class _LabelSetRows:
         Raises:
             TimeFValidationError: If the set is not valid. A set can change after a task gets it.
         """  # ruff: ignore[docstring-extraneous-exception] - _validate raises it
+        known = self._by_object.get(id(label_set))
+        if known is not None:
+            return known[1]
         label_set._validate()
         key = label_set._content_key()
         stored = self._sets.get(key)
         if stored is None:
+            label_set_id = next(self._new_ids)
             row: dict[str, object] = {
-                "label_set_id": next(self._new_ids),
+                "label_set_id": label_set_id,
                 "labels": [label.model_dump() for label in label_set.labels],
                 "multi_label": label_set.multi_label,
                 "ordered": label_set.ordered,
             }
-            stored = self._sets[key] = (row, label_set.annotations)
-        return cast("int", stored[0]["label_set_id"])
+            stored = self._sets[key] = (label_set_id, row, label_set.annotations)
+        self._by_object[id(label_set)] = (label_set, stored[0])
+        return stored[0]
 
     def write(
         self, connection: duckdb.DuckDBPyConnection, annotations: list[tuple[ObjectKind, int | None, Annotation]]
@@ -255,9 +261,8 @@ class _LabelSetRows:
             connection: The open write transaction.
             annotations: The annotation triples that the writer collects. This method adds to them.
         """
-        insert_rows(connection, TABLES["label_sets"], [row for row, _ in self._sets.values()])
-        for row, occurrences in self._sets.values():
-            label_set_id = cast("int", row["label_set_id"])
+        insert_rows(connection, TABLES["label_sets"], [row for _, row, _ in self._sets.values()])
+        for label_set_id, _, occurrences in self._sets.values():
             annotations.extend((ObjectKind.LABEL_SET, label_set_id, annotation) for annotation in occurrences)
 
 

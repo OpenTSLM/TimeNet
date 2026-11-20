@@ -258,7 +258,8 @@ LabelSet(["yes", "no"], annotations=[Annotation("name", value="signal_noisy")])
 By default the order of labels does not matter. Use `ordered=True` when it has a meaning, for example
 for ordinal labels such as `low`, `medium` and `high`, or for answer options that a model sees in a
 fixed order. Then each order is its own set, and the stored set keeps it. An unordered set keeps the
-label order of the first equal set that the writer meets.
+label order of the first equal set that the writer meets. Pass the labels as a list or a tuple. A
+label set rejects a Python set, because its order changes from one run to the next.
 
 The stored set gets one integer id, `label_set_id`. In one read, the reader gives tasks that use the
 same set a shared object.

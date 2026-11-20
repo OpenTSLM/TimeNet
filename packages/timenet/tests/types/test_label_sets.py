@@ -30,7 +30,8 @@ FINDINGS = LabelSet(["AF", "PVC", "LBBB"], multi_label=True)
         ({"labels": (Label(name="W"),), "multi_label": 1}, "multi_label must be a bool, got int"),
         ({"labels": (Label(name="W"),), "ordered": 1}, "ordered must be a bool, got int"),
         ({"labels": (Label(name="W"),), "ordered": None}, "ordered must be a bool, got NoneType"),
-        ({"labels": {"W", "R"}, "ordered": True}, "needs labels in a fixed order, got a set"),
+        ({"labels": {"W", "R"}}, "needs labels in a fixed order, got a set"),
+        ({"labels": frozenset({"W", "R"}), "ordered": True}, "needs labels in a fixed order, got a set"),
         ({"labels": (Label(name="W"),), "annotations": ("name",)}, "takes Annotation objects, got str"),
     ],
 )
@@ -122,7 +123,7 @@ def test_an_ordered_set_uses_its_label_order_for_equality():
     assert low_high != high_low
     assert low_high._content_key() != high_low._content_key()
     assert low_high != LabelSet(["low", "high"])
-    assert LabelSet(["low", "high"]) == LabelSet({"high", "low"})
+    assert LabelSet(["low", "high"]) == LabelSet(["high", "low"])
     assert LabelSet(["low"]).ordered is False
 
 

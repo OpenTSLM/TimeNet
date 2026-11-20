@@ -298,14 +298,14 @@ def test_sets_with_a_nan_confidence_are_stored_once(tmp_path):
     assert first == nan_named()
 
 
-def test_a_set_annotated_after_a_task_uses_it_is_another_set():
+def test_one_write_gives_equal_sets_one_id_and_a_set_with_other_annotations_another():
     label_set = LabelSet(["W"])
     rows = _LabelSetRows(iter((1, 2)))
 
     assert rows.register(label_set) == 1
-    label_set.annotate(Annotation("name", value="stage"))
-    assert rows.register(label_set) == 2
+    assert rows.register(label_set) == 1
     assert rows.register(LabelSet(["W"])) == 1
+    assert rows.register(LabelSet(["W"], annotations=[Annotation("name", value="stage")])) == 2
 
 
 def test_equal_annotations_of_two_sets_share_one_content_row(tmp_path):
