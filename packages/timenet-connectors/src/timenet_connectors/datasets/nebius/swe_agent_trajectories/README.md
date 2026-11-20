@@ -118,7 +118,9 @@ step, on an ordinal axis. The steps have an order but no timestamps: the release
 **`observation_kind` rules.** The first of these that holds wins:
 1. `edit_rejected`: the reply starts with SWE-agent's message for an edit its linter rejected ("Your proposed edit has introduced new syntax error").
 2. `timeout`: it starts with `EXECUTION TIMED OUT`.
-3. `traceback`: it contains `Traceback (most recent call last)`.
+3. `traceback`: it contains `Traceback (most recent call last)`. This includes a file view that
+   merely shows such text, e.g. after `open` or `edit`. In shard 0 that is 69 of 9,375 tracebacks
+   *(measured)*.
 4. `command_error`: its first line starts with `Usage:` or `Error:`, or contains `command not found`, `No such file or directory` or `syntax error near unexpected token`.
 5. `silent_success`: it starts with SWE-agent's message for a command that printed nothing.
 6. `output`: anything else.
@@ -128,15 +130,18 @@ Over the first 30 steps of every run *(measured)*:
 - **Repeats:** 28 % of steps repeat an earlier command. Rerunning a script counts as a repeat.
 
 **Text.** The agent's thoughts for the *k* steps are the record annotation `agent_thoughts`, a list
-of *k* strings in step order. They are text, not a signal, because a text series has no tensor form
-in `TimeFTorchDataset`.
+of *k* strings in step order, kept exactly as written. They are text, not a signal, because a text
+series has no tensor form in `TimeFTorchDataset`.
 
 **Metadata** (provenance, never model input): `run_id` (shard and row), `instance_id`, `repository`,
 `model_name`, `checkpoint_steps`.
 
-**The issue** is a dataset annotation with the key `issue`, stored once per distinct text, because
-each issue has many runs. Its text is the issue message's `ISSUE:` section. 13 issues appear with
-two slightly different texts *(measured)*; each text is its own annotation.
+**The issue** is a dataset annotation with the key `issue`, stored once per instance, because each
+issue has many runs. Its text is the issue message's `ISSUE:` section, and its metadata names the
+`instance_id`. Only instances with a checkpoint get one: 3,599 annotations *(measured)*.
+- 13 instances appear with two slightly different texts *(measured)*; each text is its own annotation.
+- 16 texts are shared by two instances of the same repository, e.g. `iterative__dvc-5335` and
+  `iterative__dvc-5336` *(measured)*; each instance gets its own annotation.
 
 ## Tasks
 
@@ -147,18 +152,19 @@ in `input_annotations`. That makes 577,284 tasks *(measured)*.
 | --- | --- | --- |
 | `ClassificationTask` `run_outcome` | `resolved` or `unresolved` | `target` |
 | `ClassificationTask` `run_ending` | the ending label (table above) | `exit_status` |
-| `AnswerTask` | a status report: the steps so far, then how the run ended | the signals, `target`, `exit_status`, the step count |
+| `AnswerTask` | a status report: the steps so far, then how many more steps the run will take, how it will end and whether it will resolve the issue | the signals, `target`, `exit_status`, the step count |
 
 **How the text is made.** A fixed template fills in the numbers; no model writes it:
 
 > In its first {k} steps the agent edited files {n} times, created {n} files, ran code {n} times,
 > read or searched the repository {n} times and repeated an earlier command {n} times. The linter
 > rejected {n} edits, {n} replies showed a Python traceback, {n} replies a command error and {n}
-> commands timed out. The conversation holds {context} characters. The run went on for {m} more
-> steps, then {ending}, and {resolved | did not resolve} the issue.
+> commands timed out. The conversation holds {context} characters. The run will go on for {m} more
+> steps, then {ending}, and the agent will {resolve | not resolve} the issue.
 
 "Read or searched" adds the `read` and `search` steps. {ending} is one fixed phrase per `exit_status`,
-e.g. "it reached the context limit and SWE-agent submitted its changes".
+e.g. "it will reach the context limit and SWE-agent will submit its changes". The prompt asks for
+the same three things in the same tense.
 
 **Example.** The first checkpoint of the release (run `train-00000-of-00012:0`, issue
 `AnalogJ__lexicon-336`, 5 steps) has the target:
@@ -166,10 +172,10 @@ e.g. "it reached the context limit and SWE-agent submitted its changes".
 > In its first 5 steps the agent edited files 0 times, created 0 files, ran code 0 times, read or
 > searched the repository 4 times and repeated an earlier command 0 times. The linter rejected 0
 > edits, 1 reply showed a Python traceback, 1 reply a command error and 0 commands timed out. The
-> conversation holds 12,857 characters. The run went on for 41 more steps, then it reached the
-> context limit and SWE-agent submitted its changes, and did not resolve the issue.
+> conversation holds 12,857 characters. The run will go on for 41 more steps, then it will reach
+> the context limit and SWE-agent will submit its changes, and the agent will not resolve the issue.
 
-**Task metadata:** the Record's metadata fields.
+**Task metadata:** the Record's metadata.
 
 ## The split
 
