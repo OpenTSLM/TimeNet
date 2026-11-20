@@ -12,7 +12,7 @@ this branch. Anchor files:
 ## The `BaseConnector` contract
 
 `BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is the whole value that `download` hands to
-`convert`: one handle dataclass, a list of file refs (`list[HubFileRef]` for Hub connectors), or `None`.
+`convert`: one handle dataclass, a list of file refs, a part-to-path mapping (Hub connectors), or `None`.
 
 - `download(self, cache_dir: Path) -> TRaw` (abstract): fetch/discover raw source files, return
   a lightweight handle. I/O only, no parsing, idempotent for a given `cache_dir`.
@@ -71,7 +71,7 @@ tags:
 ## Base connectors to reuse
 
 ### `BaseHuggingFaceConnector` (`bases/huggingface.py`)
-`BaseHuggingFaceConnector(BaseConnector[list[HubFileRef]])` downloads files from a Hub dataset at a pinned
+`BaseHuggingFaceConnector(BaseConnector[Mapping[str, Path]])` downloads files from a Hub dataset at a pinned
 commit. Pass these class keywords:
 
 - `hf_repo`: the Hub repo id.
@@ -87,10 +87,10 @@ and `get_card()` for a release that is not built, read the card file without the
 card sets one of the fields to a different value, the build fails. Do not copy `HF_REPO` or
 `SOURCE_REVISION` into dataset annotations.
 
-`download` is inherited and returns one `HubFileRef(path, part)` per file. Declare
+`download` is inherited. It returns the local path of each part, in `SOURCE_FILES` order. Declare
 `huggingface_hub>=1.1` in the connector's `requirements.txt`, and set `HF_TOKEN` for gated or
-private datasets. The base checks the refs before your `convert` runs: they must be nonempty and
-name each declared part at most once. Do not call `check_refs` yourself.
+private datasets. Implement `convert(self, files: Mapping[str, Path])` and read a file as
+`files["train"]`.
 
 To read the Hub's parquet conversion instead of the original files, pin the commit that
 `refs/convert/parquet` points to and read the files with `ParquetDataReader` and a connector-owned
@@ -184,11 +184,13 @@ the bounds of every `Span` the task carries.
 
 ```python
 import json
+from collections.abc import Mapping
+from pathlib import Path
 
 from pydantic import ConfigDict, Field
 from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
 
@@ -217,18 +219,18 @@ class TSQAConnector(
 ):
     """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Build one record per row: the parsed series plus its question-and-answer task.
 
         Args:
-            raw_refs: The parquet files from :meth:`download`.
+            files: The parquet file of each part.
 
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for ref in raw_refs:
-            for row in ParquetDataReader(ref.path, TSQARow).iter_rows():
+        for path in files.values():
+            for row in ParquetDataReader(path, TSQARow).iter_rows():
                 series = json.loads(row.series)
                 signals = series if series and isinstance(series[0], list) else [series]
                 time_series = [

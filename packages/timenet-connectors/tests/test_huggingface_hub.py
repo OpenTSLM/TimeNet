@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from timenet.errors import TimeFValidationError, TimeNetConnectorError, TimeNetDownloadError
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.download.progress import DownloadProgress, progress_sink
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
@@ -24,8 +24,8 @@ class _Pinned(
     source_revision=_SHA,
     source_files={"train": "data/train.jsonl", "test": "data/test.jsonl"},
 ):
-    def convert(self, raw_refs):
-        return raw_refs
+    def convert(self, files):
+        return files
 
 
 class _HubTqdm:
@@ -74,15 +74,15 @@ def _snapshot_bars(tqdm_class):
     file_bytes.update(6)
 
 
-def test_download_returns_one_ref_per_source_file_in_declared_order(monkeypatch, tmp_path):
+def test_download_returns_the_path_of_each_part_in_declared_order(monkeypatch, tmp_path):
     # No sink is installed, so the progress class must stay silent without one.
     calls = _fake_hub(monkeypatch, tmp_path, bars=_snapshot_bars)
 
-    refs = asyncio.run(_Pinned().download_async(tmp_path / "cache"))
+    files = asyncio.run(_Pinned().download_async(tmp_path / "cache"))
 
-    assert refs == [
-        HubFileRef(tmp_path / "snapshot" / "data/train.jsonl", "train"),
-        HubFileRef(tmp_path / "snapshot" / "data/test.jsonl", "test"),
+    assert list(files.items()) == [
+        ("train", tmp_path / "snapshot" / "data/train.jsonl"),
+        ("test", tmp_path / "snapshot" / "data/test.jsonl"),
     ]
     ((repo, kwargs),) = calls
     assert issubclass(kwargs.pop("tqdm_class"), _HubTqdm)
@@ -159,35 +159,6 @@ def test_subclass_stores_the_keywords_and_inherits_them():
     )
 
 
-@pytest.mark.parametrize(
-    ("parts", "message"),
-    [
-        ((), r"requires nonempty, distinct part references"),
-        (("train", "train"), r"requires nonempty, distinct part references"),
-        (("train", "valid", "dev"), r"has no source part dev, valid$"),
-    ],
-)
-def test_check_refs_rejects_empty_repeated_or_undeclared_parts(parts, message):
-    refs = [HubFileRef(Path(f"{part}.jsonl"), part) for part in parts]
-    with pytest.raises(TimeFValidationError, match=message):
-        _Pinned().check_refs(refs)
-
-
-def test_convert_checks_refs_before_the_subclass_runs():
-    with pytest.raises(TimeFValidationError, match=r"has no source part dev$"):
-        _Pinned().convert([HubFileRef(Path("dev.jsonl"), "dev")])
-    refs = [HubFileRef(Path("test.jsonl"), "test")]
-    assert _Pinned().convert(refs) is refs
-    assert _Pinned.convert.__name__ == "convert"
-
-
-def test_ref_paths_maps_parts_and_names_the_repo_when_one_is_missing():
-    refs = [HubFileRef(Path("train.jsonl"), "train")]
-    assert _Pinned().ref_paths(refs, "train") == {"train": Path("train.jsonl")}
-    with pytest.raises(TimeNetConnectorError, match=r"^org/repo refs lack test$"):
-        _Pinned().ref_paths(refs, "train", "test")
-
-
 def test_snapshot_downloads_the_matching_files_and_returns_the_snapshot_root(monkeypatch, tmp_path):
     calls = _fake_hub(monkeypatch, tmp_path, files=("meta.csv", "data/train.parquet", "README.md"))
 
@@ -206,19 +177,16 @@ class _Patterned(
     source_revision=_SHA,
     source_files={"questions": "qa.csv", "series": "data/*.parquet"},
 ):
-    def convert(self, raw_refs):
-        return raw_refs
+    def convert(self, files):
+        return files
 
 
 def test_a_pattern_part_resolves_to_the_directory_of_its_files(monkeypatch, tmp_path):
     calls = _fake_hub(monkeypatch, tmp_path, files=("qa.csv", "data/a.parquet", "data/b.parquet", "README.md"))
 
-    refs = asyncio.run(_Patterned().download_async(tmp_path / "cache"))
+    files = asyncio.run(_Patterned().download_async(tmp_path / "cache"))
 
-    assert refs == [
-        HubFileRef(tmp_path / "snapshot" / "qa.csv", "questions"),
-        HubFileRef(tmp_path / "snapshot" / "data", "series"),
-    ]
+    assert files == {"questions": tmp_path / "snapshot" / "qa.csv", "series": tmp_path / "snapshot" / "data"}
     assert calls[0][1]["allow_patterns"] == ["qa.csv", "data/*.parquet"]
 
 

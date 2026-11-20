@@ -10,7 +10,6 @@ from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import ClassificationTask, Split, read_value
-from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.autonlab.timeseriesexam1 import TimeSeriesExam1Connector
 
 
@@ -28,7 +27,7 @@ def _convert(tmp_path: Path, rows: list[dict] | None = None) -> TimeFDataset:
     if rows is not None:
         path = tmp_path / "rows.parquet"
         pq.write_table(pa.Table.from_pylist(rows, schema=pq.read_schema(_FIXTURE)), path)
-    return TimeSeriesExam1Connector().convert([HubFileRef(path, "test")])
+    return TimeSeriesExam1Connector().convert({"test": path})
 
 
 def _task_for(dataset: TimeFDataset, row_id: int) -> ClassificationTask:

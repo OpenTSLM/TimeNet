@@ -7,6 +7,7 @@ are materialized during conversion; task text is streamed from the source files 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Annotated, ClassVar
 
 import pyarrow as pa
@@ -15,7 +16,7 @@ from pydantic import ConfigDict, Field, FiniteFloat, JsonValue, Strict, TypeAdap
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.sources.readers import DataRow, JsonlDataReader
 
 
@@ -78,16 +79,17 @@ class _SourceRow(DataRow):
 
 @dataclass(frozen=True)
 class _RowRef:
-    file: HubFileRef
+    part: str
+    path: Path
     index: int
 
     @property
     def key(self) -> tuple[str, int]:
-        return self.file.part, self.index
+        return self.part, self.index
 
     @property
     def context(self) -> str:
-        return f"{self.file.path} ({self.file.part}, row {self.index})"
+        return f"{self.path} ({self.part}, row {self.index})"
 
 
 @dataclass(frozen=True)
@@ -218,25 +220,25 @@ def _parse_row(row: _SourceRow, context: str) -> _ParsedRow:
         raise TimeFValidationError(f"{context}: {exc}") from exc
 
 
-def _iter_rows(file: HubFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
+def _iter_rows(part: str, path: Path) -> Iterator[tuple[_RowRef, _ParsedRow]]:
     """Read a JSONL file one row at a time.
 
     Yields:
         Each row reference and its decoded contents.
     """
-    for index, row in enumerate(JsonlDataReader(file.path, _SourceRow).iter_rows()):
-        ref = _RowRef(file, index)
+    for index, row in enumerate(JsonlDataReader(path, _SourceRow).iter_rows()):
+        ref = _RowRef(part, path, index)
         yield ref, _parse_row(row, ref.context)
 
 
-def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[tuple[str, int], Record]) -> Iterator[AnswerTask]:
+def _iter_tasks(files: Mapping[str, Path], records: Mapping[tuple[str, int], Record]) -> Iterator[AnswerTask]:
     """Re-read original system prompts and caption targets without retaining the corpus.
 
     Yields:
         A caption task with its instruction prompt and registered input Record.
     """
-    for file in files:
-        for ref, row in _iter_rows(file):
+    for part, path in files.items():
+        for ref, row in _iter_rows(part, path):
             record = records[ref.key]
             context = [
                 annotation
@@ -272,14 +274,17 @@ class SensorCapsConnector(
 
     SOURCE_ROWS: ClassVar[Mapping[str, int]] = _SOURCE_ROWS
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Index local rows into six-channel Records and a re-iterable caption stream.
+
+        Args:
+            files: The JSONL file of each partition.
 
         Returns:
             A dataset with materialized signals and streamed caption tasks.
 
         Raises:
-            TimeFValidationError: If references or source rows violate the SensorCaps mapping.
+            TimeFValidationError: If source rows violate the SensorCaps mapping.
         """
         dataset = TimeFDataset(metadata=self.metadata())
         for key, value in (
@@ -290,18 +295,18 @@ class SensorCapsConnector(
         ):
             dataset.annotate(Annotation(key, value=value))
         records: dict[tuple[str, int], Record] = {}
-        for file in raw_refs:
+        for part, path in files.items():
             count = 0
-            for ref, row in _iter_rows(file):
+            for ref, row in _iter_rows(part, path):
                 record = self._make_record(ref, row)
                 dataset.add_record(record)
                 records[ref.key] = record
                 count += 1
             # Every pinned count is nonzero, so this also rejects an empty partition.
-            expected = self.SOURCE_ROWS[file.part]
+            expected = self.SOURCE_ROWS[part]
             if count != expected:
-                raise TimeFValidationError(f"{file.path} ({file.part}): expected {expected} rows, found {count}")
-        dataset.set_task_stream([AnswerTask], partial(_iter_tasks, tuple(raw_refs), records))
+                raise TimeFValidationError(f"{path} ({part}): expected {expected} rows, found {count}")
+        dataset.set_task_stream([AnswerTask], partial(_iter_tasks, files, records))
         return dataset
 
     def _make_record(self, ref: _RowRef, row: _ParsedRow) -> Record:
@@ -310,7 +315,7 @@ class SensorCapsConnector(
         Returns:
             A Record with materialized sensor values and annotations from the original row.
         """
-        channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
+        channels = _PAMAP2_CHANNELS if ref.part == "pamap2_v2" else _CHANNELS
         # Retain published values, including upstream zero-filled PAMAP2 gaps.
         signals = [
             Signal.from_irregular(
@@ -322,11 +327,11 @@ class SensorCapsConnector(
             for spec, name, sensor, dimension in channels
         ]
         record = Record(sources=[Source("IMU", signals=signals)])
-        source = ref.file.part.rsplit("_", 1)[0]
+        source = ref.part.rsplit("_", 1)[0]
         metadata: dict[str, str | int] = {
             "source_dataset": source,
-            "source_partition": ref.file.part,
-            "source_file": self.SOURCE_FILES[ref.file.part],
+            "source_partition": ref.part,
+            "source_file": self.SOURCE_FILES[ref.part],
             "source_row": ref.index,
             "activity_summary": row.summary,
         }

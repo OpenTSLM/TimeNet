@@ -17,7 +17,8 @@ from timenet_connectors.datasets.datadog.arfbench.series import MetricSeriesFile
 
 
 if TYPE_CHECKING:
-    from timenet_connectors.bases.huggingface import HubFileRef
+    from collections.abc import Mapping
+    from pathlib import Path
 
 REPO = "Datadog/ARFBench"
 REVISION = "1cc8ae54e9633f596b755f7c4bce54ccb0cb9f5a"
@@ -36,22 +37,21 @@ class ARFBenchConnector(
     The values are plain series, so the dataset uses the default Parquet backend.
     """
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Create a Record for each metric and a series task for each question.
 
         Args:
-            raw_refs: The question table and the series directory from :meth:`download_async`.
+            files: The question table and the series directory.
 
         Returns:
             The populated dataset.
         """
-        paths = self.ref_paths(raw_refs, "questions", "series")
         dataset = TimeFDataset(metadata=self.metadata())
         metric_records = {
-            files.metric: dataset.add_record(files.create_record())
-            for files in MetricSeriesFiles.from_series_dir(paths["series"])
+            metric_files.metric: dataset.add_record(metric_files.create_record())
+            for metric_files in MetricSeriesFiles.from_series_dir(files["series"])
         }
-        for question in read_questions(paths["questions"]):
+        for question in read_questions(files["questions"]):
             dataset.add_task(question.create_series_task(metric_records))
         return dataset
 

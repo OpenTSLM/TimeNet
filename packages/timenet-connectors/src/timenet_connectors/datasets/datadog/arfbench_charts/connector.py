@@ -17,9 +17,8 @@ from timenet_connectors.sources.images import image_signal
 
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
-
-    from timenet_connectors.bases.huggingface import HubFileRef
 
 CHART_DIR = "arfbench-images"  # {metric}.png, and {metric}-{metric}.png for the pairs that the questions cite
 
@@ -46,21 +45,20 @@ class ARFBenchChartsConnector(
 
     values_backend = ValuesBackend.ZARR  # the chart tensors need the Zarr backend
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Create a Record for each chart and a chart task for each question.
 
         Args:
-            raw_refs: The question table and the chart directory from :meth:`download_async`.
+            files: The question table and the chart directory.
 
         Returns:
             The populated dataset.
         """
-        paths = self.ref_paths(raw_refs, "questions", "charts")
         dataset = TimeFDataset(metadata=self.metadata())
         chart_records = {
-            path.stem: dataset.add_record(_create_chart_record(path)) for path in sorted(paths["charts"].glob("*.png"))
+            path.stem: dataset.add_record(_create_chart_record(path)) for path in sorted(files["charts"].glob("*.png"))
         }
-        for question in read_questions(paths["questions"]):
+        for question in read_questions(files["questions"]):
             dataset.add_task(question.create_chart_task(chart_records))
         return dataset
 
