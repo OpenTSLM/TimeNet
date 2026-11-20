@@ -38,7 +38,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     This function is idempotent. If the target version is already committed, it skips the expensive
     ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
     to rebuild it. Otherwise the stages run in order: create the cache directory, open the declared
-    parents from ``root``, ``download`` raw references into the cache, ``compose`` them into a
+    parents from ``root``, ``download`` the raw source into the cache, ``compose`` the result into a
     dataset, check that the dataset has the card that the engine read, record each declared parent
     in it, ``derive_schema``, ``store``, then delete the cache directory. Parents must already be in
     ``root``; the engine never fetches or builds them. A card that declares parents needs a

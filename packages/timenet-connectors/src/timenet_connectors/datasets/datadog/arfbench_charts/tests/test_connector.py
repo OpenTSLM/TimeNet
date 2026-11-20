@@ -14,7 +14,6 @@ from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import ClassificationTask, InputModality, Split, read_values
 from timenet.writer import TimeFWriter
-from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.datadog.arfbench.tests.release import CORRELATION_ROW, ROWS, write_qa_csv
 from timenet_connectors.datasets.datadog.arfbench_charts.connector import CHART_DIR, ARFBenchChartsConnector
 
@@ -29,9 +28,9 @@ def _write_chart_dir(root: Path) -> Path:
 
 
 @pytest.fixture
-def release(tmp_path: Path) -> list[HubFileRef]:
+def release(tmp_path: Path) -> dict[str, Path]:
     """The question table and the three charts of the test release."""
-    return [HubFileRef(write_qa_csv(tmp_path, ROWS), "questions"), HubFileRef(_write_chart_dir(tmp_path), "charts")]
+    return {"questions": write_qa_csv(tmp_path, ROWS), "charts": _write_chart_dir(tmp_path)}
 
 
 def _ids(records) -> list[str]:

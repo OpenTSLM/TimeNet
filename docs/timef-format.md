@@ -171,13 +171,14 @@ The `annotation_occurrences` table records where the content applies. It points 
 the content through `content_id`. It also carries the span as `span_type`, `start_us`, and
 `end_us`, plus provenance, confidence, and occurrence metadata.
 
-An occurrence can annotate a Dataset, Task, Record, Source, or Signal. It names its owner with
-`object_type` and `object_id`. For a Record, Signal, or Task, `object_id` is the entity ID of the
-owner. For a Source, it is the storage ID of the Source. `object_id` is `NULL` exactly when the
+An occurrence can annotate a Dataset, Task, Record, Source, Signal, or label set. It names its owner with
+`object_type` and `object_id`. For a Record, Signal, Task, or label set, `object_id` is the ID of the
+owner. For a Source, it is the storage ID of that row. `object_id` is `NULL` exactly when the
 owner is the Dataset. IDs are unique only within one kind, so the type is part of the reference.
 
-A read of every Record or every Task rejects an occurrence with an unknown owner type or a missing
-owner. It does not drop that occurrence.
+A read of every Record or every Task rejects an occurrence with an unknown owner type. It also
+rejects an occurrence whose Record, Source, Signal, or Task owner is missing. It does not drop that
+occurrence. Only `audit_control_database()` reports an occurrence whose label set is missing.
 
 One content row can apply to many objects without copying a long value. Each attachment still has
 its own `occurrence_id` and temporal placement.
@@ -188,15 +189,20 @@ its own `occurrence_id` and temporal placement.
 Python subclass. Four typed columns store the scope: `scope_type`, `scope_start`, `scope_end`, and
 `scope_signal_ids`.
 
-Configuration for each task type uses the columns `label_set`, `unit`, `target_name`, and `mode`.
+Configuration for each task type uses the columns `label_set_id`, `unit`, `target_name`, and `mode`.
 A column that a task type does not use is `NULL`. SQL can filter these columns without parsing JSON.
 
-Every classification task has a label set, and `tasks.label_set` stores its name. Each row in
-`label_sets` stores one set with the fields `name`, `labels`, and `multi_label`. The name is unique
-within a release.
+Every classification task has a label set, and `tasks.label_set_id` stores its ID. Each row in
+`label_sets` stores one set with the fields `label_set_id`, `labels`, `multi_label`, and `ordered`.
+Sets with the same labels, label descriptions, `multi_label`, `ordered`, and annotations are one set,
+so a release stores them once. If `ordered` is true, the label order is part of the set, so the same
+labels in another order are a different set. The same labels with different annotations are also a
+different set. The writer numbers the sets in the order that tasks first use them.
+The annotations of a set are rows of `annotation_occurrences` with `object_type` `LabelSet` and the
+`label_set_id` as `object_id`.
 
-The `labels` field holds one `{name, description}` entry per label, in label order. If a label has
-no description, its `description` is `NULL`.
+The `labels` field holds one `{name, description}` entry per label, in the label order of the first
+equal set that the writer meets. If a label has no description, its `description` is `NULL`.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores entity IDs directly: `record_id` for a Record, `signal_id` for a

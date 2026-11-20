@@ -3,7 +3,7 @@ import re
 from timenet.dataset import TimeFDataset
 from timenet.dataset.describe import describe_text
 from timenet.testing import make_dataset
-from timenet.types import DatasetMetadata, License, Version
+from timenet.types import Annotation, DatasetMetadata, License, Version
 
 
 def _previews(text: str, record_id: int) -> bool:
@@ -58,3 +58,14 @@ def test_describe_empty_dataset_does_not_crash():
     text = describe_text(empty, rows=5)
     assert "demo/empty @ 1.0.0" in text
     assert "records      0" in text
+
+
+def test_describe_counts_annotations_of_every_owner():
+    dataset = make_dataset()
+    before = describe_text(dataset, rows=0)
+    dataset.annotate(Annotation(key="describe_dataset_note", value="a"))
+    dataset.tasks[0].annotate(Annotation(key="describe_task_note", value="b"))
+    match = re.search(r"^  annotations\s+(\d+)$", before, re.MULTILINE)
+    assert match is not None
+    count = int(match[1])
+    assert re.search(rf"^  annotations\s+{count + 2}$", describe_text(dataset, rows=0), re.MULTILINE)

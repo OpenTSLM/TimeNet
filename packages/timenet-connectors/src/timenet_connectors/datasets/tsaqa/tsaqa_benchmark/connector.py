@@ -21,17 +21,16 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any, ClassVar, NamedTuple, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
+from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetConnectorError
 from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
 
@@ -75,8 +74,8 @@ class _Role(StrEnum):
 
 
 _TRUE_OR_FALSE_LABEL_SET = LabelSet(
-    name="true_or_false",
-    labels=(Label(name="T", description="True."), Label(name="F", description="False.")),
+    [Label(name="T", description="True."), Label(name="F", description="False.")],
+    annotations=[Annotation("name", value="true_or_false")],
 )
 """The label set that every true-or-false task shares."""
 _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
@@ -670,11 +669,11 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
             loader=partial(loader, row, position),
         )
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
-        record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
-        if position == 0:
-            for key, value in row.contexts.on_input.items():
-                record.annotate(Annotation(key=key, value=value if isinstance(value, str) else list(value)))
-        records.append(record)
+        contexts = row.contexts.on_input if position == 0 else {}
+        annotations = [
+            Annotation(key, value=value if isinstance(value, str) else list(value)) for key, value in contexts.items()
+        ]
+        records.append(Record(sources=[Source("series", signals=[signal])], annotations=annotations, metadata=metadata))
     return tuple(records)
 
 
@@ -721,7 +720,7 @@ def _task(
         return ClassificationTask(
             inputs=inputs,
             prompt=row.prompt,
-            targets=(row.answer,),
+            targets=row.answer,
             split=_SPLITS[row.split],
             input_annotations=input_annotations,
             label_set=_TRUE_OR_FALSE_LABEL_SET,
@@ -732,21 +731,22 @@ def _task(
     return AnswerTask(
         inputs=inputs,
         prompt=row.prompt,
-        targets=(row.answer,),
+        targets=row.answer,
         split=_SPLITS[row.split],
         input_annotations=input_annotations,
         metadata=metadata,
     )
 
 
-class TSAQAConnector(BaseHuggingFaceConnector):
+class TSAQAConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="TSAQA/TSAQA-Benchmark",
+    source_revision="883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
+    source_files={split.value: split.filename for split in _SplitFile},
+):
     """Build TSAQA from the pinned train, val and test parquet files of its Hugging Face release."""
 
-    HF_REPO = "TSAQA/TSAQA-Benchmark"
-    SOURCE_REVISION = "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {split.value: split.filename for split in _SplitFile}
-
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Convert each split file into lazy Records and a stream of one task per row.
 
         Every file is read once up front to check each row and keep its small fields. The source issues
@@ -754,37 +754,30 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         in the files until written, so the files must stay available until then.
 
         Args:
-            raw_refs: The downloaded split files.
+            files: The downloaded file of each split.
 
         Returns:
             A dataset with the provenance annotations, the Records, and a stream of every task.
 
         Raises:
-            TimeFValidationError: If a split file is missing, or a row is malformed.
-        """
-        paths = {ref.part: ref.path for ref in raw_refs}
-        if paths.keys() != _SPLITS.keys():
-            raise TimeFValidationError(
-                f"TSAQA needs all its split files, missing {sorted(split.value for split in _SplitFile if split not in paths)}"
-            )
+            TimeFValidationError: If a row is malformed.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_rows
         rows: list[_Row] = []
         for split in _SplitFile:
-            rows.extend(_read_rows(paths[split], split))
+            rows.extend(_read_rows(files[split], split))
         issues = _find_issues(rows)
-        loader = _SeriesLoader(paths)
+        loader = _SeriesLoader(files)
         records = [_records(row, loader) for row in rows]
 
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (("source_repository", self.HF_REPO), ("source_revision", self.SOURCE_REVISION)):
-            dataset.annotate(Annotation(key=key, value=value))
         # The model reads the published task and question_type, so each distinct value is a dataset annotation.
         labels = {
-            label: dataset.annotate(Annotation(key=label[0], value=label[1]))
+            label: dataset.annotate(Annotation(label[0], value=label[1]))
             for label in sorted({label for row in rows for label in _published_labels(row)})
         }
         for row_records in records:
             for record in row_records:
-                dataset.add_record(record=record)
+                dataset.add_record(record)
 
         def tasks() -> Iterator[Task]:
             for row, inputs in zip(rows, records, strict=True):

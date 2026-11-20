@@ -13,9 +13,8 @@ from pathlib import Path
 import numpy as np
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
-from timenet.types import ClassificationTask, Label, LabelSet, TimeSeriesSpec, ureg
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.types import Annotation, ClassificationTask, Label, LabelSet, TimeSeriesSpec, ureg
 
 
 _N_RECORDS = 1000
@@ -24,11 +23,11 @@ _SAMPLING_RATE_HZ = 16.0
 _NOISE_STD = 0.5
 _SEED = 20260715  # fixed base seed keeps every build's values identical
 _MEAN_SIGN = LabelSet(
-    name="mean_sign",
-    labels=(
+    [
         Label(name="above_zero", description="The mean of the signal is above zero."),
         Label(name="below_zero", description="The mean of the signal is below zero."),
-    ),
+    ],
+    annotations=[Annotation("name", value="mean_sign")],
 )
 
 _SIGNAL = TimeSeriesSpec(
@@ -41,27 +40,22 @@ _SIGNAL = TimeSeriesSpec(
 class TestMeanConnector(BaseConnector[None]):
     """A deterministic, offline connector for the ``timenet/test-mean`` classification demo.
 
-    Synthetic: :meth:`download` returns no references and :meth:`convert` generates every record directly.
+    Synthetic: :meth:`download` returns nothing and :meth:`convert` generates every record directly.
     """
 
-    # ruff: ignore[unused-method-argument, no-self-use] (synthetic: nothing to download)
-    def download(self, cache_dir: Path) -> list[None]:
-        """Return no references; the data is synthetic and built entirely in :meth:`convert`.
+    def download(self, cache_dir: Path) -> None:
+        """Return nothing; the data is synthetic and built entirely in :meth:`convert`.
 
         Args:
             cache_dir: Unused; nothing is fetched.
-
-        Returns:
-            An empty list.
         """
-        return []
 
     # ruff: ignore[unused-method-argument] (synthetic: nothing to convert)
-    def convert(self, raw_refs: list[None]) -> TimeFDataset:
+    def convert(self, raw: None) -> TimeFDataset:
         """Generate the balanced set of labeled, single-signal records.
 
         Args:
-            raw_refs: Unused; the data is synthetic (``download`` returns nothing).
+            raw: Unused; the data is synthetic (``download`` returns nothing).
 
         Returns:
             The populated dataset: one single-signal series and one ``ClassificationTask`` per record.
@@ -77,16 +71,10 @@ class TestMeanConnector(BaseConnector[None]):
                 name="signal",
                 time_axis=RegularAxis.from_rate_hz(16),
             )
-            record = Record(sources=(Source(name="Synthetic generator", signals=(series,)),))
-            dataset.add_record(record=record)
+            record = Record(sources=[Source("Synthetic generator", signals=[series])])
+            dataset.add_record(record)
             label = "above_zero" if offset > 0 else "below_zero"
-            dataset.add_task(
-                task=ClassificationTask(
-                    inputs=(record,),
-                    targets=(label,),
-                    label_set=_MEAN_SIGN,
-                )
-            )
+            dataset.add_task(ClassificationTask(inputs=[record], targets=label, label_set=_MEAN_SIGN))
         return dataset
 
 

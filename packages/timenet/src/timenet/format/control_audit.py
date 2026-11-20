@@ -56,6 +56,7 @@ _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("signals", "signal_id"),
     ("annotation_contents", "content_id"),
     ("annotation_occurrences", "occurrence_id"),
+    ("label_sets", "label_set_id"),
     ("tasks", "task_id"),
 )
 """The primary id column of each entity table."""
@@ -112,8 +113,8 @@ _DOMAIN_CHECKS = f"""
        OR list_contains([label.name FOR label IN labels], '')
        OR list_contains([label.description FOR label IN labels], '')
     UNION ALL
-    SELECT 'tasks.label_set' FROM tasks
-    WHERE (label_set IS NOT NULL) <> (task_type = '{TaskType.CLASSIFICATION}')
+    SELECT 'tasks.label_set_id' FROM tasks
+    WHERE (label_set_id IS NOT NULL) <> (task_type = '{TaskType.CLASSIFICATION}')
     UNION ALL
     {_ENTITY_ID_CHECKS}
     LIMIT 1
@@ -122,7 +123,7 @@ _DOMAIN_CHECKS = f"""
 _LABELED_TARGETS = f"""
     WITH labeled AS (
         SELECT t.task_id, [label.name FOR label IN s.labels] AS labels, s.multi_label
-        FROM tasks t JOIN label_sets s ON s.name = t.label_set
+        FROM tasks t JOIN label_sets s ON s.label_set_id = t.label_set_id
     ),
     targets AS (
         SELECT x.task_id, x.target_kind = '{TaskTargetKind.TEXT}' AS is_text, x.text_value AS label,
