@@ -25,7 +25,7 @@ from timenet.errors import TimeNetBuildError, TimeNetIsolationError
 from timenet.manifest import PayloadSource
 from timenet.provenance import InstalledDistribution, TimeNetSnapshot
 from timenet.types.references import DatasetRef
-from timenet_connectors.discovery import requirements_for
+from timenet_connectors.discovery import owning_distribution, requirements_for
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,9 @@ def env_spec(dataset_id: str) -> EnvSpec:
         TimeNetIsolationError: If a base distribution is not installed.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
     base = _base_args()
+    owner = owning_distribution(dataset_id)
+    if owner is not None:
+        base += _install_args(owner)
     # The parent cannot read the connector's backend before the environment exists, so the
     # environment always includes the optional Zarr backend. Keep the parent's source/version pin;
     # the additional requirement only requests its extra.
@@ -200,23 +203,40 @@ def _base_args() -> tuple[str, ...]:
 
     Raises:
         TimeNetIsolationError: If a base distribution is not installed in this interpreter.
-    """
-    args: list[str] = []
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _install_args, not directly here)
+    args: tuple[str, ...] = ()
     # Pin TimeNet to the parent's own versions, so the code that writes the TimeF bytes is the code
     # that reads them back. timenet-connectors depends on timenet[build], so the card-YAML
     # dependencies arrive transitively and the extra never needs naming here.
     for name in TimeNetSnapshot.package_names():
-        try:
-            installed = InstalledDistribution.from_name(name)
-        except PackageNotFoundError as exc:
-            raise TimeNetIsolationError(
-                f"cannot make a build environment: {name} is not installed in {sys.executable}."
-            ) from exc
-        git_url = installed.git_requirement_url()
-        if git_url is not None:
-            args += ["--with", f"{name} @ {git_url}"]
-        elif (source := installed.path_to_ondisk_project_directory()) is not None:
-            args += ["--with-editable", str(source)]
-        else:
-            args += ["--with", f"{name}=={installed.version}"]
-    return tuple(args)
+        args += _install_args(name)
+    return args
+
+
+def _install_args(name: str) -> tuple[str, ...]:
+    """Build the uv arguments that install the same code as an installed distribution.
+
+    A git install keeps its commit and a local directory installs as editable. Any other install
+    keeps its version.
+
+    Args:
+        name: The distribution name.
+
+    Returns:
+        A flag/value pair for uv.
+
+    Raises:
+        TimeNetIsolationError: If the distribution is not installed in this interpreter.
+    """
+    try:
+        installed = InstalledDistribution.from_name(name)
+    except PackageNotFoundError as exc:
+        raise TimeNetIsolationError(
+            f"cannot make a build environment: {name} is not installed in {sys.executable}."
+        ) from exc
+    git_url = installed.git_requirement_url()
+    if git_url is not None:
+        return ("--with", f"{name} @ {git_url}")
+    if (source := installed.path_to_ondisk_project_directory()) is not None:
+        return ("--with-editable", str(source))
+    return ("--with", f"{name}=={installed.version}")

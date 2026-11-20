@@ -39,6 +39,38 @@ def _base_args_for(monkeypatch, dist):
     return env_module._base_args()
 
 
+def _env_spec_with_owner(monkeypatch, owner_direct_url):
+    monkeypatch.setattr(TimeNetSnapshot, "package_names", classmethod(lambda cls: ("timenet",)))
+    monkeypatch.setattr(env_module, "owning_distribution", lambda dataset_id: "acme-datasets")
+    dists = {"timenet": _FakeDist(), "acme-datasets": _FakeDist(direct_url=owner_direct_url)}
+    monkeypatch.setattr(env_module.Distribution, "from_name", lambda name: dists[name])
+    return env_spec("timenet/hello-world").base
+
+
+def test_env_spec_adds_the_git_install_that_owns_the_dataset(monkeypatch):
+    record = {"url": "https://github.com/o/acme.git", "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+
+    base = _env_spec_with_owner(monkeypatch, json.dumps(record))
+
+    assert base[2:4] == ("--with", f"acme-datasets @ git+https://github.com/o/acme.git@{_COMMIT}")
+
+
+def test_env_spec_adds_the_editable_install_that_owns_the_dataset(monkeypatch, tmp_path):
+    direct_url = json.dumps({"url": tmp_path.as_uri(), "dir_info": {"editable": True}})
+
+    assert _env_spec_with_owner(monkeypatch, direct_url)[2:4] == ("--with-editable", str(tmp_path))
+
+
+def test_env_spec_pins_the_version_of_an_index_install_that_owns_the_dataset(monkeypatch):
+    assert _env_spec_with_owner(monkeypatch, None)[2:4] == ("--with", "acme-datasets==9.9.9")
+
+
+def test_env_spec_adds_no_owner_for_a_built_in_dataset():
+    base = env_spec("timenet/hello-world").base
+
+    assert len(base) == 2 * len(TimeNetSnapshot.package_names()) + 2
+
+
 def test_uv_command_runs_without_the_project_environment():
     command = uv_command(_spec(), ["timenet-build", "build", "x/y"])
     assert "--no-project" in command

@@ -1,10 +1,19 @@
 import re
 import sys
+from uuid import uuid4
 
 import pytest
 
+from timenet.errors import ConnectorCardWarning
 from timenet_connectors import discovery
-from timenet_connectors.discovery import connector_dir, requirements_for
+from timenet_connectors.discovery import (
+    available,
+    connector_dir,
+    known_ids,
+    owning_distribution,
+    requirements_for,
+    resolve,
+)
 
 
 def test_connector_dir_points_at_the_connector_package():
@@ -79,3 +88,111 @@ def test_connectors_declare_their_own_requirements(dataset_id, expected):
     path = requirements_for(dataset_id)
     assert path is not None
     assert expected <= _declared_names(path.read_text())
+
+
+_CONNECTOR_INIT = """
+class _Metadata:
+    dataset_id = {dataset_id!r}
+
+
+class CONNECTOR:
+    def metadata(self):
+        return _Metadata()
+"""
+
+
+def _write_dist_info(tmp_path, distribution, value):
+    dist_info = tmp_path / f"{distribution.replace('-', '_')}-0.1.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 0.1\n")
+    (dist_info / "entry_points.txt").write_text(f"[timenet_connectors.datasets]\nroot = {value}\n")
+
+
+@pytest.fixture
+def add_datasets_root(tmp_path, monkeypatch):
+    """Install a package on sys.path that adds a datasets root through the entry-point group."""
+    created = []
+
+    def add(*dataset_ids, distribution="acme-datasets"):
+        package = f"acme_{uuid4().hex[:8]}"
+        root = tmp_path / package / "datasets"
+        root.mkdir(parents=True)
+        (tmp_path / package / "__init__.py").write_text("")
+        (root / "__init__.py").write_text("")
+        for dataset_id in dataset_ids:
+            directory = root
+            for part in dataset_id.replace("-", "_").split("/"):
+                directory /= part
+                directory.mkdir(exist_ok=True)
+                (directory / "__init__.py").write_text("")
+            (directory / "__init__.py").write_text(_CONNECTOR_INIT.format(dataset_id=dataset_id))
+            (directory / "dataset.yaml").write_text(f"dataset_id: {dataset_id}\n")
+        _write_dist_info(tmp_path, distribution, f"{package}.datasets")
+        created.append(package)
+        return root
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    yield add
+    for name in list(sys.modules):
+        if name.split(".")[0] in created:
+            del sys.modules[name]
+
+
+def _add_entry_point(tmp_path, monkeypatch, value):
+    _write_dist_info(tmp_path, "broken-datasets", value)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+
+def test_an_entry_point_with_a_missing_package_is_skipped_with_a_warning(tmp_path, monkeypatch):
+    _add_entry_point(tmp_path, monkeypatch, "stale_gone.datasets")
+
+    with pytest.warns(ConnectorCardWarning, match="stale_gone.datasets"):
+        assert "timenet/hello-world" in known_ids()
+    with pytest.warns(ConnectorCardWarning, match="stale_gone.datasets"):
+        assert connector_dir("timenet/hello-world").name == "hello_world"
+
+
+def test_an_entry_point_that_names_the_built_in_root_is_ignored(tmp_path, monkeypatch):
+    _add_entry_point(tmp_path, monkeypatch, "timenet_connectors.datasets")
+
+    assert owning_distribution("timenet/hello-world") is None
+
+
+def test_a_registered_root_adds_its_connectors(add_datasets_root):
+    root = add_datasets_root("acme/widget")
+
+    assert {"acme/widget", "timenet/hello-world"} <= set(known_ids())
+    assert connector_dir("acme/widget") == root / "acme" / "widget"
+    assert resolve("acme/widget")().metadata().dataset_id == "acme/widget"
+
+
+def test_available_walks_a_registered_root(add_datasets_root):
+    add_datasets_root("acme/widget")
+
+    assert "acme/widget" in available()
+
+
+def test_owning_distribution_names_the_package_that_registers_the_root(add_datasets_root):
+    add_datasets_root("acme/widget", distribution="acme-datasets")
+
+    assert owning_distribution("acme/widget") == "acme-datasets"
+    assert owning_distribution("timenet/hello-world") is None
+
+
+def test_two_roots_can_share_an_org(add_datasets_root):
+    root = add_datasets_root("physionet/acme-extra")
+
+    assert {"physionet/acme-extra", "physionet/ecg-qa-cot"} <= set(known_ids())
+    assert connector_dir("physionet/acme-extra") == root / "physionet" / "acme_extra"
+    assert connector_dir("physionet/ecg-qa-cot").parts[-4:-2] == ("timenet_connectors", "datasets")
+
+
+def test_an_id_in_two_roots_is_skipped_and_cannot_be_resolved(add_datasets_root):
+    add_datasets_root("timenet/hello-world")
+
+    with pytest.warns(ConnectorCardWarning, match="timenet/hello-world"):
+        assert "timenet/hello-world" not in known_ids()
+    with pytest.raises(LookupError, match="more than one"):
+        connector_dir("timenet/hello-world")
+    with pytest.raises(LookupError, match="more than one"):
+        resolve("timenet/hello-world")
