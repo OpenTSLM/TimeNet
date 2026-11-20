@@ -2,7 +2,7 @@
 
 The OpenTSLM release holds the train part of all 100,000 M4 series, one CSV of series and one CSV of
 captions for each of the six M4 frequencies. Each series becomes one Record and one AnswerTask. The
-target is the caption. The release archive stores no split. generate_splits.py made an 80/10/10 split,
+target is the caption. The connector leaves out the 706 series whose caption is an error message. The release archive stores no split. generate_splits.py made an 80/10/10 split,
 stratified by frequency, and wrote it to splits.json.xz. The connector reads that file.
 """
 
@@ -36,6 +36,10 @@ SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
 
 CAPTION_PROMPT = "Please generate a detailed caption for this time-series, describing it as accurately as possible."
 """The prompt of OpenTSLM's loader, the same for every series: the post-prompt of ``M4QADataset``."""
+
+CAPTION_ERROR_PREFIX = "Error generating caption: "
+"""The start of an error message of the caption API, which the release has instead of a caption for
+706 series. The dataset leaves out these series."""
 
 # The release states no unit, and the M4 series come from many domains.
 M4_SERIES = TimeSeriesSpec(spec_type="m4_series", name="M4 series", unit_value=None, dtype="float32")
@@ -102,10 +106,11 @@ class _CaptionRow(DataRow):
 
 
 @dataclass(frozen=True)
-class _CaptionedSeries:
-    """A series of one release file with its caption, before the split is known."""
+class M4CaptionedSeries:
+    """One M4 series of the release, with its frequency and caption, before the split is known."""
 
     m4_id: str
+    frequency: M4Frequency
     values: np.ndarray
     caption: str
 
@@ -220,36 +225,38 @@ class M4CaptionReader:
         Returns:
             Each series with its caption and split.
         """
-        captioned: list[tuple[M4Frequency, _CaptionedSeries]] = []
-        for frequency in M4Frequency:
-            captioned.extend((frequency, series) for series in self._read_frequency(frequency))
-        m4_ids = [series.m4_id for _, series in captioned]
+        captioned = self.read_captioned_series()
         split_file = M4CaptionSplits.read_from_file(self.splits_path)
-        splits = split_file.assign_split_to_each_series(m4_ids)
+        splits = split_file.assign_split_to_each_series([series.m4_id for series in captioned])
         return [
             M4CaptionSeries(
                 m4_id=series.m4_id,
-                frequency=frequency,
+                frequency=series.frequency,
                 values=series.values,
                 caption=series.caption,
                 split=split,
             )
-            for (frequency, series), split in zip(captioned, splits, strict=True)
+            for series, split in zip(captioned, splits, strict=True)
         ]
 
-    def read_m4_ids(self) -> list[str]:
-        """Read the M4 id of every series, in the order of :meth:`read_series`, without the split.
+    def read_captioned_series(self) -> list[M4CaptionedSeries]:
+        """Read every series of the release with its caption, in the order of :meth:`read_series`.
+
+        The method leaves out each series whose caption is an error message of the caption API.
 
         Returns:
-            The M4 ids, such as ``M1``.
+            Each series with its caption, without the split.
         """
-        return [series.m4_id for frequency in M4Frequency for series in self._read_frequency(frequency)]
+        captioned: list[M4CaptionedSeries] = []
+        for frequency in M4Frequency:
+            captioned.extend(self._read_frequency(frequency))
+        return captioned
 
-    def _read_frequency(self, frequency: M4Frequency) -> Iterator[_CaptionedSeries]:
+    def _read_frequency(self, frequency: M4Frequency) -> Iterator[M4CaptionedSeries]:
         """Read the series of one frequency, paired with the caption in the same row of its caption file.
 
         Yields:
-            Each series with its caption.
+            Each series with its caption, except a series whose caption is an error message.
 
         Raises:
             TimeNetConnectorError: If the files do not pair one to one, or a series row is malformed.
@@ -269,8 +276,11 @@ class M4CaptionReader:
                     raise TimeNetConnectorError(
                         f"series id {series_row.id!r} does not match caption id {caption_row.id!r}"
                     )
-                yield _CaptionedSeries(
+                if caption_row.caption.startswith(CAPTION_ERROR_PREFIX):
+                    continue
+                yield M4CaptionedSeries(
                     m4_id=m4_id,
+                    frequency=frequency,
                     values=np.array(series_row.series, dtype=np.float32),
                     caption=caption_row.caption,
                 )

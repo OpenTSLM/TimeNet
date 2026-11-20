@@ -4,6 +4,11 @@ M4-Caption pairs each of the 100,000 series of the M4 forecasting competition wi
 GPT-4o wrote. OpenTSLM publishes it as a zip archive of CSV files, one series file and one caption
 file for each M4 frequency.
 
+For 706 series, the release has an error message of the caption API instead of a caption. There are
+three messages, each after the prefix "Error generating caption: ": "Connection error." (630
+series), "Error code: 404" (75) and "Request timed out." (1). The connector leaves out these 253
+daily, 57 monthly and 396 quarterly series, so the dataset has 99,294 series.
+
 The connector converts each series into one Record and one `AnswerTask`. The Record holds the
 series as one float32 Signal on an ordinal axis, the M4 id in its metadata, and the M4 frequency as
 an annotation. The task target is the caption. The task prompt is the prompt of the OpenTSLM loader
@@ -14,9 +19,15 @@ an annotation. The task target is the caption. The task prompt is the prompt of 
 The release archive stores no split. `generate_splits.py` makes an 80/10/10 split with
 `StratifiedSplitter`, stratified by M4 frequency. Validation and test each hold a tenth of every
 frequency, so the small hourly and weekly frequencies keep their share in each split. The result
-depends on the version of scikit-learn, so the script ran once. It wrote the 10,000 validation and
-10,000 test series, by M4 id, to `splits.json.xz`. The connector reads that file and puts every
+depends on the version of scikit-learn, so the script ran once. It wrote the 9,929 validation and
+9,929 test series, by M4 id, to `splits.json.xz`. The connector reads that file and puts every
 other series in the train split.
+
+M4 has 90 pairs of series whose histories are equal value for value: 19 monthly, 35 quarterly and
+36 yearly pairs. The two series of a pair have different M4 ids and different M4 test horizons. All
+pairs but one also have different captions. A model that trains on one series of a pair sees the
+exact input of the other. So the script groups the series by their values with the `group_by`
+option of `StratifiedSplitter`, and each pair stays in one split.
 
 This split is not the split of the OpenTSLM paper. The OpenTSLM loader makes a random split of all
 frequencies together, so its share of the small frequencies drifts. For example, its test split

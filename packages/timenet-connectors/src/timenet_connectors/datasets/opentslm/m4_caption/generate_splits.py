@@ -1,9 +1,14 @@
 """Write splits.json.xz, the frozen train, validation and test split of m4-caption.
 
 The release archive stores no split. This script makes an 80/10/10 split with StratifiedSplitter,
-stratified by M4 frequency, so that validation and test each hold a tenth of every frequency. The
-result depends on the version of scikit-learn. So the script ran once and wrote the validation and
-test series to splits.json.xz, and the connector reads that file. The script is kept here for
+stratified by M4 frequency, so that validation and test each hold a tenth of every frequency.
+
+M4 has 90 pairs of series whose train parts are equal value for value. Series with the same values
+must stay in one split, so the splitter groups the series by their values. The script reads the
+series through the connector, so it leaves out the series whose caption is an error message.
+
+The result depends on the version of scikit-learn. So the script ran once and wrote the validation
+and test series to splits.json.xz, and the connector reads that file. The script is kept here for
 reference.
 
 Run it once from the root of the repository. The argument is the path to the release archive,
@@ -25,7 +30,9 @@ from timenet_connectors.datasets.opentslm.m4_caption.connector import (
     M4_CAPTION_SHA256,
     RELEASE_FOLDER,
     SPLITS_PATH,
+    M4CaptionedSeries,
     M4CaptionReader,
+    M4Frequency,
 )
 from timenet_connectors.splitting import StratifiedSplitter
 
@@ -33,13 +40,22 @@ from timenet_connectors.splitting import StratifiedSplitter
 SEED = 42
 
 
-def frequency_letter(m4_id: str) -> str:
-    """Return the letter that starts an M4 id, such as M in M1. The letter names the frequency.
+def frequency(series: M4CaptionedSeries) -> M4Frequency:
+    """Return the frequency of a series, which the split stratifies by.
 
     Returns:
-        The letter.
+        The frequency.
     """
-    return m4_id[0]
+    return series.frequency
+
+
+def values_digest(series: M4CaptionedSeries) -> str:
+    """Return the SHA-256 digest of the values of a series. Series with the same values form one group.
+
+    Returns:
+        The digest.
+    """
+    return hashlib.sha256(series.values.tobytes()).hexdigest()
 
 
 def m4_id_order(m4_id: str) -> tuple[str, int]:
@@ -64,16 +80,21 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as directory, zipfile.ZipFile(archive_path) as archive:
         archive.extractall(directory)
         reader = M4CaptionReader(directory=Path(directory) / RELEASE_FOLDER, splits_path=SPLITS_PATH)
-        m4_ids = reader.read_m4_ids()
+        captioned = reader.read_captioned_series()
 
-    splitter = StratifiedSplitter[str](
-        train_folds=8, validation_folds=1, test_folds=1, stratify_by=frequency_letter, seed=SEED
+    splitter = StratifiedSplitter[M4CaptionedSeries](
+        train_folds=8,
+        validation_folds=1,
+        test_folds=1,
+        stratify_by=frequency,
+        group_by=values_digest,
+        seed=SEED,
     )
-    splits = splitter.split(m4_ids)
+    splits = splitter.split(captioned)
     content = {
         "source_sha256": source_sha256,
-        "validation": sorted(splits[Split.VALIDATION], key=m4_id_order),
-        "test": sorted(splits[Split.TEST], key=m4_id_order),
+        "validation": sorted((series.m4_id for series in splits[Split.VALIDATION]), key=m4_id_order),
+        "test": sorted((series.m4_id for series in splits[Split.TEST]), key=m4_id_order),
     }
     SPLITS_PATH.write_bytes(lzma.compress((json.dumps(content, indent=2) + "\n").encode()))
 

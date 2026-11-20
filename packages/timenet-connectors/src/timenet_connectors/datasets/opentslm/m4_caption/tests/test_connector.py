@@ -57,6 +57,10 @@ def _values(m4_id: str) -> list[float]:
     return values.tolist()[: 2 + len(m4_id)]
 
 
+def _caption(m4_id: str) -> str:
+    return f"Caption of {m4_id}.\n\nA second paragraph."
+
+
 def _write_csv(path: Path, columns: tuple[str, str], rows: list[tuple[str, str]]) -> None:
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
@@ -72,6 +76,7 @@ def _write_release(
     directory: Path,
     *,
     series_rows: dict[str, list[tuple[str, str]]] | None = None,
+    captions: dict[str, str] | None = None,
     splits: dict[str, str | list[str]] = _SPLITS,
 ) -> M4CaptionReader:
     # Like the archive, the files sit in a folder of their own, beside the files that the loader skips.
@@ -79,7 +84,7 @@ def _write_release(
     root.mkdir()
     for frequency, m4_ids in _SERIES_IDS.items():
         default_rows = [(f"series-{m4_id}", json.dumps(_values(m4_id))) for m4_id in m4_ids]
-        caption_rows = [(f"series-{m4_id}", f"Caption of {m4_id}.\n\nA second paragraph.") for m4_id in m4_ids]
+        caption_rows = [(f"series-{m4_id}", (captions or {}).get(m4_id, _caption(m4_id))) for m4_id in m4_ids]
         _write_csv(
             root / f"m4_series_{frequency}.csv", ("id", "series"), (series_rows or {}).get(frequency, default_rows)
         )
@@ -111,12 +116,22 @@ def test_each_series_becomes_a_record_and_a_caption_task(tmp_path):
         (annotation,) = record.annotations
         assert (annotation.key, read_value(annotation.value)) == ("frequency", frequency)
         assert task.targets is not None
-        assert [read_value(target) for target in task.targets] == [f"Caption of {m4_id}.\n\nA second paragraph."]
+        assert [read_value(target) for target in task.targets] == [_caption(m4_id)]
         # The prompt of OpenTSLM's loader, the same for every series.
         assert read_value(task.prompt) == (
             "Please generate a detailed caption for this time-series, describing it as accurately as possible."
         )
         assert task.split == _expected_split(m4_id)
+
+
+def test_a_series_whose_caption_is_an_error_message_is_left_out(tmp_path):
+    # Two of the three error messages of the caption API that the release has instead of a caption.
+    captions = {
+        "D2": "Error generating caption: Connection error.",
+        "Q1": "Error generating caption: Error code: 404",
+    }
+    tasks = _convert(tmp_path, captions=captions).tasks_of(AnswerTask)
+    assert [task.inputs[0].metadata["m4_id"] for task in tasks] == ["D1", "H1", "M1", "M2", "M3", "Q2", "W1", "Y1"]
 
 
 @pytest.mark.parametrize(
@@ -133,8 +148,9 @@ def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, changes, me
         _convert(tmp_path, splits=_SPLITS | changes)
 
 
-_RELEASE_SERIES_COUNTS = {"D": 4227, "H": 414, "M": 48000, "Q": 24000, "W": 359, "Y": 23000}
-"""The number of series of each frequency in the release, by the letter that starts their M4 ids."""
+_DATASET_SERIES_COUNTS = {"D": 3974, "H": 414, "M": 47943, "Q": 23604, "W": 359, "Y": 23000}
+"""The number of series of each frequency in the dataset, by the letter that starts their M4 ids. The
+dataset leaves out 253 daily, 57 monthly and 396 quarterly series, whose caption is an error message."""
 
 
 def test_the_frozen_split_is_of_the_pinned_release_and_has_a_tenth_of_each_frequency_in_validation_and_test():
@@ -142,9 +158,9 @@ def test_the_frozen_split_is_of_the_pinned_release_and_has_a_tenth_of_each_frequ
     assert splits.source_sha256 == M4_CAPTION_SHA256
     for m4_ids in (splits.validation, splits.test):
         counts = Counter(m4_id[0] for m4_id in m4_ids)
-        for letter, release_count in _RELEASE_SERIES_COUNTS.items():
+        for letter, dataset_count in _DATASET_SERIES_COUNTS.items():
             # A tenth of the series of each frequency, rounded down or up.
-            assert release_count // 10 <= counts[letter] <= -(-release_count // 10)
+            assert dataset_count // 10 <= counts[letter] <= -(-dataset_count // 10)
 
 
 @pytest.mark.parametrize(
