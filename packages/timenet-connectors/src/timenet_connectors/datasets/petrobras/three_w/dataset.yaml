@@ -12,7 +12,8 @@
 # from validation or test. Simulated and hand-drawn instances always go to training.
 #
 # The `state` signal keeps the integer codes of the release (0-8); 3W does not document their meaning
-# in the dataset files.
+# in the dataset files. The timestamps carry no time zone and the release states none, so a record
+# keeps its first timestamp as text in `metadata["start"]` and has no absolute start time.
 yaml_schema_version: 1
 dataset_id: petrobras/three-w
 dataset_version: 1.0.0
@@ -32,3 +33,9 @@ tags:
   - multivariate
   - petrobras
 source_url: https://github.com/petrobras/3W
+source_revision: c86cc7c70063646910be7292de8a54a6fb2a8399
+license_url: https://github.com/petrobras/3W/blob/c86cc7c70063646910be7292de8a54a6fb2a8399/dataset/LICENSE-CC-BY
+citation: >-
+  Vaz Vargas, R.E., de Melo Junior, A.J., de Campos Lima, C.B. et al. 3W Dataset 2.0.0: a realistic
+  and public dataset with rare undesirable real events in oil wells. Sci Data 13, 949 (2026).
+  https://doi.org/10.1038/s41597-026-07225-z

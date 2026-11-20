@@ -82,8 +82,10 @@ def test_one_record_per_instance_with_only_recorded_variables(tmp_path):
         "well": "WELL-00006",
         "provenance": "real",
         "event_code": 2,
+        "start": "2017-02-01T01:02:07",
     }
-    assert record.start_time.timestamp == int(_START.timestamp()) * US_PER_S
+    # 3W states no time zone, so the record has no absolute start time.
+    assert record.start_time.timestamp is None
     signals = {signal.name: signal for source in record.sources for signal in source.signals}
     assert signals["P-TPT"].spec.spec_type == "pressure"
     assert signals["T-TPT"].spec.spec_type == "temperature"

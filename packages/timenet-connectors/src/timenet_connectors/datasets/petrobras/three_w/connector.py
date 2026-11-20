@@ -17,7 +17,6 @@ partitions. Simulated and hand-drawn instances come from no well and always go t
 from collections.abc import Callable, Iterator
 import csv
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 
@@ -36,7 +35,6 @@ from timenet.types import (
     Task,
     TemporalLocalizationTask,
     TimeInterval,
-    TimeOrigin,
 )
 from timenet_connectors.datasets.petrobras.three_w.events import EVENT_TYPES, EVENTS_BY_CODE, Event, Phase, phase_of
 from timenet_connectors.datasets.petrobras.three_w.variables import SOURCE_ORDER, VARIABLES, Variable
@@ -185,23 +183,28 @@ def _signals(file: InstanceFile, metadata: pq.FileMetaData) -> list[tuple[Variab
     return built
 
 
-def _start_time(table: pa.Table, file: InstanceFile) -> datetime:
+def _start(table: pa.Table, file: InstanceFile) -> str:
     """Return the first timestamp of an instance, checking that it is sampled at exactly 1 Hz.
+
+    3W stores the timestamps without a time zone, and the release does not state one. So the
+    connector keeps the first timestamp as written, as text in the record metadata, and gives the
+    record no absolute start time.
 
     Args:
         table: The instance's ``timestamp`` column.
         file: The instance.
 
     Returns:
-        The first timestamp, in UTC.
+        The first timestamp in ISO 8601 form, without a time zone.
 
     Raises:
         TimeNetConnectorError: If the timestamps are not one second apart.
     """
-    seconds = table.column(_TIMESTAMP).cast(pa.timestamp("s")).cast(pa.int64()).to_pylist()
+    timestamps = table.column(_TIMESTAMP).cast(pa.timestamp("s"))
+    seconds = timestamps.cast(pa.int64()).to_pylist()
     if any(later - earlier != 1 for earlier, later in pairwise(seconds)):
         raise TimeNetConnectorError(f"{file.instance}: timestamps are not one second apart")
-    return datetime.fromtimestamp(seconds[0], tz=UTC)
+    return timestamps[0].as_py().isoformat()
 
 
 @dataclass
@@ -233,7 +236,7 @@ def _build_record(dataset: TimeFDataset, file: InstanceFile) -> _Built:
     metadata = pq.read_metadata(file.path)
     signals = _signals(file, metadata)
     table = pq.read_table(file.path, columns=[_TIMESTAMP, _LABEL])
-    start = _start_time(table, file)
+    start = _start(table, file)
 
     sources = tuple(
         Source(name=name, signals=tuple(signal for variable, signal, _ in signals if variable.source == name))
@@ -242,13 +245,13 @@ def _build_record(dataset: TimeFDataset, file: InstanceFile) -> _Built:
     )
     record = Record(
         sources=sources,
-        start_time=TimeOrigin(timestamp=start),
         time_span=TimeInterval.micros(0, metadata.num_rows * US_PER_S),
         metadata={
             "instance": file.instance,
             "well": file.well,
             "provenance": file.provenance,
             "event_code": event.code,
+            "start": start,
         },
     )
     dataset.add_record(record=record)
