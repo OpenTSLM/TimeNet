@@ -1109,11 +1109,12 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 null_count=row.null_count,
                 loader=signal.values,
                 time_offsets_loader=signal.time_offsets,
-                annotations=annotations.get((ObjectKind.SIGNAL, row.signal_id), ()),
                 metadata=_decode_json(row.metadata, default={}),
             )
-            # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
-            object.__setattr__(built, "annotations", annotations.get((ObjectKind.SIGNAL, row.signal_id), ()))
+            stored = annotations.get((ObjectKind.SIGNAL, row.signal_id), ())
+            for annotation in stored:
+                built._validate_annotation(annotation)
+            object.__setattr__(built, "annotations", stored)  # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
             object.__setattr__(built, "_id", row.signal_id)  # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
             signals_by_source[row.source_id].append(built)
         return signals_by_source
@@ -1161,10 +1162,12 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 name=source_row.name,
                 sources=tuple(build_source(child) for child in children[source_id]),
                 signals=tuple(signals_by_source[source_id]),
-                annotations=annotations.get((ObjectKind.SOURCE, source_id), ()),
                 metadata=_decode_json(source_row.metadata, default={}),
             )
-            source.annotations = annotations.get((ObjectKind.SOURCE, source_id), ())
+            stored = annotations.get((ObjectKind.SOURCE, source_id), ())
+            for annotation in stored:
+                source._validate_annotation(annotation)
+            source.annotations = stored
             return source
 
         records: list[Record] = []
@@ -1179,11 +1182,13 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             record = Record(
                 sources=tuple(build_source(source_id) for source_id in hierarchy.roots_by_record[record_id]),
                 start_time=self._clock_cache[record_row.clock_id],
-                annotations=annotations.get((ObjectKind.RECORD, record_id), ()),
                 time_span=span,
                 metadata=_decode_json(record_row.metadata, default={}),
             )
-            record.annotations = annotations.get((ObjectKind.RECORD, record_id), ())
+            stored = annotations.get((ObjectKind.RECORD, record_id), ())
+            for annotation in stored:
+                record._validate_annotation(annotation)
+            record.annotations = stored
             record._id = record_id
             records.append(record)
             self._record_occurrences[id(record)] = {
@@ -2570,7 +2575,6 @@ class _TaskBuilder:
                     ),
                     row.rationale,
                 ),
-                "annotations": task_annotations.get((ObjectKind.TASK, row.task_id), ()),
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),
             }
@@ -2600,7 +2604,7 @@ class _TaskBuilder:
                 "annotation occurrence",
             )
             task = cls(**kwargs)
-            task.annotations = kwargs["annotations"]
+            task.annotations = task_annotations.get((ObjectKind.TASK, row.task_id), ())
             task._id = row.task_id
             try:
                 TimeFDataset._check_task_record_scope(task)
