@@ -117,14 +117,12 @@ class LimaPM25Connector(BaseConnector[Path]):
 
     source_sha256 = "896ae8a106fb128460e81b3f58096f6b9c4d582ef28fffa46e5394c5875c40d4"
 
-    async def download_async(self, cache_dir: Path) -> list[Path]:
+    async def download_async(self, cache_dir: Path) -> Path:
         """Resolve the pinned original, reusing a valid cached copy."""
-        path = await download_http(SOURCE_URL, cache_dir / "senamhi-lima.csv", sha256=self.source_sha256)
-        return [path]
+        return await download_http(SOURCE_URL, cache_dir / "senamhi-lima.csv", sha256=self.source_sha256)
 
-    def convert(self, raw_refs: list[Path]) -> TimeFDataset:
+    def convert(self, path: Path) -> TimeFDataset:
         """Read one verified CSV and build chronological forecasting tasks."""
-        (path,) = raw_refs
         content = path.read_bytes()
         if sha256(content).hexdigest() != self.source_sha256:
             msg = "SENAMHI source SHA-256 does not match the dataset card"
@@ -151,8 +149,8 @@ class LimaPM25Connector(BaseConnector[Path]):
                     time_axis=AXIS,
                 )
                 record = dataset.add_record(
-                    record=Record(
-                        sources=(Source(name=station, signals=(signal,)),),
+                    Record(
+                        sources=[Source(name=station, signals=[signal])],
                         start_time=TimeOrigin(start),
                         metadata={
                             "station_key": station,
@@ -162,9 +160,9 @@ class LimaPM25Connector(BaseConnector[Path]):
                     )
                 )
                 dataset.add_task(
-                    task=ForecastingTask(
-                        inputs=(record,),
-                        targets=tuple(value for value, _ in observations[HISTORY:]),
+                    ForecastingTask(
+                        inputs=[record],
+                        targets=[value for value, _ in observations[HISTORY:]],
                         split=split,
                         metadata={
                             "window_id": window_id,

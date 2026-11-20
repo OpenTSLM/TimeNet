@@ -45,7 +45,7 @@ def test_build_from_verified_fixture_and_read_timef(tmp_path, monkeypatch):
     body = ("\n".join(rows) + "\n").encode()
     csv_path.write_bytes(body)
     monkeypatch.setattr(LimaPM25Connector, "source_sha256", sha256(body).hexdigest())
-    dataset = LimaPM25Connector().convert([csv_path])
+    dataset = LimaPM25Connector().convert(csv_path)
     assert [str(task.split) for task in dataset.tasks] == ["train", "validation", "test"]
     with TimeFReader.open(dataset.write(path=tmp_path / "registry")) as reader:
         reader.verify()
@@ -54,4 +54,4 @@ def test_build_from_verified_fixture_and_read_timef(tmp_path, monkeypatch):
         assert task.targets == tuple(range(24, 30))
     csv_path.write_bytes(body + b"changed")
     with pytest.raises(ValueError, match="SHA-256"):
-        LimaPM25Connector().convert([csv_path])
+        LimaPM25Connector().convert(csv_path)
