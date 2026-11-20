@@ -104,8 +104,7 @@ over the versioned REST contract (`GET /api/v1/datasets`, `/api/v1/datasets/{id}
 `.../download/{relpath}`); `S3Registry` serves the same layout under an `s3://bucket/prefix` root. The
 S3 backend has no catalog: its `has_catalog` is `False`, and `list_datasets` and `search` raise
 `NotImplementedError`. `TimeNet.list()` and `TimeNet.search()` leave a registry without a catalog
-out, with a `CatalogWarning` that names it. If no source of the list has a catalog, they raise
-`TimeNetNoCatalogError`.
+out, with a `CatalogWarning` that names it. If no source of the list has a catalog, they fail.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
 disk, at `<root>/chengsenwang/tsqa/<version>/`. Use lowercase ids to avoid casing clashes on
@@ -122,7 +121,7 @@ names each one and pins the files it reads from it (see
   [Opening a version](timef-reader.md#opening-a-version) for the checks and their errors.
 - `TimeNet.download()` and `copy_release()` copy complete copies of the version and of each payload
   source, and check each source against the pins. If a downloaded file has another size or checksum
-  than its manifest records, the copy raises `TimeNetFileError` and keeps no partial copy.
+  than its manifest records, the copy fails and keeps no partial copy.
 - `put_dataset` refuses a version if the registry does not hold one of its payload sources.
 
 ### Remote reads
@@ -214,7 +213,7 @@ so you can publish to a local directory, a remote registry, or an S3 bucket:
 | `requires_clean_code_provenance` | Whether the registry refuses releases built from locally modified TimeNet code. `False` only for `LocalRegistry`. Otherwise `put_dataset` and `put_release` raise `TimeNetBuildError` for a release whose manifest records local changes. |
 
 `LocalRegistry`, `RemoteRegistry` and `S3Registry` take `read_only=True`. A read-only registry
-refuses each write with `TimeNetRegistryError`.
+refuses each write.
 
 `put_dataset` writes the dataset with a [`TimeFWriter`](timef-writer.md) and checks each payload
 source of the new release in the registry that receives it. In a local registry, `force=True`
@@ -240,8 +239,8 @@ release = registry.put_dataset(dataset)
 
 Every backend is a `WritableRegistry`. As a result, this type alone does not show if a backend is a
 directory the engine can write to or a remote stub. `local_registry_path(uri)` gives this
-information. It returns the directory that a `file://` URI or a plain path names. It raises
-`TimeNetRegistryError` for a remote scheme or an empty string.
+information. It returns the directory that a `file://` URI or a plain path names. It rejects a
+remote scheme or an empty string.
 
 ### Remote publishing
 
@@ -296,8 +295,8 @@ registry.search(DatasetFilter.of(domain=Domain.CARDIOLOGY, tag="ecg", limit=10))
 A `DatasetFilter` from `timenet.types` holds the filters and the limit. Each filter is a tuple, and
 an empty tuple sets no restriction. `DatasetFilter.of()` takes one value, a list, or `None` for
 each filter. The registry combines the filters with AND logic. `limit` caps the number of
-results, with a default of 100. `limit=0` returns no results, and a negative limit raises
-`TimeFValidationError`.
+results, with a default of 100. `limit=0` returns no results. `DatasetFilter` rejects a negative
+limit.
 
 `DatasetFilter.select()` does the filtering. It takes `ListedRelease` rows, each a card and the
 registry that lists it, and keeps their order. It checks the card first. A `task` or

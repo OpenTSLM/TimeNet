@@ -107,4 +107,4 @@ timenet download chengsenwang/tsqa       # newest of the first source
 timenet info chengsenwang/tsqa@latest    # highest of all sources
 ```
 
-If you pin a version that is not committed, the tool exits with a `TimeNetDatasetNotFoundError`.
+If you pin a version that is not committed, the tool exits with an error.

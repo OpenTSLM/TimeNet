@@ -83,15 +83,13 @@ local registry over `root`. The writer fetches the manifest of the source from t
 compares the record of each reused file. It refuses the write, before it writes the remaining values
 and with nothing published, when:
 
-- the registry does not hold the source, which raises `TimeNetDatasetNotFoundError` naming the source
-  and the registry;
+- the registry does not hold the source;
 - the registry's source records a reused file differently, as after a forced replace, or because the
-  registry holds another release under the same dataset ID and version, which raises
-  `TimeFFormatError` naming the source and the first differing file; or
-- the source reads payloads of the release being written, which would make each the other's source
-  and raises `TimeFValidationError`.
+  registry holds another release under the same dataset ID and version; or
+- the source reads payloads of the release being written, which would make each the other's source.
 
-These are the errors that [opening](timef-reader.md#opening-a-version) raises for a missing or
+The error names the source, and the first differing file when there is one.
+[Opening](timef-reader.md#opening-a-version) a release fails in the same way for a missing or
 differing payload source.
 
 ## Values settings
@@ -129,10 +127,10 @@ The writer fails before publication when it finds an invalid state, including:
 - a payload source that reads payloads of the output release; or
 - chunk rows that do not cover a Signal exactly.
 
-These failures raise TimeNet validation errors. Where possible, the errors include object IDs and
-relationship fields. The writer checks most failures while it streams rows. It uses the ID sets
-that it owns. It does not keep the ID of every task, so after the last task batch it runs one query
-on `tasks` to find a repeated task ID.
+Where possible, the errors for these failures include object IDs and relationship fields. The
+writer checks most failures while it streams rows. It uses the ID sets that it owns. It does not
+keep the ID of every task, so after the last task batch it runs one query on `tasks` to find a
+repeated task ID.
 
 Each Record and Signal that a task refers to, as an input, a target, or in a span, must be the
 same object that the dataset registered under that ID. Thus a Record from another dataset fails,

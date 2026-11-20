@@ -36,7 +36,7 @@ Records, Signals, and Tasks have a read-only, positive int64 `id` (`EntityId`). 
 object to a dataset, the dataset sets the ID. When the reader reads the object back, the reader
 sets it. You cannot set an ID. The dataset ID is the exception and stays an `org/name` string.
 
-If an object is not in a dataset, reading its `id` raises `TimeFValidationError`.
+If an object is not in a dataset, reading its `id` fails.
 
 IDs carry no meaning. Store upstream identifiers in `metadata` or in an annotation. To refer to
 another object, use the object itself. For example, a span holds Signal objects.

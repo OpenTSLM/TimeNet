@@ -99,9 +99,9 @@ call:
   the connectors stay out.
 
 So a default build lands where `TimeNet()` reads. `local_registry` takes a local directory, a
-`file://` URI or a `LocalRegistry`. A remote registry or a `LocalRegistry` with `read_only=True`
-raises `TimeFValidationError`, because a build writes into its local registry. To get the release
-to such a registry, build it locally and publish it with `timenet.publish()`.
+`file://` URI or a `LocalRegistry`. A build rejects a remote registry or a `LocalRegistry` with
+`read_only=True`, because a build writes into its local registry. To get the release to such a
+registry, build it locally and publish it with `timenet.publish()`.
 
 `sources` lists, in order, where the parents and payload sources that the local registry lacks
 come from (see [Prepare parent releases](#prepare-parent-releases)). The order of the list is the
@@ -138,8 +138,8 @@ bucket decides through the bucket permissions who can publish to it.
 The manifest of a release records the git commit of the TimeNet code that built it, and whether that
 code had local changes (see [`build_env.git`](manifest.md)). A remote registry holds only releases
 built from committed code. Before `timenet.publish()` copies anything to such a registry, it checks
-the manifest of each release that it copies. If a manifest records local changes, `publish()` raises
-`TimeNetBuildError` and copies nothing.
+the manifest of each release that it copies. If a manifest records local changes, `publish()`
+refuses the release and copies nothing.
 
 The local registry accepts any release, so a build with local changes still lands there. To publish
 it, commit the changes, build the release again with `force=True`, and publish it.
