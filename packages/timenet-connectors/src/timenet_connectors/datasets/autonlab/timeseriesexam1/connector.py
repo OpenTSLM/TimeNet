@@ -68,12 +68,13 @@ def _record(row_id: int, role: str, values: list[float]) -> Record:
     return Record(sources=[Source("series", signals=[signal])], metadata={"row_id": row_id, "role": role})
 
 
-class TimeSeriesExam1Connector(BaseHuggingFaceConnector):
+class TimeSeriesExam1Connector(
+    BaseHuggingFaceConnector,
+    hf_repo="AutonLab/TimeSeriesExam1",
+    source_revision="628f686757bb484d9b608b6855fb41f6a302ecda",
+    source_files={"test": "data/test-00000-of-00001.parquet"},
+):
     """Build TimeSeriesExam from the pinned test parquet file of its Hugging Face release."""
-
-    HF_REPO = "AutonLab/TimeSeriesExam1"
-    SOURCE_REVISION = "628f686757bb484d9b608b6855fb41f6a302ecda"
-    SOURCE_FILES = {"test": "data/test-00000-of-00001.parquet"}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Build one Record per series and one classification task per question.
