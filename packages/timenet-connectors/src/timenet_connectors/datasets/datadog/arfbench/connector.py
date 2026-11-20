@@ -25,15 +25,16 @@ QA_CSV = "arfbench-qa.csv"
 SERIES_DIR = "arfbench-ts-data"  # {metric}_{interval}.parquet: one metric at one rollup interval, in seconds
 
 
-class ARFBenchConnector(BaseHuggingFaceConnector):
+class ARFBenchConnector(
+    BaseHuggingFaceConnector,
+    hf_repo=REPO,
+    source_revision=REVISION,
+    source_files={"questions": QA_CSV, "series": f"{SERIES_DIR}/*.parquet"},
+):
     """Connector for the ARFBench questions about the metric series (Hub repo ``Datadog/ARFBench``).
 
     The values are plain series, so the dataset uses the default Parquet backend.
     """
-
-    HF_REPO = REPO
-    SOURCE_REVISION = REVISION
-    SOURCE_FILES = {"questions": QA_CSV, "series": f"{SERIES_DIR}/*.parquet"}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Create a Record for each metric and a series task for each question.

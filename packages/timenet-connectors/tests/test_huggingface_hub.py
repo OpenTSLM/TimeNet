@@ -4,8 +4,8 @@ import asyncio
 from fnmatch import fnmatchcase
 from pathlib import Path
 import sys
+import types
 from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
 
@@ -18,11 +18,12 @@ from timenet_connectors.sources.huggingface_hub import hub_snapshot
 _SHA = "0" * 40
 
 
-class _Pinned(BaseHuggingFaceConnector):
-    HF_REPO = "org/repo"
-    SOURCE_REVISION = _SHA
-    SOURCE_FILES: ClassVar = {"train": "data/train.jsonl", "test": "data/test.jsonl"}
-
+class _Pinned(
+    BaseHuggingFaceConnector,
+    hf_repo="org/repo",
+    source_revision=_SHA,
+    source_files={"train": "data/train.jsonl", "test": "data/test.jsonl"},
+):
     def convert(self, raw_refs):
         return raw_refs
 
@@ -126,22 +127,36 @@ def test_missing_hub_library_states_the_fix(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("revision", ["main", "refs/convert/parquet", "A" * 40, "0" * 39])
 def test_subclass_rejects_mutable_or_malformed_revisions(revision):
-    with pytest.raises(TimeFValidationError, match=r"SOURCE_REVISION must be a 40-character commit"):
-        type("_Branch", (_Pinned,), {"SOURCE_REVISION": revision})
+    with pytest.raises(TimeFValidationError, match=r"source_revision must be a 40-character commit"):
+        types.new_class("_Branch", (_Pinned,), {"source_revision": revision})
 
 
 @pytest.mark.parametrize(
-    ("attr", "value"),
-    [("SOURCE_REVISION", None), ("SOURCE_FILES", None), ("SOURCE_FILES", {})],
+    ("keyword", "value"),
+    [("hf_repo", None), ("source_revision", None), ("source_files", None), ("source_files", {})],
 )
-def test_subclass_rejects_a_missing_or_empty_declaration(attr, value):
-    attrs = {"HF_REPO": "org/repo", "SOURCE_REVISION": _SHA, "SOURCE_FILES": {"a": "a.jsonl"}}
+def test_subclass_rejects_a_missing_or_empty_keyword(keyword, value):
+    keywords = {"hf_repo": "org/repo", "source_revision": _SHA, "source_files": {"a": "a.jsonl"}}
     if value is None:
-        del attrs[attr]
+        del keywords[keyword]
     else:
-        attrs[attr] = value
-    with pytest.raises(TimeFValidationError, match=attr):
-        type("_Invalid", (BaseHuggingFaceConnector,), attrs)
+        keywords[keyword] = value
+    with pytest.raises(TimeFValidationError, match=keyword):
+        types.new_class("_Invalid", (BaseHuggingFaceConnector,), keywords)
+
+
+def test_subclass_stores_the_keywords_and_inherits_them():
+    assert _Pinned.HF_REPO == "org/repo"
+    assert _Pinned.SOURCE_REVISION == _SHA
+    assert dict(_Pinned.SOURCE_FILES) == {"train": "data/train.jsonl", "test": "data/test.jsonl"}
+    with pytest.raises(TypeError):
+        _Pinned.SOURCE_FILES["dev"] = "data/dev.jsonl"  # ty: ignore[invalid-assignment]
+    child = type("_Child", (_Pinned,), {})
+    assert (child.HF_REPO, child.SOURCE_REVISION, child.SOURCE_FILES) == (
+        _Pinned.HF_REPO,
+        _Pinned.SOURCE_REVISION,
+        _Pinned.SOURCE_FILES,
+    )
 
 
 @pytest.mark.parametrize(
@@ -185,11 +200,12 @@ def test_snapshot_downloads_the_matching_files_and_returns_the_snapshot_root(mon
     assert calls[0][1]["allow_patterns"] == ["data/*.parquet"]
 
 
-class _Patterned(BaseHuggingFaceConnector):
-    HF_REPO = "org/repo"
-    SOURCE_REVISION = _SHA
-    SOURCE_FILES: ClassVar = {"questions": "qa.csv", "series": "data/*.parquet"}
-
+class _Patterned(
+    BaseHuggingFaceConnector,
+    hf_repo="org/repo",
+    source_revision=_SHA,
+    source_files={"questions": "qa.csv", "series": "data/*.parquet"},
+):
     def convert(self, raw_refs):
         return raw_refs
 

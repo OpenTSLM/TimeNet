@@ -36,13 +36,15 @@ def _create_chart_record(path: Path) -> Record:
     )
 
 
-class ARFBenchChartsConnector(BaseHuggingFaceConnector):
+class ARFBenchChartsConnector(
+    BaseHuggingFaceConnector,
+    hf_repo=REPO,
+    source_revision=REVISION,
+    source_files={"questions": QA_CSV, "charts": f"{CHART_DIR}/*.png"},
+):
     """Connector for the ARFBench charts (Hub repo ``Datadog/ARFBench``)."""
 
     values_backend = ValuesBackend.ZARR  # the chart tensors need the Zarr backend
-    HF_REPO = REPO
-    SOURCE_REVISION = REVISION
-    SOURCE_FILES = {"questions": QA_CSV, "charts": f"{CHART_DIR}/*.png"}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Create a Record for each chart and a chart task for each question.

@@ -252,20 +252,25 @@ def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[tuple[str, int],
             )
 
 
-class SensorCapsConnector(BaseHuggingFaceConnector):
+# Pinned inventory of the original captioning files.
+_SOURCE_ROWS = {
+    "hhar_v2": 9166,
+    "motion_v2": 4534,
+    "pamap2_v2": 9672,
+    "shoaib_v2": 10500,
+    "uci_v2": 2088,
+}
+
+
+class SensorCapsConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="BASH-Lab/SensorCaps",
+    source_revision="4242e07feaacb0ee3aff86182a62914fa7abacef",
+    source_files={partition: f"data/{partition}-00000-of-00001.jsonl" for partition in _SOURCE_ROWS},
+):
     """Build SensorCaps with in-memory signals and streamed captions."""
 
-    HF_REPO = "BASH-Lab/SensorCaps"
-    SOURCE_REVISION = "4242e07feaacb0ee3aff86182a62914fa7abacef"
-    # Pinned inventory of the original captioning files.
-    SOURCE_ROWS: ClassVar[Mapping[str, int]] = {
-        "hhar_v2": 9166,
-        "motion_v2": 4534,
-        "pamap2_v2": 9672,
-        "shoaib_v2": 10500,
-        "uci_v2": 2088,
-    }
-    SOURCE_FILES = {partition: f"data/{partition}-00000-of-00001.jsonl" for partition in SOURCE_ROWS}
+    SOURCE_ROWS: ClassVar[Mapping[str, int]] = _SOURCE_ROWS
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Index local rows into six-channel Records and a re-iterable caption stream.

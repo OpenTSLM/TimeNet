@@ -71,11 +71,14 @@ tags:
 
 ### `BaseHuggingFaceConnector` (`bases/huggingface.py`)
 `BaseHuggingFaceConnector(BaseConnector[HubFileRef])` downloads files from a Hub dataset at a pinned
-commit. Set:
+commit. Pass these class keywords:
 
-- `HF_REPO`: the Hub repo id.
-- `SOURCE_REVISION`: a 40-character commit, not a branch, so every rebuild reads the same files.
-- `SOURCE_FILES`: part name -> file path in the repo.
+- `hf_repo`: the Hub repo id.
+- `source_revision`: a 40-character commit, not a branch, so every rebuild reads the same files.
+- `source_files`: part name -> file path in the repo.
+
+The base stores them as `HF_REPO`, `SOURCE_REVISION`, and `SOURCE_FILES`. A missing keyword or a
+bad revision fails when Python defines the class.
 
 The base fills `source_url` and `source_revision` in the dataset metadata from `HF_REPO` and
 `SOURCE_REVISION`. The card can omit both fields. Keep `source_url` in the card. The docs catalog,
@@ -204,13 +207,14 @@ class TSQARow(DataRow):
     answer: str = Field(alias="Answer")
 
 
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
-
-    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
+class TSQAConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="ChengsenWang/TSQA",  # the external Hub repo id (keeps its own casing)
     # The commit refs/convert/parquet pointed to: the Hub's parquet conversion of the CSV.
-    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
-    SOURCE_FILES = {"train": "default/train/0000.parquet"}
+    source_revision="22518209e3ee6302be4b4957f2692b3e8de849c3",
+    source_files={"train": "default/train/0000.parquet"},
+):
+    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Build one record per row: the parsed series plus its question-and-answer task.

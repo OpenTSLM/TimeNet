@@ -738,12 +738,13 @@ def _task(
     )
 
 
-class TSAQAConnector(BaseHuggingFaceConnector):
+class TSAQAConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="TSAQA/TSAQA-Benchmark",
+    source_revision="883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
+    source_files={split.value: split.filename for split in _SplitFile},
+):
     """Build TSAQA from the pinned train, val and test parquet files of its Hugging Face release."""
-
-    HF_REPO = "TSAQA/TSAQA-Benchmark"
-    SOURCE_REVISION = "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd"
-    SOURCE_FILES = {split.value: split.filename for split in _SplitFile}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Convert each split file into lazy Records and a stream of one task per row.

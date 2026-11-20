@@ -35,14 +35,15 @@ class _SourceRow(DataRow):
     series: str = Field(alias="Series")
 
 
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
-
-    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
+class TSQAConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="ChengsenWang/TSQA",  # the external Hub repo id (keeps its own casing)
     # The commit refs/convert/parquet pointed to when this was pinned. The Hub rewrites that ref
     # whenever it reconverts the dataset, so a rebuild reads this commit instead of the ref.
-    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
-    SOURCE_FILES = {"train": "default/train/0000.parquet"}
+    source_revision="22518209e3ee6302be4b4957f2692b3e8de849c3",
+    source_files={"train": "default/train/0000.parquet"},
+):
+    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     def __init__(self) -> None:
         super().__init__()
