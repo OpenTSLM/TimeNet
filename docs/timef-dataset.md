@@ -234,8 +234,9 @@ returns.
 
 Annotation content is immutable and reusable. Every call to `annotate()` and every constructor creates
 a separate occurrence, so a long payload can be stored once while its occurrences carry independent
-placement, confidence, and provenance. `Annotation` is final: reuse content through a constant, or a builder function for
-content that varies, as [Annotations](data-model/annotations.md#reuse-content) shows.
+placement, confidence, and provenance. `Annotation` is final: reuse content through a constant, or a
+builder function for content that varies, as [Annotations](data-model/annotations.md#reuse-content)
+shows.
 
 ```python
 from timenet.dataset import Record
