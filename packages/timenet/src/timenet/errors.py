@@ -161,11 +161,8 @@ class TimeNetAccessError(TimeNetError):
 
     Attributes:
         dataset: The release.
-        access: Its effective access level: the strictest level of its card and of the cards in its
-            lineage. See :func:`~timenet.types.access.effective_access`.
-        requirements: Each card, of the release itself or of an ancestor, whose access is not open,
-            with its access level and its ``access_url``. A user needs access at each of them. See
-            :func:`~timenet.types.access.access_requirements`.
+        access: The access level of the card that the registry lists for the dataset.
+        requirements: That card with its access level and its ``access_url``, if it has an ``access_url``.
     """
 
     def __init__(self, dataset: "DatasetRef", access: "Access", requirements: "tuple[AccessRequirement, ...]") -> None:

@@ -69,15 +69,13 @@ class NotServed:
 
     Attributes:
         version: The exact version that the source lists.
-        access: The strictest access level of the release's card and the cards in its lineage.
-        requirements: Each card that is not open access, with its access level and access page.
-        manifest: The release manifest, or ``None``.
+        access: The access level of the card that the source lists.
+        requirements: The card that is not open access, with its access level and access page.
     """
 
     version: Version
     access: Access
     requirements: tuple[AccessRequirement, ...]
-    manifest: "Manifest | None" = field(default=None, compare=False, repr=False)
 
     def access_error(self, dataset_id: str) -> TimeNetAccessError:
         """Create an error with the release's access requirements.

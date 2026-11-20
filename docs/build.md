@@ -107,9 +107,7 @@ to such a registry, build it locally and publish it with `timenet.publish()`.
 come from (see [Prepare parent releases](#prepare-parent-releases)). The order of the list is the
 read order: a release that two sources hold comes from the first one.
 
-`force=True` builds the release again, even if the local registry holds it. With
-`open_access_only=True`, the build refuses a release without open access with
-`TimeNetAccessError` before any step runs.
+`force=True` builds the release again, even if the local registry holds it.
 
 ```python
 import timenet
@@ -133,8 +131,8 @@ nothing.
 
 A remote registry service decides which releases it accepts. The hosted registry accepts only
 releases with access declared `open`. If the service refuses a release, `timenet.publish()` raises
-`TimeNetRegistryError` with the reason that the service gives. An `s3://` registry has no service,
-so `publish()` checks the card and the lineage of each release itself before it copies anything.
+`TimeNetRegistryError` with the reason that the service gives. An `s3://` registry has no service.
+The owner of the bucket decides through the bucket permissions who can publish to it.
 
 ## Clean code provenance for remote registries
 

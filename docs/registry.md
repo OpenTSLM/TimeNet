@@ -88,7 +88,6 @@ Every backend implements this contract.
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version. Raises `TimeNetManifestError` if the stored manifest is not valid, `TimeFFormatVersionError` if it has an unsupported older or newer TimeF format, or `TimeFFormatError` if its own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
 | `location` | Where the registry is: the base URL of a remote registry, the `s3://bucket/prefix` root of an S3 registry, or the resolved root directory of a local registry. Each backend must define it. |
-| `requires_open_access` | Whether the registry holds and serves only releases with open access. `False` for `LocalRegistry` and `RemoteRegistry`. `S3Registry` keeps `True`, because a bucket has no service that checks access. |
 | `find_manifest(release)` | The manifest of an exact release, or `None` if the registry does not hold it. Raises `TimeFFormatError` if the stored manifest names another release. |
 | `download_release(reference, directory, *, force=False, manifest=None, progress_cb=None)` | Download the files of one release, without its payload sources, into a local directory. A failed download leaves no partial copy, and it keeps the copy that was there before. |
 | `open_release(reference, *, manifest=None)` | A `DatasetVersion` of one exact release without its payload sources: the parsed manifest and a handle to the files. Pass `manifest` if you already read it from this registry. A local registry raises `TimeNetFileError` for a missing or resized file. |
@@ -154,19 +153,18 @@ A source gives one of these answers:
 | `FoundInRegistry(version, registry)` | The registry serves the release. |
 | `FoundInConnector(builder)` | An installed connector builds the release. `version` is the version that its card declares. |
 | `NotFound()` | The source does not know the release. |
-| `NotServed(version, access, requirements)` | The source lists the release, but does not serve its files. `access` is the effective access of the release, and `requirements` names each card that is not open, with its access page. `access_error(dataset_id)` returns the `TimeNetAccessError` that names each page. |
+| `NotServed(version, access, requirements)` | The source lists the release, but does not serve its files to this caller. `access` is the access level of the card that the source lists, and `requirements` names that card with its access page. `access_error(dataset_id)` returns the `TimeNetAccessError` that names the page. |
 
-The type `Found` covers `FoundInRegistry` and `FoundInConnector`. `FoundInRegistry` and
-`NotServed` also carry the `manifest` that the source read, or `None`, so that you do not need to
-fetch it again. The `manifest` of `NotServed` is `None` if a service refused the release.
+The type `Found` covers `FoundInRegistry` and `FoundInConnector`. `FoundInRegistry` also carries
+the `manifest` that the source read, or `None`, so that you do not need to fetch it again.
 
-A `LocalRegistry` serves every release that it holds, so it never answers `NotServed`. A
+A registry does not check the access level of a release. A `LocalRegistry` and an `S3Registry`
+serve every release that they hold, so they never answer `NotServed`. For an `S3Registry`, the
+owner of the bucket decides through the bucket permissions who can read and write releases. A
 `RemoteRegistry` asks its service. The service decides which releases a caller can read, and a
 refusal becomes `NotServed` with the access level and the access page of the card. The service
 lists the card of the latest version only, so they come from that card. If that card is open,
-`resolve()` raises `TimeNetRegistryError` with the reason that the service gives. An `S3Registry`
-serves the files of a release only if its effective access is `open`, and answers `NotServed`
-otherwise.
+`resolve()` raises `TimeNetRegistryError` with the reason that the service gives.
 
 `InstalledConnectors()` answers `Found` only for the version that the card of a connector declares,
 because a connector builds only that version. For any other request, it answers `NotFound`.

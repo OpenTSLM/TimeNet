@@ -122,7 +122,7 @@ def _walk(
     Raises:
         TimeNetDatasetNotFoundError: If no source provides the release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by raise_not_found
-    graph = _Graph(target_registry, sources, open_only=False)
+    graph = _Graph(target_registry, sources)
     answer = graph.lookups.resolve(sources, dataset_id, version)
     if isinstance(answer, NotFound):
         if not is_latest(version):

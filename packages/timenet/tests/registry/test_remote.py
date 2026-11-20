@@ -631,9 +631,6 @@ def test_a_remote_registry_answers_not_served_for_a_release_that_the_service_ref
     answer = remote.resolve(dataset_id, None)
 
     assert answer == NotServed(Version(1, 0, 0), Access.CREDENTIALED, (requirement,))
-    # The service does not hand out the manifest of a release that it refuses.
-    assert isinstance(answer, NotServed)
-    assert answer.manifest is None
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     # A local registry serves every release that it holds.
     local = LocalRegistry(tmp_path / "origin")

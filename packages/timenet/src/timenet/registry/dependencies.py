@@ -26,7 +26,6 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
 from timenet.registry.version import DatasetVersion
-from timenet.types.access import Access, effective_access
 from timenet.types.reference_keys import SourceKey
 from timenet.types.references import DatasetRef
 
@@ -158,7 +157,6 @@ class CopySources:
 def find_payload_sources(
     release: DatasetRef,
     manifest: Manifest,
-    registry: "BaseRegistry",
     *,
     find: Callable[[DatasetRef], Manifest | None],
     held: Callable[[DatasetRef], Manifest | None],
@@ -170,8 +168,7 @@ def find_payload_sources(
     Args:
         release: The release to copy.
         manifest: The manifest of ``release``.
-        registry: The registry to copy from.
-        find: Return the manifest of a release in ``registry``, or ``None`` if it lacks the release.
+        find: Return the manifest of a release that the registry to copy from serves, or ``None``.
         held: Return the manifest of a complete copy in the destination, or ``None``.
 
     Returns:
@@ -184,7 +181,7 @@ def find_payload_sources(
     for pinned in manifest.payload_sources.values():
         source = pinned.release
         found = find(source)
-        if found is not None and _serves(registry, found):
+        if found is not None:
             sources.fetched[source] = found
         elif (found := held(source)) is not None:
             sources.held[source] = found
@@ -193,22 +190,6 @@ def find_payload_sources(
             continue
         check_pins(release, pinned, found)
     return sources
-
-
-def _serves(registry: "BaseRegistry", manifest: Manifest) -> bool:
-    """Check whether a registry serves the files of a release that it holds.
-
-    A registry that requires open access serves a release only if its card and each card in its lineage are open.
-
-    Args:
-        registry: The registry that holds the release.
-        manifest: The manifest of the release in ``registry``.
-
-    Returns:
-        ``True`` if the registry serves the files.
-    """
-    open_access = effective_access(manifest.metadata, manifest.lineage) is Access.OPEN
-    return open_access or not registry.requires_open_access
 
 
 def check_pins(release: DatasetRef, pinned: PayloadSource, manifest: Manifest) -> None:

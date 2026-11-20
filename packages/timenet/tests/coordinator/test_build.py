@@ -8,7 +8,7 @@ from timenet.builders import BuildOptions
 from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.coordinator.plan import BuildStep, CopyStep, Plan
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetAccessError, TimeNetRegistryError, TimeNetVersionUnavailableError
+from timenet.errors import TimeNetRegistryError, TimeNetVersionUnavailableError
 from timenet.progress import BytesMoved, StepFinished, StepStarted
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry, open_local_version
@@ -274,54 +274,6 @@ def test_a_damaged_copy_of_the_requested_release_gets_a_forced_build(target_regi
     run_plan(plan, target_registry)
     assert fake.calls == [(REF_AB, True, {})]
     assert target_registry.damage(REF_AB) is None
-
-
-def test_plan_release_build_with_open_access_only_refuses_a_credentialed_card(target_registry, backends):
-    fake_credentialed = _Backend(_card(REF_AB, **_GATED))
-    backends.append(fake_credentialed)
-
-    with pytest.raises(TimeNetAccessError) as caught:
-        plan_release_build("a/b", target_registry=target_registry, open_access_only=True)
-
-    assert caught.value.dataset == REF_AB
-    # Without the flag, the target registry takes a release that is not open.
-    run_plan(plan_release_build("a/b", target_registry=target_registry), target_registry)
-    assert fake_credentialed.calls == [(REF_AB, False, {})]
-
-
-def test_plan_release_build_with_open_access_only_refuses_a_held_release_with_a_credentialed_ancestor(
-    target_registry, backends
-):
-    # The card of the child is open. The child keeps a Record of the open release a/b, which the target registry
-    # lacks. It reads nothing from the credentialed parent, which is only in its lineage.
-    child_card = _card(CHILD_REF, parents={ParentAlias("parent"): PARENT_REF, ParentAlias("open"): REF_AB})
-    other, child = _Backend(_card(REF_AB)), _Backend(child_card)
-    backends.extend([other, child])
-    target_registry.put_dataset(_demo(make_dataset().metadata.model_copy(update=_GATED)))
-    target_registry.put_dataset(_demo(_card(REF_AB)))
-    dataset = TimeFDataset(metadata=child_card)
-    with (
-        TimeFReader(open_local_version(release_dir(target_registry.root, PARENT_REF))) as gated_reader,
-        TimeFReader(open_local_version(release_dir(target_registry.root, REF_AB))) as open_reader,
-    ):
-        dataset.import_from(gated_reader, alias=ParentAlias("parent"))
-        dataset.import_from(open_reader, alias=ParentAlias("open"), records=[make_dataset().records[0].id])
-    target_registry.put_dataset(dataset)
-    shutil.rmtree(target_registry.root / PARENT_REF.dataset_id)
-    shutil.rmtree(release_dir(target_registry.root, REF_AB))
-    held = target_registry.get_manifest(CHILD_REF.dataset_id)
-    assert [card.source for card in held.lineage] == [PARENT_REF, REF_AB]
-    assert list(held.payload_sources) == [SourceKey(str(REF_AB))]
-
-    with pytest.raises(TimeNetAccessError) as caught:
-        plan_release_build(
-            CHILD_REF.dataset_id,
-            target_registry=target_registry,
-            parents_from=[InstalledConnectors()],
-            open_access_only=True,
-        )
-
-    assert caught.value.dataset == CHILD_REF
 
 
 def test_a_plan_runs_only_through_run_plan(target_registry, fake_parent, fake_child):

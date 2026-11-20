@@ -65,11 +65,6 @@ class RemoteRegistry(LazyReadRegistry):
         """The registry service's base URL."""
         return self._base_url
 
-    @property
-    def requires_open_access(self) -> bool:
-        """Always ``False``. The service decides which releases it serves and accepts."""
-        return False
-
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
@@ -128,15 +123,13 @@ class RemoteRegistry(LazyReadRegistry):
     def resolve(self, dataset_id: str, version: Version | None) -> ReleaseLookup:
         """Check whether the service serves a dataset release to this caller.
 
-        The service decides. The registry does not check the access level of the release.
-
         Args:
             dataset_id: The dataset ID.
             version: An exact version, or ``None`` for the latest version.
 
         Returns:
             ``FoundInRegistry`` if served, ``NotFound`` if absent, or ``NotServed`` if the service refuses this
-            caller. ``NotServed`` has no manifest, because the service does not hand it out.
+            caller.
         """
         try:
             return super().resolve(dataset_id, version)

@@ -32,11 +32,10 @@ from timenet.provenance import TimeNetSnapshot
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, WritableRegistry, open_local_version
 from timenet.registry._paths import release_dir
-from timenet.sources import InstalledConnectors
+from timenet.sources import InstalledConnectors, NotServed
 from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, TimeSeriesSpec, ureg
-from timenet.types.access import AccessRequirement
-from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.access import AccessRequirement, access_requirements
 from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
@@ -434,7 +433,10 @@ def test_a_damaged_parent_is_copied_again_but_never_built_over(tmp_path, monkeyp
 
 
 class _Hosted(WritableRegistry):
-    """A registry that is not local, over a local directory."""
+    """A registry that is not local, over a local directory.
+
+    Like a registry service for an anonymous caller, it lists a release whose card is not open without serving it.
+    """
 
     def __init__(self, root):
         self._local = LocalRegistry(root)
@@ -451,7 +453,18 @@ class _Hosted(WritableRegistry):
         return self._local.list_datasets()
 
     def get_manifest(self, dataset_id, version=None):
-        return self._local.get_manifest(dataset_id, version)
+        manifest = self._local.get_manifest(dataset_id, version)
+        card = manifest.metadata
+        if card.access is not Access.OPEN:
+            release = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
+            raise TimeNetAccessError(release, card.access, access_requirements(card))
+        return manifest
+
+    def resolve(self, dataset_id, version):
+        try:
+            return super().resolve(dataset_id, version)
+        except TimeNetAccessError as error:
+            return NotServed(error.dataset.version, error.access, error.requirements)
 
     def open_file(self, dataset_id, version, relpath):
         return self._local.open_file(dataset_id, version, relpath)
@@ -467,35 +480,6 @@ class _Hosted(WritableRegistry):
 
 
 _GATED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
-
-
-def test_open_access_only_refuses_a_parent_to_build_whose_card_is_not_open(tmp_path, monkeypatch):
-    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    cards[PARENT.dataset_id] = cards[PARENT.dataset_id].model_copy(update=_GATED)
-    target_registry = LocalRegistry(tmp_path / "store")
-
-    with pytest.raises(TimeNetAccessError) as caught:
-        _parent_steps(CHILD.dataset_id, target_registry, parents_from=[InstalledConnectors()], open_access_only=True)
-
-    error = caught.value
-    requirement = AccessRequirement(PARENT, Access.CREDENTIALED, _GATED["access_url"])
-    assert (error.dataset, error.access, error.requirements) == (PARENT, Access.CREDENTIALED, (requirement,))
-
-
-def test_open_access_only_names_the_access_page_of_a_held_parent_from_its_lineage(tmp_path, monkeypatch):
-    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    target_registry = LocalRegistry(tmp_path / "store")
-    # The card of the held parent stays open. Its lineage holds GRAND, which is credentialed.
-    held = TimeFDataset(metadata=cards[PARENT.dataset_id])
-    grand = make_dataset().metadata.model_copy(update=_GATED)
-    held._import_state.lineage[str(GRAND)] = ParentDatasetCard(metadata=grand)
-    target_registry.put_dataset(held)
-
-    with pytest.raises(TimeNetAccessError) as caught:
-        _parent_steps(CHILD.dataset_id, target_registry, parents_from=[InstalledConnectors()], open_access_only=True)
-
-    assert (caught.value.dataset, caught.value.access) == (PARENT, Access.CREDENTIALED)
-    assert caught.value.requirements == (AccessRequirement(GRAND, Access.CREDENTIALED, _GATED["access_url"]),)
 
 
 def _store_from_card(dataset_id: str, root: Path, *, force: bool) -> Path:
@@ -620,7 +604,7 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
     assert local_registry.exists(GRAND.dataset_id, str(GRAND.version))
 
 
-@pytest.mark.parametrize("case", ["missing", "missing-buildable", "damaged", "not-open", "not-served"])
+@pytest.mark.parametrize("case", ["missing", "missing-buildable", "damaged", "not-served"])
 def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
@@ -636,10 +620,6 @@ def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
         local_registry.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
         (release_dir(local_registry.root, PARENT) / "control.duckdb").write_bytes(b"cut short")
         options = ["--remote-registry", str(tmp_path / "remote registry")]
-    if case == "not-open":
-        cards[CHILD.dataset_id] = cards[CHILD.dataset_id].model_copy(update=_GATED)
-        monkeypatch.setattr(hints_module, "open_registry", lambda url, **_: _Hosted(tmp_path / "hosted"))
-        options = ["--publish-to", "s3://bucket/registry"]
     if case == "not-served":
         # The remote registry lists the parent without serving its files, and the list has no connectors.
         hosted = _Hosted(tmp_path / "hosted")
@@ -662,11 +642,6 @@ def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
         ),
         # No registry provides the parent, so the hint names no download.
         "damaged": (TimeNetFileError, f"Build it again with `timenet-build build test/parent{flags} --force`."),
-        "not-open": (
-            TimeNetAccessError,
-            "_Hosted serves open releases only, so --publish-to takes open releases only. "
-            "Build it into the local registry without --publish-to instead.",
-        ),
         "not-served": (TimeNetAccessError, "Build it locally from its installed connector with --auto-build."),
     }
     error, hint = hints[case]
@@ -690,25 +665,6 @@ def _publish_to(tmp_path, monkeypatch, cards) -> tuple[_Hosted, LocalRegistry, l
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
     return remote, LocalRegistry(tmp_path / "store"), calls
-
-
-@pytest.mark.parametrize("gated", ["child", "parent"])
-def test_publish_to_refuses_a_credentialed_release_before_any_download(tmp_path, monkeypatch, gated):
-    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    gated_ref = CHILD if gated == "child" else PARENT
-    cards[gated_ref.dataset_id] = cards[gated_ref.dataset_id].model_copy(update=_GATED)
-    origin = LocalRegistry(tmp_path / "origin")
-    origin.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
-    _, local_registry, calls = _publish_to(tmp_path, monkeypatch, cards)
-    command = ["build", CHILD.dataset_id, "--publish-to", "s3://bucket/registry"]
-
-    result = runner.invoke(app, [*command, "--remote-registry", str(origin.root), "--no-auto-build"])
-
-    # The build into the local registry gets the access checks of the destination.
-    assert isinstance(result.exception, TimeNetAccessError), result.output
-    assert result.exception.dataset == gated_ref
-    assert calls == []
-    assert not local_registry.exists(PARENT.dataset_id, str(PARENT.version))
 
 
 def test_publish_to_builds_into_the_local_registry_and_publishes(tmp_path, monkeypatch):

@@ -15,19 +15,11 @@ import httpx
 
 from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
-from timenet.registry import LocalRegistry, RemoteRegistry
+from timenet.registry import LocalRegistry
 from timenet.types import Access
 
 
 _GATED = {"detail": "dataset is gated; a token grant is required"}
-
-
-class OpenOnlyRemoteRegistry(RemoteRegistry):
-    """A remote registry that keeps the client rule of a registry without a service, such as ``S3Registry``."""
-
-    @property
-    def requires_open_access(self) -> bool:
-        return True
 
 
 def _summary(manifest: Manifest) -> dict:

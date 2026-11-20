@@ -21,9 +21,8 @@ from timenet.registry._paths import safe_version_path
 from timenet.registry.dependencies import validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
-from timenet.sources import FoundInRegistry, NotFound, NotServed, ReleaseLookup
-from timenet.types import Access, DatasetFilter, DatasetMetadata, ListedRelease, Version
-from timenet.types.access import access_requirements, effective_access
+from timenet.sources import FoundInRegistry, NotFound, ReleaseLookup
+from timenet.types import DatasetFilter, DatasetMetadata, ListedRelease, Version
 from timenet.types.references import DatasetRef
 
 
@@ -69,11 +68,6 @@ class BaseRegistry(ABC):
             raise TimeNetRegistryError(
                 f"{self} has read_only=True, so it refuses {write}. Open it without read_only=True to write to it."
             )
-
-    @property
-    def requires_open_access(self) -> bool:
-        """Whether stored or served releases must declare open access."""
-        return True
 
     @abstractmethod
     def list_datasets(self) -> list[DatasetMetadata]:
@@ -156,25 +150,20 @@ class BaseRegistry(ABC):
     def resolve(self, dataset_id: str, version: Version | None) -> ReleaseLookup:
         """Check whether the registry serves a dataset release.
 
-        If :attr:`requires_open_access` is true, the registry serves a release only if its card and each card in its
-        lineage declare open access. A ``RemoteRegistry`` leaves this decision to its service.
+        The registry does not check the access level of the release.
 
         Args:
             dataset_id: The dataset ID.
             version: An exact version, or ``None`` for the latest version.
 
         Returns:
-            ``FoundInRegistry`` if served, ``NotServed`` if access is restricted, or ``NotFound`` if absent.
+            ``FoundInRegistry`` if served, or ``NotFound`` if absent.
         """
         try:
             manifest = self.get_manifest(dataset_id, None if version is None else str(version))
         except TimeNetDatasetNotFoundError:
             return NotFound()
-        held = manifest.metadata.dataset_version
-        access = effective_access(manifest.metadata, manifest.lineage)
-        if access is Access.OPEN or not self.requires_open_access:
-            return FoundInRegistry(held, self, manifest)
-        return NotServed(held, access, access_requirements(manifest.metadata, manifest.lineage), manifest)
+        return FoundInRegistry(manifest.metadata.dataset_version, self, manifest)
 
     def download_release(
         self,

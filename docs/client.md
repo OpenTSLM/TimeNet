@@ -145,13 +145,11 @@ nothing.
 | `get_manifest(dataset_id, version=None)` | The [manifest](manifest.md) of the release. |
 | `get_card(dataset_id, version=None)` | The card of the release. |
 
-`get_manifest()` reads only the manifest, and checks no other file. A registry can list a
-release without serving its files. An `s3://` registry hands out the manifest of such a release.
-Then `get_manifest()` returns the listed manifest, which shows the access level and the access page
-of each card. A remote service can refuse the release, for example a credentialed release on the
-hosted registry. Then `get_manifest()` raises `TimeNetAccessError` with the access page. A release
-gets its manifest when it is built. So for a release that only
-`InstalledConnectors()` provides, `get_manifest()` raises `TimeNetNotBuiltError`.
+`get_manifest()` reads only the manifest, and checks no other file. A registry service can
+refuse the release, for example a credentialed release on the hosted registry. Then
+`get_manifest()` raises `TimeNetAccessError` with the access page. A release gets its manifest when
+it is built. So for a release that only `InstalledConnectors()` provides, `get_manifest()` raises
+`TimeNetNotBuiltError`.
 
 `get_card()` returns the card of the release. The card comes from the manifest, or from the
 installed connector for a release that is not built yet. `TimeNetNotBuiltError` holds the release

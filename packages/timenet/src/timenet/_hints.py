@@ -179,17 +179,6 @@ class HintWording(ABC):
     def run_in_this_interpreter(self) -> str:
         """Return the flag or the variable that builds in this interpreter."""
 
-    @abstractmethod
-    def publish_to_open_only(self, dest: WritableRegistry) -> str | None:
-        """Return the hint for a publish target that serves open releases only, or ``None``.
-
-        Args:
-            dest: The registry that the call publishes to.
-
-        Returns:
-            The hint, or ``None`` if the front end has no such target.
-        """
-
 
 class SdkWording(HintWording):
     """The parts of a hint for the SDK: calls and keywords."""
@@ -236,11 +225,6 @@ class SdkWording(HintWording):
     @override
     def run_in_this_interpreter(self) -> str:
         return "TIMENET_ISOLATION=off"
-
-    @override
-    def publish_to_open_only(self, dest: WritableRegistry) -> str | None:
-        # The SDK names the target of a publish only in publish(), which has a hint of its own.
-        return None
 
 
 @dataclass(frozen=True)
@@ -316,13 +300,6 @@ class CliWording(HintWording):
     @override
     def run_in_this_interpreter(self) -> str:
         return "--no-isolation"
-
-    @override
-    def publish_to_open_only(self, dest: WritableRegistry) -> str | None:
-        return (
-            f"{dest} serves open releases only, so --publish-to takes open releases only. Build it into the local "
-            "registry without --publish-to instead."
-        )
 
     def _flags(self, remote_registry: str | None = None) -> str:
         """Return the registry flags of the command, for a command that it suggests."""
@@ -470,14 +447,7 @@ def _version(error: TimeNetVersionUnavailableError, facts: Facts, wording: HintW
 
 
 def _access(release: DatasetRef, facts: Facts, wording: HintWording) -> str:
-    """Return a hint that names the local build of a release that no source serves, or a registry for it."""
-    dest = facts.dest
-    if dest is not None and dest.requires_open_access:
-        if facts.request is Operation.PUBLISH:
-            return f"{dest} serves open releases only. Publish it to a registry of your own, such as a local directory."
-        refused = wording.publish_to_open_only(dest)
-        if refused is not None:
-            return refused
+    """Return a hint that names the local build of a release that no source serves."""
     build = wording.build(release.dataset_id, facts)
     card = builders.find_card(release.dataset_id)
     if card is None or card.dataset_version != release.version:

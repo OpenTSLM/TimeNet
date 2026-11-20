@@ -1,10 +1,9 @@
 from pathlib import Path
 import re
 import shutil
-from types import SimpleNamespace
 
 from _demo_child import _child_of_the_demo
-from _fake_registry import OpenOnlyRemoteRegistry, build_service_fake
+from _fake_registry import build_service_fake
 from _origin_record import origin_file
 import httpx
 from pydantic import ValidationError
@@ -33,13 +32,12 @@ from timenet.format.stored_values import StoredText
 from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import Loading, LoadPlan, TimeFReader
-from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
+from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, copy_release, open_local_version
 from timenet.registry.origin import OriginKind
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal, install_backends, make_dataset
 from timenet.types import Access, Annotation, AnswerTask, DatasetMetadata, Domain, License, Version
 from timenet.types.access import AccessRequirement
-from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
@@ -525,8 +523,8 @@ def test_get_manifest_of_a_release_that_is_not_built_raises_with_the_card_of_the
     assert not (tmp_path / "store").exists()
 
 
-def test_get_manifest_returns_the_listed_manifest_of_a_release_that_is_not_served(tmp_path):
-    # The open card of test/child reads a credentialed parent, test/a.
+def test_a_payload_source_that_the_service_refuses_comes_from_the_local_registry(tmp_path):
+    # The open card of test/child reads a credentialed parent, test/a. The service refuses test/a.
     hosted = LocalRegistry(tmp_path / "hosted")
     parent = make_dataset(dataset_id="test/a", access=Access.CREDENTIALED, access_url="https://a.example")
     reference = hosted.put_dataset(parent)
@@ -536,20 +534,24 @@ def test_get_manifest_returns_the_listed_manifest_of_a_release_that_is_not_serve
         )
     )
     with TimeNet(sources=[hosted]).open("test/a") as reader:
-        child.import_from(reader)
+        child.import_from(reader, records=[parent.records[0].id])
     hosted.put_dataset(child)
-    transport, _ = build_service_fake(tmp_path / "hosted")
-    remote = OpenOnlyRemoteRegistry("http://api.local", transport=transport)
-    client = TimeNet(sources=[remote])
+    transport, _ = build_service_fake(tmp_path / "hosted", gate=True)
+    remote = RemoteRegistry("http://api.local", transport=transport)
+    store = LocalRegistry(tmp_path / "store")
+    client = TimeNet(sources=[store, remote])
+    requirement = AccessRequirement(reference, Access.CREDENTIALED, "https://a.example")
 
-    manifest = client.get_manifest("test/child")
+    for read in (client.open, client.download):
+        with pytest.raises(TimeNetAccessError) as caught:
+            read("test/child")
+        assert caught.value.requirements == (requirement,)
+    assert not store.exists("test/child", "1.0.0")
 
-    # The hosted registry lists the release without serving its files, so the manifest keeps its access pages.
-    assert [card.metadata.dataset_id for card in manifest.lineage] == ["test/a"]
-    assert manifest.lineage[0].metadata.access_url == "https://a.example"
-    assert client.get_card("test/child") == manifest.metadata
-    with pytest.raises(TimeNetAccessError):
-        client.open("test/child")
+    # The user builds or copies test/a into the local registry. Then the service provides only test/child.
+    copy_release(reference, hosted, store)
+    client.download("test/child")
+    assert store.damage(DatasetRef.parse("test/child@1.0.0")) is None
 
 
 def test_get_card_reads_the_card_from_the_manifest_of_a_registry(tmp_path, monkeypatch):
@@ -1160,14 +1162,13 @@ def _card(dataset_id, access, access_url=None):
     )
 
 
-def _hosted(tmp_path, metadata, lineage=()):
-    """Return a registry that is not local and serves one manifest, so the build-your-own gate applies."""
-
-    class _Hosted(OpenOnlyRemoteRegistry):
-        def get_manifest(self, dataset_id, version=None):
-            return SimpleNamespace(metadata=metadata, lineage=lineage)
-
-    return _Hosted("http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)))
+def _hosted(tmp_path, metadata):
+    """Return a remote registry whose service lists one release and refuses it."""
+    dataset = make_dataset()
+    dataset._metadata = metadata
+    LocalRegistry(tmp_path / "hosted").put_dataset(dataset)
+    transport, _ = build_service_fake(tmp_path / "hosted", gate=True)
+    return RemoteRegistry("http://api.local", transport=transport)
 
 
 @pytest.mark.parametrize(
@@ -1192,27 +1193,16 @@ def test_the_access_hint_names_the_package_that_builds_the_release(tmp_path, mon
     )
 
 
-def test_the_hint_for_a_hosted_child_names_the_access_page_of_each_ancestor(tmp_path, monkeypatch):
-    monkeypatch.setattr(_Builder, "IDS", ("org/child",))
+def test_the_hint_for_a_refused_release_names_the_sources_that_a_local_build_needs(tmp_path, monkeypatch):
+    monkeypatch.setattr(_Builder, "IDS", ("org/gated",))
     install_backends(monkeypatch, _Builder([]))
-    # The card of the child stays open and has no access page. Its parents set the access.
-    parents = (
-        _card("org/a", Access.CREDENTIALED, "https://a.example"),
-        _card("org/b", Access.RESTRICTED, "https://b.example"),
-    )
-    lineage = tuple(ParentDatasetCard(metadata=card) for card in parents)
-    client = TimeNet(sources=[_hosted(tmp_path, _card("org/child", Access.OPEN), lineage)])
+    client = TimeNet(sources=[_hosted(tmp_path, _card("org/gated", Access.RESTRICTED, "https://b.example"))])
 
     with pytest.raises(TimeNetAccessError) as caught:
-        client.open("org/child")
+        client.open("org/gated")
 
-    assert caught.value.requirements == (
-        AccessRequirement(DatasetRef.parse("org/a@1.0.0"), Access.CREDENTIALED, "https://a.example"),
-        AccessRequirement(DatasetRef.parse("org/b@1.0.0"), Access.RESTRICTED, "https://b.example"),
-    )
     assert str(caught.value) == (
-        "org/child@1.0.0 is restricted. "
-        "Get access at https://a.example for org/a@1.0.0 and at https://b.example for org/b@1.0.0. "
+        "org/gated@1.0.0 is restricted. Get access at https://b.example for org/gated@1.0.0. "
         # A client without a store cannot build, so the hint names the store too.
         "Add LocalRegistry(<path>) and InstalledConnectors() to the sources to build it locally."
     )

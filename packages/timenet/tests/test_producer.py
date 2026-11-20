@@ -1,9 +1,8 @@
 import shutil
 import subprocess
 import sys
-from types import SimpleNamespace
 
-from _fake_registry import OpenOnlyRemoteRegistry
+from _fake_registry import build_service_fake
 import httpx
 import pytest
 
@@ -123,17 +122,6 @@ def test_auto_build_false_leaves_the_connectors_out_of_the_default_parents(tmp_p
     monkeypatch.setenv("TIMENET_AUTO_BUILD", "true")
     timenet.build(CHILD.dataset_id, local_registry=store)
     assert [release for release, _ in cards] == [PARENT, CHILD]
-
-
-def test_open_access_only_refuses_a_gated_parent_before_any_step(tmp_path, cards):
-    origin, store = LocalRegistry(tmp_path / "origin"), tmp_path / "store"
-    gated = _card(PARENT, access=Access.CREDENTIALED, access_url="https://physionet.example/dua")
-    origin.put_dataset(_demo(gated))
-
-    with pytest.raises(TimeNetAccessError, match="credentialed"):
-        timenet.build(CHILD.dataset_id, local_registry=store, sources=[origin], open_access_only=True)
-    assert cards == []
-    assert not store.exists()
 
 
 def test_timenet_exports_the_client_and_its_sources():
@@ -281,12 +269,9 @@ def test_publish_of_a_listed_release_that_the_source_does_not_serve_raises_the_a
     card = _card(
         DatasetRef.parse("org/gated@1.0.0"), access=Access.CREDENTIALED, access_url="https://physionet.example/dua"
     )
-
-    class _Hosted(OpenOnlyRemoteRegistry):
-        def get_manifest(self, dataset_id, version=None):
-            return SimpleNamespace(metadata=card, lineage=())
-
-    hosted = _Hosted("http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)))
+    LocalRegistry(tmp_path / "hosted").put_dataset(_demo(card))
+    transport, _ = build_service_fake(tmp_path / "hosted", gate=True)
+    hosted = RemoteRegistry("http://api.local", transport=transport)
     with pytest.raises(TimeNetAccessError) as caught:
         timenet.publish("org/gated", dest=tmp_path / "dest", source=hosted)
     assert caught.value.dataset == DatasetRef.parse("org/gated@1.0.0")

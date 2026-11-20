@@ -10,7 +10,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from _fake_registry import OpenOnlyRemoteRegistry, build_service_fake
+from _fake_registry import build_service_fake
 import numpy as np
 import pytest
 
@@ -145,14 +145,15 @@ def _other_build(dataset_id: str) -> TimeFDataset:
     return dataset
 
 
-def _remote(
-    tmp_path: Path, name: str, *, token: str | None = None, registry_class: type[RemoteRegistry] = RemoteRegistry
-) -> tuple[RemoteRegistry, Path]:
-    """Return a remote registry over the service fake, and the directory that the fake serves."""
+def _remote(tmp_path: Path, name: str, *, token: str | None = None, gate: bool = False) -> tuple[RemoteRegistry, Path]:
+    """Return a remote registry over the service fake, and the directory that the fake serves.
+
+    With ``gate``, the service refuses each release whose card is not open.
+    """
     root = tmp_path / name
     root.mkdir(exist_ok=True)
-    transport, _ = build_service_fake(root, token=token)
-    registry = registry_class(f"http://{name}.local", token=token, transport=transport)
+    transport, _ = build_service_fake(root, token=token, gate=gate)
+    registry = RemoteRegistry(f"http://{name}.local", token=token, transport=transport)
     return registry, root
 
 
@@ -291,18 +292,6 @@ def test_copy_release_refuses_a_payload_source_that_only_dest_holds_with_other_f
         copy_release(child_ref, _without_parent(source), dest)
     assert not dest.exists(*child)
     assert dest.get_manifest(*parent) == before
-
-
-def test_copy_release_checks_the_access_of_a_payload_source_that_only_dest_holds(tmp_path):
-    root = tmp_path / "source"
-    _write_parent_and_child(root, credentialed=parent_ref)
-    dest, dest_root = _remote(tmp_path, "dest", token="tok_rw", registry_class=OpenOnlyRemoteRegistry)
-    # the service holds the parent, whose card declares credentialed access
-    shutil.copytree(root / parent_ref.dataset_id, dest_root / parent_ref.dataset_id)
-    with pytest.raises(TimeNetAccessError) as raised:
-        copy_release(child_ref, _without_parent(LocalRegistry(root)), dest)
-    assert raised.value.dataset == parent_ref
-    assert not dest.exists(*child)
 
 
 def test_copy_release_refuses_a_payload_source_that_no_registry_holds(source, dest):
@@ -516,20 +505,6 @@ def test_a_forced_download_keeps_the_old_copy_if_the_final_rename_fails(remote, 
 
 
 @pytest.mark.parametrize("credentialed", [child_ref, parent_ref], ids=["release", "payload-source"])
-def test_copy_release_refuses_a_release_that_is_not_open_for_a_registry_that_requires_open_access(
-    credentialed, tmp_path
-):
-    root = tmp_path / "source"
-    _write_parent_and_child(root, credentialed=credentialed)
-    dest, _ = _remote(tmp_path, "dest", token="tok_rw", registry_class=OpenOnlyRemoteRegistry)
-    with pytest.raises(TimeNetAccessError) as raised:
-        copy_release(child_ref, LocalRegistry(root), dest)
-    assert raised.value.dataset == credentialed
-    assert not dest.exists(*child)
-    assert not dest.exists(*parent)
-
-
-@pytest.mark.parametrize("credentialed", [child_ref, parent_ref], ids=["release", "payload-source"])
 def test_copy_release_copies_a_release_that_is_not_open_between_local_registries(credentialed, tmp_path):
     root = tmp_path / "source"
     _write_parent_and_child(root, credentialed=credentialed)
@@ -541,15 +516,25 @@ def test_copy_release_copies_a_release_that_is_not_open_between_local_registries
     assert dest.exists(*parent)
 
 
-def test_copy_release_refuses_to_fetch_a_release_that_is_not_open_from_a_registry_that_requires_open_access(tmp_path):
-    remote_source, source_root = _remote(tmp_path, "source", registry_class=OpenOnlyRemoteRegistry)
-    _write_parent_and_child(source_root, credentialed=child_ref)
+@pytest.mark.parametrize("credentialed", [child_ref, parent_ref], ids=["release", "payload-source"])
+def test_copy_release_raises_the_access_error_for_a_release_that_the_source_does_not_serve(credentialed, tmp_path):
+    remote_source, source_root = _remote(tmp_path, "source", gate=True)
+    _write_parent_and_child(source_root, credentialed=credentialed)
     dest = LocalRegistry(tmp_path / "dest")
     with pytest.raises(TimeNetAccessError) as raised:
         copy_release(child_ref, remote_source, dest)
-    assert raised.value.dataset == child_ref
+    assert raised.value.dataset == credentialed
     assert not dest.exists(*child)
-    assert not dest.exists(*parent)  # the open parent is not copied either: every check runs first
+    assert not dest.exists(*parent)  # the other release is not copied either: every check runs first
+
+
+def test_copy_release_takes_a_payload_source_that_the_source_does_not_serve_from_dest(tmp_path):
+    remote_source, source_root = _remote(tmp_path, "source", gate=True)
+    _write_parent_and_child(source_root, credentialed=parent_ref)
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(parent_ref, LocalRegistry(source_root), dest)
+    assert copy_release(child_ref, remote_source, dest) == (child_ref,)
+    assert dest.damage(child_ref) is None
 
 
 @pytest.mark.parametrize("remote", ["dest", "source"])
