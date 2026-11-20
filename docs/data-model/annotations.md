@@ -34,8 +34,8 @@ Signal all take this argument. It is a list, or any other iterable, of `Annotati
 dataset = TimeFDataset(
     metadata=metadata,
     annotations=[
-        Annotation("source_repository", value="org/name"),
-        Annotation("source_revision", value="4f2a9c1"),
+        Annotation("declared_sampling_rate_hz", value=20),
+        Annotation("collection_site", value="clinic-a"),
     ],
 )
 ```
