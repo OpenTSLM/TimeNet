@@ -16,9 +16,9 @@ def test_as_tuple_rejects_a_string_a_mapping_and_a_value_that_is_not_iterable(va
         as_tuple(value)
 
 
-def test_as_tuple_rejects_a_single_item_of_the_item_type_also_when_it_can_be_iterated():
+def test_as_tuple_rejects_a_pydantic_model_although_it_can_be_iterated():
     label = Label(name="yes")
     assert len(tuple(label)) > 0
     with pytest.raises(TimeFValidationError, match="got Label"):
-        as_tuple(label, item_type=Label)
-    assert as_tuple([label], item_type=Label) == (label,)
+        as_tuple(label)
+    assert as_tuple([label]) == (label,)

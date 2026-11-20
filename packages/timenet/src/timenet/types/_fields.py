@@ -3,6 +3,8 @@
 from collections.abc import Callable, Iterable, Mapping
 from typing import Generic, TypeAlias, TypeVar
 
+from pydantic import BaseModel
+
 from timenet.errors import TimeFValidationError
 
 
@@ -11,21 +13,17 @@ _Output = TypeVar("_Output")
 _Item = TypeVar("_Item")
 
 
-def as_tuple(value: Iterable[_Item], item_type: type | None = None) -> tuple[_Item, ...]:
+def as_tuple(value: Iterable[_Item]) -> tuple[_Item, ...]:
     """Convert the input of a collection field to a tuple.
-
-    Args:
-        value: The items.
-        item_type: The type of one item. If given, a single item is rejected, also when it can be iterated.
 
     Returns:
         The items in the order given.
 
     Raises:
-        TimeFValidationError: If ``value`` is a string, a mapping, a single item, or not iterable.
+        TimeFValidationError: If ``value`` is a string, a mapping, a pydantic model, or not iterable.
+            A pydantic model can be iterated, but it is one item, not a collection.
     """
-    single = item_type is not None and isinstance(value, item_type)
-    if single or isinstance(value, (str, Mapping)) or not isinstance(value, Iterable):
+    if isinstance(value, (str, Mapping, BaseModel)) or not isinstance(value, Iterable):
         raise TimeFValidationError(
             f"a collection field takes an iterable of items such as a list or a tuple, got {type(value).__name__}"
         )
