@@ -2,7 +2,8 @@
 
 Subclasses set ``HF_REPO``, ``SOURCE_REVISION``, and ``SOURCE_FILES``, ship a ``dataset.yaml`` card
 beside the connector, and implement ``convert()`` over the :class:`HubFileRef` list ``download()``
-returns. The base checks that list before the subclass's ``convert()`` runs.
+returns. The base checks that list before the subclass's ``convert()`` runs. It also fills
+``source_url`` and ``source_revision`` in the dataset metadata from ``HF_REPO`` and ``SOURCE_REVISION``.
 :mod:`timenet_connectors.sources.huggingface_hub` describes how the files download. For the Hub's
 parquet conversion, pin the commit ``refs/convert/parquet`` points to.
 """
@@ -18,6 +19,7 @@ from typing import Any, ClassVar
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetConnectorError, TimeNetDownloadError
+from timenet.types import DatasetMetadata
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
 
@@ -69,6 +71,30 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
                 return convert(self, raw_refs)
 
             cls.convert = checked
+
+    def metadata(self) -> DatasetMetadata:
+        """Return the card, with ``source_url`` and ``source_revision`` from :attr:`HF_REPO` and :attr:`SOURCE_REVISION`.
+
+        The card can omit both fields. If it sets one, the value must match the connector.
+
+        Returns:
+            The dataset's :class:`~timenet.types.DatasetMetadata`.
+
+        Raises:
+            TimeFValidationError: If the card sets ``source_url`` or ``source_revision`` to another value.
+        """
+        card = super().metadata()
+        source = {
+            "source_url": f"https://huggingface.co/datasets/{self.HF_REPO}",
+            "source_revision": self.SOURCE_REVISION,
+        }
+        for field, value in source.items():
+            declared = getattr(card, field)
+            if declared is not None and declared != value:
+                raise TimeFValidationError(
+                    f"{type(self).__name__} card sets {field} to {declared!r}, but the connector reads {value!r}"
+                )
+        return card.model_copy(update=source)
 
     def check_refs(self, raw_refs: Sequence[HubFileRef]) -> None:
         """Check that ``raw_refs`` is nonempty and names each part once, only parts :attr:`SOURCE_FILES` declares.
