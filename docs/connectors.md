@@ -235,10 +235,11 @@ automatically (needed only for gated or private sources). Downloaded source file
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
 and an `access_url` on its card. The hosted registry does not serve such data to anonymous
 callers, so it is build-your-own: get access at the `access_url`, set the provider credential in
-the environment (the way `HF_TOKEN` already works), and run `timenet-build build <id>` yourself. If no other source of the client provides a
-credentialed dataset, an `open`, `load`, or `download` from a hosted registry raises
-`TimeNetAccessError` instead of serving bytes.
-The error names each `access_url` that the dataset needs, with the release that sets it. A child
+the environment (the way `HF_TOKEN` already works), and run `timenet-build build <id>` yourself.
+If no other source of the client provides a credentialed dataset, an `open`, `load`, or
+`download` from a hosted registry raises `TimeNetAccessError` instead of serving bytes. The error
+names the `access_url` of the card of the dataset. An `s3://` registry has no service, so there
+the error names each `access_url` that the dataset needs, with the release that sets it. A child
 dataset can need the access pages of its ancestors.
 
 ## Downloading artifacts

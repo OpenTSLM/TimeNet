@@ -162,7 +162,9 @@ fetch it again. The `manifest` of `NotServed` is `None` if a service refused the
 
 A `LocalRegistry` serves every release that it holds, so it never answers `NotServed`. A
 `RemoteRegistry` asks its service. The service decides which releases a caller can read, and a
-refusal becomes `NotServed` with the access level and the access page of the card. An `S3Registry`
+refusal becomes `NotServed` with the access level and the access page of the card. The service
+lists the card of the latest version only, so they come from that card. If that card is open,
+`resolve()` raises `TimeNetRegistryError` with the reason that the service gives. An `S3Registry`
 serves the files of a release only if its effective access is `open`, and answers `NotServed`
 otherwise.
 
