@@ -213,7 +213,7 @@ def _store_ptbxl(
         for row in sorted(rows, key=lambda row: int(row["ecg_id"]), reverse=True):
             filename = f"records500/00000/{int(row['ecg_id']):05d}_hr"
             writer.writerow({column: row.get(column, "") for column in _PTBXL_COLUMNS} | {"filename_hr": filename})
-    parent = PtbXlConnector().convert([PtbXlSource(tmp_path, database)])
+    parent = PtbXlConnector().convert(PtbXlSource(tmp_path, database))
     if change is not None:
         ecg_id, key, value = change
         (record,) = (record for record in parent.records if record.metadata["ecg_id"] == ecg_id)
@@ -252,7 +252,7 @@ def _composed(
     _store_ptbxl(tmp_path, records_dir, _PTBXL_ROWS if ptbxl_rows is None else ptbxl_rows, root)
     connector = EcgQaCotConnector()
     with open_parents(connector.metadata(), LocalRegistry(root)) as context:
-        yield connector.compose([_source(tmp_path, split)], context)
+        yield connector.compose(_source(tmp_path, split), context)
 
 
 def test_is_a_connector():
@@ -383,7 +383,7 @@ def test_an_incomplete_ptbxl_record_raises(tmp_path, records_dir, key, message):
         pytest.raises(TimeNetConnectorError, match=f"ecg_id 2: {message}"),
         open_parents(connector.metadata(), LocalRegistry(root)) as context,
     ):
-        connector.compose([_source(tmp_path)], context)
+        connector.compose(_source(tmp_path), context)
 
 
 def test_a_ptbxl_sex_other_than_male_or_female_raises(tmp_path, records_dir):
@@ -396,7 +396,7 @@ def test_a_ptbxl_sex_other_than_male_or_female_raises(tmp_path, records_dir):
         pytest.raises(TimeNetConnectorError, match="ecg_id 2: sex 'unknown' is not male or female"),
         open_parents(connector.metadata(), LocalRegistry(root)) as context,
     ):
-        connector.compose([_source(tmp_path)], context)
+        connector.compose(_source(tmp_path), context)
 
 
 def test_series_values_match_fixture_record(tmp_path, records_dir):

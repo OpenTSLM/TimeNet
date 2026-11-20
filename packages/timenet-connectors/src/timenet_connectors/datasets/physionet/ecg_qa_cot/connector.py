@@ -81,10 +81,9 @@ _SEXES = frozenset({"male", "female"})
 
 @dataclass(frozen=True)
 class EcgQaCotSource:
-    """A lightweight handle to the fetched sources, so ``compose`` streams rather than holding refs.
+    """A lightweight handle to the fetched sources.
 
-    ``download`` returns one of these instead of a row per question, so the ~230k questions are read
-    lazily during ``compose`` and the task stream, never materialized as a list.
+    ``compose`` and the task stream read the ~230k questions lazily. Nothing holds them as a list.
     """
 
     answers_path: Path
@@ -286,7 +285,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         (Split.TEST, "ecg_qa_cot_test.csv"),
     )
 
-    async def download_async(self, cache_dir: Path) -> list[EcgQaCotSource]:
+    async def download_async(self, cache_dir: Path) -> EcgQaCotSource:
         """Fetch the template answers and CoT CSVs and return one lightweight handle.
 
         The template-answers CSV and the CoT archive download concurrently. This method reads no
@@ -296,7 +295,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             cache_dir: The directory that holds downloaded archives.
 
         Returns:
-            A single-element list holding the :class:`EcgQaCotSource` handle.
+            The :class:`EcgQaCotSource` handle.
         """
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
@@ -309,9 +308,9 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         cot_csvs = tuple(
             (split, find_dir_containing(cot_root, csv_name) / csv_name) for split, csv_name in self._COT_CSVS
         )
-        return [EcgQaCotSource(answers_path=answers_path, cot_csvs=cot_csvs)]
+        return EcgQaCotSource(answers_path=answers_path, cot_csvs=cot_csvs)
 
-    def compose(self, raw_refs: list[EcgQaCotSource], context: BuildContext) -> TimeFDataset:
+    def compose(self, source: EcgQaCotSource, context: BuildContext) -> TimeFDataset:
         """Build one record per recording and stream one :class:`AnswerTask` per CoT row.
 
         A first pass over the CoT CSVs collects each recording's split and the distinct question
@@ -321,7 +320,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         themselves stream from :meth:`_iter_tasks`, so the ~230k questions never all live in memory.
 
         Args:
-            raw_refs: The single-element list from :meth:`download`.
+            source: The handle from :meth:`download`.
             context: The opened PTB-XL parent, under the parent alias ``ptbxl``.
 
         Returns:
@@ -332,7 +331,6 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
                 name, or if an imported Record has no patient, age, or sex, or has a sex other than
                 male or female.
         """
-        source = raw_refs[0]
         answers = _load_template_answers(source.answers_path)
         dataset = TimeFDataset(metadata=self.metadata())
 

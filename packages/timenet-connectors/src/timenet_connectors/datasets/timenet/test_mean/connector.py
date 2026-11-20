@@ -40,27 +40,22 @@ _SIGNAL = TimeSeriesSpec(
 class TestMeanConnector(BaseConnector[None]):
     """A deterministic, offline connector for the ``timenet/test-mean`` classification demo.
 
-    Synthetic: :meth:`download` returns no references and :meth:`convert` generates every record directly.
+    Synthetic: :meth:`download` returns nothing and :meth:`convert` generates every record directly.
     """
 
-    # ruff: ignore[unused-method-argument, no-self-use] (synthetic: nothing to download)
-    def download(self, cache_dir: Path) -> list[None]:
-        """Return no references; the data is synthetic and built entirely in :meth:`convert`.
+    def download(self, cache_dir: Path) -> None:
+        """Return nothing; the data is synthetic and built entirely in :meth:`convert`.
 
         Args:
             cache_dir: Unused; nothing is fetched.
-
-        Returns:
-            An empty list.
         """
-        return []
 
     # ruff: ignore[unused-method-argument] (synthetic: nothing to convert)
-    def convert(self, raw_refs: list[None]) -> TimeFDataset:
+    def convert(self, raw: None) -> TimeFDataset:
         """Generate the balanced set of labeled, single-signal records.
 
         Args:
-            raw_refs: Unused; the data is synthetic (``download`` returns nothing).
+            raw: Unused; the data is synthetic (``download`` returns nothing).
 
         Returns:
             The populated dataset: one single-signal series and one ``ClassificationTask`` per record.

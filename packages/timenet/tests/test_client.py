@@ -92,7 +92,7 @@ def test_a_child_reads_its_missing_payload_source_from_a_later_registry(tmp_path
     assert not (cache / reference.dataset_id).exists()
 
 
-class _Resampled(BaseConnector[str]):
+class _Resampled(BaseConnector[list[str]]):
     """Writes the first demo Signal at half its rate, from its declared parent, into a Record of its own."""
 
     def metadata(self):

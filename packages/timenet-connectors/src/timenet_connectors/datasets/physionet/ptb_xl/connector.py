@@ -120,14 +120,14 @@ def _parse_patient_id(cells: dict[str, str]) -> str:
 class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
     """Preserve PTB-XL waveforms and clinical metadata without downstream tasks."""
 
-    async def download_async(self, cache_dir: Path) -> list[PtbXlSource]:  # ruff: ignore[no-self-use]
+    async def download_async(self, cache_dir: Path) -> PtbXlSource:  # ruff: ignore[no-self-use]
         """Return the extracted pinned PTB-XL release."""
         root = find_dir_containing(
             await ensure_archive(PTBXL_ZIP_URL, cache_dir, sha256=PTBXL_ZIP_SHA256), "ptbxl_database.csv"
         )
-        return [PtbXlSource(root, root / "ptbxl_database.csv")]
+        return PtbXlSource(root, root / "ptbxl_database.csv")
 
-    def convert(self, raw_refs: list[PtbXlSource]) -> TimeFDataset:
+    def convert(self, source: PtbXlSource) -> TimeFDataset:
         """Return records without tasks, with lazy WFDB value loaders.
 
         Each record carries its PTB-XL ``ecg_id`` in its metadata. A child dataset selects the
@@ -141,7 +141,6 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                 ``ecg_id``. For a repeated ``ecg_id``, the message also names the earlier row.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        source = raw_refs[0]
         # The CSV row where each ecg_id first appears.
         first_rows: dict[int, int] = {}
         for line, source_row in enumerate(CsvDataReader(source.database_csv, _SourceRow).iter_rows(), 2):
