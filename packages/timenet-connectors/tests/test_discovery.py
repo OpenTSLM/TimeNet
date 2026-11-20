@@ -1,3 +1,4 @@
+from pathlib import Path
 import re
 import sys
 from uuid import uuid4
@@ -5,10 +6,11 @@ from uuid import uuid4
 import pytest
 
 from timenet.errors import ConnectorCardWarning
-from timenet_connectors import discovery
+from timenet_connectors import datasets, discovery
 from timenet_connectors.discovery import (
     available,
     connector_dir,
+    discovered_roots,
     known_ids,
     owning_distribution,
     requirements_for,
@@ -164,6 +166,15 @@ def test_a_registered_root_adds_its_connectors(add_datasets_root):
     assert {"acme/widget", "timenet/hello-world"} <= set(known_ids())
     assert connector_dir("acme/widget") == root / "acme" / "widget"
     assert resolve("acme/widget")().metadata().dataset_id == "acme/widget"
+
+
+def test_discovered_roots_list_the_built_in_root_then_each_registered_root(add_datasets_root):
+    root = add_datasets_root("acme/widget")
+
+    roots = discovered_roots()
+
+    assert roots[0] == Path(datasets.__path__[0])
+    assert root in roots
 
 
 def test_available_walks_a_registered_root(add_datasets_root):

@@ -221,6 +221,11 @@ the same org folder, but a dataset id must be unique. If two packages declare th
 warns and skips that id. An isolated build installs the package that owns the dataset in the build
 environment, pinned to the installed commit, local directory or version.
 
+To run the tests and type check of these connectors, run `timenet-build check <DATASETS_DIR>` from
+the project of that package, with the path of its datasets package. The command runs each connector
+in an environment built from its `requirements.txt`. Without a `DATASETS_DIR`, it also checks the
+built-in connectors.
+
 ## Dependencies and credentials
 
 A connector declares the libraries its source needs in a `requirements.txt` beside its
