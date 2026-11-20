@@ -32,7 +32,7 @@ from timenet.provenance import TimeNetSnapshot
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, WritableRegistry, open_local_version
 from timenet.registry._paths import release_dir
-from timenet.sources import InstalledConnectors, NotServed
+from timenet.sources import InstalledConnectors
 from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, TimeSeriesSpec, ureg
 from timenet.types.access import AccessRequirement, access_requirements
@@ -459,12 +459,6 @@ class _Hosted(WritableRegistry):
             release = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
             raise TimeNetAccessError(release, card.access, access_requirements(card))
         return manifest
-
-    def resolve(self, dataset_id, version):
-        try:
-            return super().resolve(dataset_id, version)
-        except TimeNetAccessError as error:
-            return NotServed(error.dataset.version, error.access, error.requirements)
 
     def open_file(self, dataset_id, version, relpath):
         return self._local.open_file(dataset_id, version, relpath)

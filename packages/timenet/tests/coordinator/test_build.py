@@ -16,7 +16,6 @@ from timenet.registry._paths import release_dir
 from timenet.registry.origin import OriginKind
 from timenet.sources import InstalledConnectors
 from timenet.testing import install_backends, make_dataset
-from timenet.types import Access
 from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
 
@@ -25,7 +24,6 @@ REF_AB = DatasetRef.parse("a/b@1.0.0")
 PARENT_REF = DatasetRef(dataset_id=make_dataset().metadata.dataset_id, version=make_dataset().metadata.dataset_version)
 CHILD_REF = DatasetRef.parse("a/child@1.0.0")
 GRANDCHILD_REF = DatasetRef.parse("a/grandchild@1.0.0")
-_GATED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
 
 
 def _build(release: DatasetRef, **fields) -> BuildStep:

@@ -197,10 +197,11 @@ def _raise_for_status(response: httpx.Response, *, anonymous: bool = False) -> N
         raise TimeNetRegistryError(f"registry rate-limited (429), retry after {retry}s: {body}")
     failed = f"registry request to {response.request.url} failed ({response.status_code})"
     hint = ". Set TIMENET_TOKEN or pass token= to RemoteRegistry." if anonymous else ""
+    refused = f"{failed}: {_refusal_reason(response)}{hint}"
     if response.status_code == httpx.codes.FORBIDDEN:
-        raise RegistryForbiddenError(f"{failed}: {_refusal_reason(response)}{hint}")
+        raise RegistryForbiddenError(refused)
     if response.status_code == httpx.codes.UNAUTHORIZED:
-        raise TimeNetRegistryError(f"{failed}: {_refusal_reason(response)}{hint}")
+        raise TimeNetRegistryError(refused)
     raise TimeNetRegistryError(f"{failed}: {body}")
 
 

@@ -13,7 +13,7 @@ import shutil
 from typing import BinaryIO, ClassVar
 
 from timenet._fs import staged_directory
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetFileError, TimeNetRegistryError
+from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError, TimeNetFileError, TimeNetRegistryError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest
@@ -21,7 +21,7 @@ from timenet.registry._paths import safe_version_path
 from timenet.registry.dependencies import validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
-from timenet.sources import FoundInRegistry, NotFound, ReleaseLookup
+from timenet.sources import FoundInRegistry, NotFound, NotServed, ReleaseLookup
 from timenet.types import DatasetFilter, DatasetMetadata, ListedRelease, Version
 from timenet.types.references import DatasetRef
 
@@ -157,12 +157,15 @@ class BaseRegistry(ABC):
             version: An exact version, or ``None`` for the latest version.
 
         Returns:
-            ``FoundInRegistry`` if served, or ``NotFound`` if absent.
+            ``FoundInRegistry`` if served, ``NotFound`` if absent, or ``NotServed`` if the registry refuses this
+            caller.
         """
         try:
             manifest = self.get_manifest(dataset_id, None if version is None else str(version))
         except TimeNetDatasetNotFoundError:
             return NotFound()
+        except TimeNetAccessError as error:
+            return NotServed(error.dataset.version, error.access, error.requirements)
         return FoundInRegistry(manifest.metadata.dataset_version, self, manifest)
 
     def download_release(

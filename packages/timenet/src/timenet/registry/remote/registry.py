@@ -27,8 +27,7 @@ from timenet.registry.remote.models import (
     UploadGrantModel,
 )
 from timenet.registry.version import DatasetVersion
-from timenet.sources import NotServed, ReleaseLookup
-from timenet.types import Access, DatasetMetadata, Version
+from timenet.types import Access, DatasetMetadata
 from timenet.types.access import AccessRequirement
 from timenet.types.references import DatasetRef, is_latest
 
@@ -114,27 +113,11 @@ class RemoteRegistry(LazyReadRegistry):
             A ``TimeNetAccessError``, or ``refusal`` if the listed card is open and so has no access level or page
             to name.
         """
-        detail = DatasetDetailModel.model_validate_json(self._http.get_text(f"/datasets/{release.dataset_id}"))
+        detail = self._detail(release.dataset_id)
         if detail.access is Access.OPEN:
             return refusal
         requirements = (AccessRequirement(release, detail.access, detail.access_url),) if detail.access_url else ()
         return TimeNetAccessError(release, detail.access, requirements)
-
-    def resolve(self, dataset_id: str, version: Version | None) -> ReleaseLookup:
-        """Check whether the service serves a dataset release to this caller.
-
-        Args:
-            dataset_id: The dataset ID.
-            version: An exact version, or ``None`` for the latest version.
-
-        Returns:
-            ``FoundInRegistry`` if served, ``NotFound`` if absent, or ``NotServed`` if the service refuses this
-            caller.
-        """
-        try:
-            return super().resolve(dataset_id, version)
-        except TimeNetAccessError as error:
-            return NotServed(error.dataset.version, error.access, error.requirements)
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -261,6 +244,17 @@ class RemoteRegistry(LazyReadRegistry):
         content = (version_dir / relpath).read_bytes()
         self._http.put(grant.url, content=content, headers=grant.headers)
 
+    def _detail(self, dataset_id: str) -> DatasetDetailModel:
+        """Fetch a dataset's detail, which lists the card of its latest version.
+
+        Args:
+            dataset_id: The ``org/name`` id.
+
+        Returns:
+            The parsed detail.
+        """
+        return DatasetDetailModel.model_validate_json(self._http.get_text(f"/datasets/{dataset_id}"))
+
     def _resolve_latest(self, dataset_id: str) -> str:
         """Resolve a dataset's latest version string via the detail endpoint.
 
@@ -270,5 +264,4 @@ class RemoteRegistry(LazyReadRegistry):
         Returns:
             The latest committed version string.
         """
-        detail = DatasetDetailModel.model_validate_json(self._http.get_text(f"/datasets/{dataset_id}"))
-        return str(detail.version)
+        return str(self._detail(dataset_id).version)
