@@ -14,10 +14,9 @@ from typing import Literal, Self
 import numpy as np
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError
-from timenet.types import ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
+from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import ensure_archive
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
@@ -36,17 +35,17 @@ SAMPLES_PER_WINDOW = 128
 
 # The label order is the order of the OpenTSLM training prompt.
 ACTIVITY = LabelSet(
-    name="activity",
-    labels=(
-        Label(name="biking"),
-        Label(name="lying"),
-        Label(name="running"),
-        Label(name="sitting"),
-        Label(name="standing"),
-        Label(name="walking"),
+    [
+        "biking",
+        "lying",
+        "running",
+        "sitting",
+        "standing",
+        "walking",
         Label(name="walking_down", description="Walking down stairs."),
         Label(name="walking_up", description="Walking up stairs."),
-    ),
+    ],
+    annotations=[Annotation("name", value="activity")],
 )
 # The release states no unit. A resting window has a magnitude of about 9.8, which is gravity in m/s².
 ACCELERATION = TimeSeriesSpec(
@@ -138,7 +137,7 @@ class HarCotRow:
             Signal.from_values(self.y, spec=ACCELERATION, name="accelerometer_y", time_axis=SAMPLED_AT_50_HZ),
             Signal.from_values(self.z, spec=ACCELERATION, name="accelerometer_z", time_axis=SAMPLED_AT_50_HZ),
         )
-        return Record(sources=(Source(name="Accelerometer", signals=signals),))
+        return Record(sources=[Source("Accelerometer", signals=signals)])
 
     def create_classification_task(self, record: Record, *, split: Split) -> ClassificationTask:
         """Create the task that asks for the activity of the window.
@@ -148,7 +147,7 @@ class HarCotRow:
         """
         return ClassificationTask(
             inputs=(record,),
-            targets=(self.label,),
+            targets=self.label,
             label_set=ACTIVITY,
             rationale=self.rationale,
             split=split,
@@ -185,7 +184,7 @@ class HarCotSplitFile:
             yield parsed
 
 
-class HarCotConnector(BaseConnector[HarCotSplitFile]):
+class HarCotConnector(BaseConnector[list[HarCotSplitFile]]):
     """Connector for the HAR-CoT release of OpenTSLM."""
 
     async def download_async(self, cache_dir: Path) -> list[HarCotSplitFile]:  # ruff: ignore[no-self-use]
@@ -200,20 +199,20 @@ class HarCotConnector(BaseConnector[HarCotSplitFile]):
         root = await ensure_archive(HAR_COT_URL, cache_dir, filename="har_cot.zip", sha256=HAR_COT_SHA256)
         return [HarCotSplitFile(split=split, path=root / name) for split, name in SPLIT_FILES.items()]
 
-    def convert(self, raw_refs: list[HarCotSplitFile]) -> TimeFDataset:
+    def convert(self, split_files: list[HarCotSplitFile]) -> TimeFDataset:
         """Create one Record and one ClassificationTask for each window.
 
         Args:
-            raw_refs: The split files from :meth:`download_async`.
+            split_files: The split files from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for split_file in raw_refs:
+        for split_file in split_files:
             for row in split_file.read_rows():
-                record = dataset.add_record(record=row.create_record())
-                dataset.add_task(task=row.create_classification_task(record, split=split_file.split))
+                record = dataset.add_record(row.create_record())
+                dataset.add_task(row.create_classification_task(record, split=split_file.split))
         return dataset
 
 

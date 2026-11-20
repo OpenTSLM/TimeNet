@@ -23,7 +23,6 @@ from timenet.types import (
     DatasetSchema,
     EntityId,
     InputModality,
-    LabelSetRegistry,
     ObjectKind,
     StepSpan,
     SupportsAnnotate,
@@ -34,6 +33,7 @@ from timenet.types import (
     read_value,
     value_type_of,
 )
+from timenet.types._fields import as_tuple
 from timenet.types.ids import IdCounters
 from timenet.types.load_plan import LoadPlan
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -72,12 +72,17 @@ class _TaskValidationIndex:
 class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
-    def __init__(self, *, metadata: DatasetMetadata) -> None:
-        """Create an empty dataset.
+    def __init__(self, *, metadata: DatasetMetadata, annotations: Iterable[Annotation] = ()) -> None:
+        """Create a dataset with no records and no tasks.
 
         Args:
             metadata: The dataset's descriptive identity.
-        """
+            annotations: The annotations to attach to the dataset, in order, as :meth:`annotate` does.
+
+        Raises:
+            TimeFValidationError: If ``annotations`` is a string, a mapping, or not iterable, or an
+                annotation has a time span.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by as_tuple and annotate
         self._metadata = metadata
         self._import_state = ImportState()
         """The parent cards, the lineage, and the import map of this dataset. :meth:`import_from`
@@ -92,8 +97,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         """The Record that holds each registered Signal, by Signal ID."""
         self._tasks: list[Task] = []
         self._tasks_by_id: dict[EntityId, Task] = {}
-        self._label_sets = LabelSetRegistry()
-        """The label sets that the registered tasks use, one per name."""
         self._ids = IdCounters()
         self._streamed_task_base = 0
         self._annotations: list[Annotation] = []
@@ -102,6 +105,8 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+        for annotation in as_tuple(annotations):
+            self.annotate(annotation)
 
     def import_from(  # ruff: ignore[too-many-arguments] - one argument per selection
         self,
@@ -172,7 +177,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         finally:
             self._schema = None
 
-    def add_record(self, *, record: Record) -> Record:
+    def add_record(self, record: Record) -> Record:
         """Register and return a complete record.
 
         The record and each of its signals get the next id of their kind.
@@ -329,7 +334,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             writer.write()
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
 
-    def add_task(self, *, task: Task) -> Task:
+    def add_task(self, task: Task) -> Task:
         """Validate and register one fully constructed task.
 
         The Task owns its input and target object references. Registration verifies those objects
@@ -345,7 +350,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         """
         return self._register_batch((task,))[0]
 
-    def add_tasks(self, *, tasks: Iterable[Task]) -> tuple[Task, ...]:
+    def add_tasks(self, tasks: Iterable[Task]) -> tuple[Task, ...]:
         """Register several complete tasks, all together or not at all.
 
         The method validates the whole batch before it attaches any task. If one task fails a
@@ -384,6 +389,22 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         attached = annotation._new_occurrence()
         self._annotations.append(attached)
         return attached
+
+    def walk_annotations(self) -> Iterator[Annotation]:
+        """Yield the annotation occurrences of the dataset, then of each Record, then of each task.
+
+        Each Record and task gives the occurrences of the objects it holds (see :meth:`Record.walk_annotations`
+        and :meth:`Task.walk_annotations`). The tasks of a streamed dataset (see :meth:`set_task_stream`) are
+        not walked, so their occurrences do not come.
+
+        Yields:
+            Each annotation occurrence, in the order above.
+        """
+        yield from self.annotations
+        for record in self._records:
+            yield from record.walk_annotations()
+        for task in self._tasks:
+            yield from task.walk_annotations()
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
@@ -459,26 +480,34 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         the cross-task checks (``from_tasks`` derivations) that need every task at once do not run
         for a stream.
 
+        If the dataset has a schema (see :meth:`derive_schema`), the annotation keys of the tasks and
+        their label sets are added to it. After the last task, the schema lists them.
+
         Yields:
             Each validated task, in the source's order.
 
         Raises:
-            TimeFValidationError: If a streamed task fails one of the per-task checks.
+            TimeFValidationError: If a streamed task fails one of the per-task checks, or one of its
+                annotation keys has a descriptor that conflicts with the schema.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
         declared = set(self._streamed_task_types)
-        label_sets = LabelSetRegistry()
+        schema = self._schema
+        descriptors = {} if schema is None else {descriptor.key: descriptor for descriptor in schema.annotations}
         for position, task in enumerate(self.iter_tasks(), start=1):
             task._id = self._ids.claim(ObjectKind.TASK, self._streamed_task_base + position)
-            self._validate_streamed_task(task, index, declared, label_sets)
+            self._validate_streamed_task(task, index, declared)
+            if schema is not None:
+                self._add_descriptors(descriptors, task.walk_annotations())
             yield task
+        if schema is not None:
+            self._schema = schema.model_copy(update={"annotations": tuple(descriptors.values())})
 
     def _validate_streamed_task(
         self,
         task: Task,
         index: _TaskValidationIndex,
         declared: set[type[Task]],
-        label_sets: LabelSetRegistry,
     ) -> None:
         """Make sure that each streamed task follows the dataset rules.
 
@@ -486,8 +515,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             task: The streamed task.
             index: The shared index of dataset objects and annotations.
             declared: The task types :meth:`set_task_stream` declared.
-            label_sets: The label sets used so far in the stream.
-                This method adds the label set of this task.
 
         Raises:
             TimeFValidationError: If the task's type is not declared, or the task fails a check of
@@ -498,9 +525,9 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
                 f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
                 f"{sorted(t.__name__ for t in declared)}"
             )
-        self._check_task(task, index, label_sets)
+        self._check_task(task, index)
 
-    def _check_task(self, task: Task, index: _TaskValidationIndex, label_sets: LabelSetRegistry) -> None:
+    def _check_task(self, task: Task, index: _TaskValidationIndex) -> None:
         """Make sure that a task follows the dataset rules.
 
         This method handles tasks added alone, in a batch, or in a stream.
@@ -508,7 +535,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         Args:
             task: The task to check.
             index: The shared index of dataset objects and annotations.
-            label_sets: The label sets used so far. This method adds the label set of this task.
 
         Raises:
             TimeFValidationError: If the task's record attachment, references, answer, labels, label
@@ -518,7 +544,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         task.check_against_scope()
         self._check_task_answer(task)
         task.check_targets()
-        task.register_label_set(label_sets)
         self._check_signal_refs(task, index)
         self._validate_task_spans(task, index)
         self._check_annotation_refs(task, self._referenced_records(task), index)
@@ -556,7 +581,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         for offset, task in enumerate(batch):
             task._id = first + offset
         try:
-            label_sets = self._validate_task_batch(batch)
+            self._validate_task_batch(batch)
         except BaseException:
             for task, task_id in zip(batch, previous, strict=True):
                 task._id = task_id
@@ -565,14 +590,13 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             self._ids.claim(ObjectKind.TASK, task.id)
             self._tasks.append(task)
             self._tasks_by_id[task.id] = task
-        self._label_sets = label_sets
         return batch
 
     def _is_registered(self, task: Task) -> bool:
         """Return whether this exact task object is in the dataset."""
         return task._id is not None and self._tasks_by_id.get(task._id) is task
 
-    def _validate_task_batch(self, batch: tuple[Task, ...]) -> LabelSetRegistry:
+    def _validate_task_batch(self, batch: tuple[Task, ...]) -> None:
         """Make sure that a batch follows the dataset rules before attaching its tasks.
 
         This method examines each task and the relationships between tasks.
@@ -581,9 +605,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
 
         Args:
             batch: The tasks to register together.
-
-        Returns:
-            A copy of the registry that includes the label sets from this batch.
 
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
@@ -601,10 +622,8 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
                     )
         self._check_no_derivation_cycle(batch)
         index = _TaskValidationIndex(self)
-        label_sets = self._label_sets.copy()
         for task in batch:
-            self._check_task(task, index, label_sets)
-        return label_sets
+            self._check_task(task, index)
 
     @classmethod
     def _validate_task_spans(cls, task: Task, index: _TaskValidationIndex) -> None:
@@ -686,15 +705,19 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
     def derive_schema(self) -> DatasetSchema:
         """Walk the dataset's instances and build its :class:`DatasetSchema`.
 
-        This method collects the distinct spec, annotation, and task types. It stores the result
-        on the dataset, and it returns the result.
+        This method collects the distinct spec, annotation, and task types. Annotations come from every
+        occurrence that :meth:`walk_annotations` yields. It stores the result on the dataset, and it returns
+        the result.
+
+        The tasks of a streamed dataset (see :meth:`set_task_stream`) are not walked here.
+        :meth:`iter_streamed_tasks_validated` adds their annotation keys while the writer writes them.
 
         Returns:
             The derived :class:`DatasetSchema`.
 
         Raises:
             TimeFValidationError: If one spec type or annotation key yields conflicting descriptors
-                across records.
+                across the dataset.
         """
         specs = self._ordered_unique(signal.spec for record in self._records for signal in record.signals)
         by_spec_type: dict[str, object] = {}
@@ -705,35 +728,15 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
                     f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
                 )
             by_spec_type[spec.spec_type] = spec
-        record_annotations = (annotation for record in self._records for annotation in record.walk_annotations())
-        annotations = self._ordered_unique(
-            AnnotationDescriptor(
-                key=annotation.key,
-                annotation_type=annotation_type_of(annotation),
-                value_type=value_type_of(annotation.value),
-                # The __post_init__ method normalizes unit to a plain string or None, so this
-                # value is always str | None.
-                unit=cast("str | None", annotation.unit),
-                description=annotation.description,
-            )
-            for annotation in record_annotations
-        )
-        by_key: dict[str, AnnotationDescriptor] = {}
-        for descriptor in annotations:
-            existing = by_key.get(descriptor.key)
-            if existing is not None:
-                raise TimeFValidationError(
-                    f"annotation {descriptor.key!r} has conflicting descriptors across records: "
-                    f"{existing!r} and {descriptor!r}"
-                )
-            by_key[descriptor.key] = descriptor
+        annotations: dict[str, AnnotationDescriptor] = {}
+        self._add_descriptors(annotations, self.walk_annotations())
         # A streamed dataset declares its task types up front, so the schema records them without
         # draining the stream just to collect them.
         streamed = self._ordered_unique(self._streamed_task_types)
         tasks = streamed if self._task_stream is not None else self._ordered_unique(type(task) for task in self._tasks)
         self._schema = DatasetSchema(
             time_series_specs=tuple(specs),
-            annotations=tuple(annotations),
+            annotations=tuple(annotations.values()),
             tasks=tuple(tasks),
         )
         return self._schema
@@ -777,7 +780,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         dataset._tasks = list(tasks)
         for task in dataset._tasks:
             dataset._tasks_by_id[dataset._ids.claim(ObjectKind.TASK, task.id)] = task
-            task.register_label_set(dataset._label_sets)
         dataset._annotations = list(annotations)
         dataset._schema = schema
         if import_state is not None:
@@ -885,6 +887,34 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             if record is not None:
                 found.setdefault(id(record), record)
         return tuple(found.values())
+
+    @staticmethod
+    def _add_descriptors(descriptors: dict[str, AnnotationDescriptor], annotations: Iterable[Annotation]) -> None:
+        """Add the descriptor of each annotation key that ``descriptors`` does not hold yet.
+
+        Args:
+            descriptors: The descriptors so far, by annotation key, in the order of first use.
+            annotations: The annotations to add.
+
+        Raises:
+            TimeFValidationError: If an annotation gives a key a different descriptor than ``descriptors`` holds.
+        """
+        for annotation in annotations:
+            descriptor = AnnotationDescriptor(
+                key=annotation.key,
+                annotation_type=annotation_type_of(annotation),
+                value_type=value_type_of(annotation.value),
+                # The __post_init__ method normalizes unit to a plain string or None, so this
+                # value is always str | None.
+                unit=cast("str | None", annotation.unit),
+                description=annotation.description,
+            )
+            existing = descriptors.setdefault(descriptor.key, descriptor)
+            if existing != descriptor:
+                raise TimeFValidationError(
+                    f"annotation {descriptor.key!r} has conflicting descriptors across the dataset: "
+                    f"{existing!r} and {descriptor!r}"
+                )
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:

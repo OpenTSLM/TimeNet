@@ -157,6 +157,26 @@ def test_a_task_references_its_signal_targets_then_the_signals_of_its_spans_each
     assert AnswerTask(targets=("a",), scope=TimeInterval.seconds(0.0, 1.0)).referenced_signals() == ()
 
 
+def test_a_task_attaches_a_new_occurrence_of_its_own_annotations_and_keeps_its_references():
+    (record,) = _registered("a")
+    context = record.annotate(Annotation("context", value="ctx"))
+    quality = Annotation("quality", value="good")
+
+    task = AnswerTask(
+        inputs=(record,),
+        targets=("a",),
+        input_annotations=(context,),
+        target_annotations=(context,),
+        annotations=[quality],
+    )
+
+    (own,) = task.annotations
+    assert own == quality
+    assert own is not quality
+    assert task.input_annotations[0] is context
+    assert task.target_annotations[0] is context
+
+
 def test_a_copy_with_references_points_at_the_records_and_signals_of_the_same_ids():
     record, target, holder = _registered("a", "b", "c")
     records, signals = _replacements((record, target, holder))
@@ -375,3 +395,26 @@ def test_a_cached_valid_declaration_does_not_hide_a_later_error():
     # Same modalities, now with a prompt: the cache key includes the prompt, so this still fails.
     with pytest.raises(TimeFValidationError, match=r"^task has a prompt but does not declare text input$"):
         AnswerTask(inputs=(record,), prompt="Question?", input_modalities=_TIME_SERIES)
+
+
+def test_a_bare_record_is_one_target():
+    record = _record("a")
+    assert TSGenerationTask(targets=record).targets == (record,)
+
+
+def test_collection_fields_take_any_iterable_and_store_a_tuple():
+    record = _record("a")
+    note = Annotation("note", value="x")
+    task = AnswerTask(inputs=(item for item in [record]), input_annotations=[note], annotations=[note])
+    assert task.inputs == (record,)
+    assert task.input_annotations == (note,)
+    assert task.annotations == (note,)
+    task.inputs = [record, record]
+    assert task.inputs == (record, record)
+    assert TSCorrespondenceTask(candidate_records=[record]).candidate_records == (record,)
+
+
+@pytest.mark.parametrize("value", ["a", {"a": 1}, 3, Record()])
+def test_a_collection_field_rejects_a_string_a_mapping_and_a_single_item(value):
+    with pytest.raises(TimeFValidationError, match="takes an iterable"):
+        AnswerTask(inputs=value)

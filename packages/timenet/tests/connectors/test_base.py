@@ -8,7 +8,7 @@ from timenet.testing import make_dataset
 
 
 def test_connector_without_convert_or_compose_fails_at_construction():
-    class NoConversion(BaseConnector[str]):
+    class NoConversion(BaseConnector[list[str]]):
         def download(self, cache_dir):
             return []
 
@@ -17,7 +17,7 @@ def test_connector_without_convert_or_compose_fails_at_construction():
 
 
 def test_connector_whose_init_skips_the_base_fails_without_convert_or_compose():
-    class NoConversion(BaseConnector[str]):
+    class NoConversion(BaseConnector[list[str]]):
         def __init__(self) -> None:
             # Does not call super().__init__(), so the check runs in __new__.
             self.ready = True
@@ -33,7 +33,7 @@ def test_concrete_connector_implements_contract(tmp_path):
     card = tmp_path / "dataset.yaml"
     card.write_text("dataset_id: demo/thing\ndataset_version: 1.0.0\nname: Demo\ndescription: d\nlicense: MIT\n")
 
-    class DemoConnector(BaseConnector[str]):
+    class DemoConnector(BaseConnector[list[str]]):
         CARD = card
 
         def download(self, cache_dir: Path) -> list[str]:
@@ -57,7 +57,7 @@ def _write_card(tmp_path: Path) -> Path:
 def test_async_connector_download_bridges_to_download_async(tmp_path):
     card = _write_card(tmp_path)
 
-    class AsyncConnector(BaseConnector[str]):
+    class AsyncConnector(BaseConnector[list[str]]):
         CARD = card
 
         async def download_async(self, cache_dir: Path) -> list[str]:
@@ -73,7 +73,7 @@ def test_async_connector_download_bridges_to_download_async(tmp_path):
 def test_connector_implementing_neither_download_raises(tmp_path):
     card = _write_card(tmp_path)
 
-    class NoDownload(BaseConnector[str]):
+    class NoDownload(BaseConnector[list[str]]):
         CARD = card
 
         def convert(self, raw_refs: list[str]) -> TimeFDataset:
@@ -86,7 +86,7 @@ def test_connector_implementing_neither_download_raises(tmp_path):
 def test_connector_whose_init_skips_the_base_fails_without_download(tmp_path):
     card = _write_card(tmp_path)
 
-    class NoDownload(BaseConnector[str]):
+    class NoDownload(BaseConnector[list[str]]):
         CARD = card
 
         def __init__(self) -> None:

@@ -2,7 +2,7 @@
 
 from collections import Counter
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import KW_ONLY, dataclass, field
 from typing import TYPE_CHECKING
 
 from timenet.dataset.span_validation import check_span_within_window
@@ -10,6 +10,7 @@ from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate
+from timenet.types._fields import TupleField, ValueField, as_tuple
 
 
 if TYPE_CHECKING:
@@ -36,18 +37,26 @@ def check_sibling_names(sources: Iterable["Source"], owner: str) -> None:
         )
 
 
-@dataclass(kw_only=True)
+@dataclass
 class Source(SupportsAnnotate):
-    """A device, sensor, or subsystem that contains child sources and signals."""
+    """A device, sensor, or subsystem that contains child sources and signals.
+
+    ``name`` can be positional. All other fields are keyword-only. The collection fields accept any
+    iterable and store a tuple::
+
+        Source("IMU", signals=[accel_x, accel_y])
+    """
 
     name: str
     """Human-readable source name."""
-    sources: tuple["Source", ...] = ()
+    _: KW_ONLY
+    sources: TupleField["Source"] = field(default=ValueField(as_tuple, ()))
     """Direct child sources, each with a distinct name. Their order has no semantic meaning."""
-    signals: tuple[Signal, ...] = ()
+    signals: TupleField[Signal] = field(default=ValueField(as_tuple, ()))
     """Signals produced directly by this source."""
-    annotations: tuple[Annotation, ...] = ()
-    """Annotations attached to this source."""
+    annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
+    """Annotations attached to this source. The source attaches a new occurrence of each annotation, as
+    :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible source metadata."""
 
@@ -64,13 +73,15 @@ class Source(SupportsAnnotate):
         self.metadata = validate_json_mapping(self.metadata)
 
         for annotation in self.annotations:
-            if annotation.span is not None:
-                check_span_within_window(
-                    f"annotation {annotation.key!r}",
-                    annotation.span,
-                    tuple(self.walk_signals()),
-                    f"source {self.name!r}",
-                )
+            self._validate_annotation(annotation)
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
+
+    def _validate_annotation(self, annotation: Annotation) -> None:
+        """Validate an annotation without changing this source."""
+        if annotation.span is not None:
+            check_span_within_window(
+                f"annotation {annotation.key!r}", annotation.span, tuple(self.walk_signals()), f"source {self.name!r}"
+            )
 
     def walk_sources(self) -> Iterator["Source"]:
         """Yield this source and all descendants in deterministic depth-first order.
