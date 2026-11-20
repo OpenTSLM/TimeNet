@@ -71,8 +71,7 @@ numpy_values = temperature.to_numpy()
 window = temperature.read_steps(0, 2)
 ```
 
-`to_arrow()` preserves nulls. `to_numpy()` raises `TimeFValidationError` when the loaded values
-contain nulls.
+`to_arrow()` preserves nulls. `to_numpy()` fails when the loaded values contain nulls.
 
 For data with nulls, Arrow provides the validity mask:
 
@@ -81,9 +80,8 @@ values = temperature.to_arrow()
 present = values.is_valid()
 ```
 
-The mask marks present timesteps. The PyTorch adapter raises `TimeFValidationError` for actual nulls,
-even when the spec has a `missing` record. Consumers must handle missing data before tensor
-conversion.
+The mask marks present timesteps. The PyTorch adapter rejects actual nulls, even when the spec has
+a `missing` record. Consumers must handle missing data before tensor conversion.
 
 ## Cut a window
 
@@ -102,8 +100,7 @@ Which Signals a span applies to and which values it holds are separate questions
 
 By default the span must lie inside the Signal: a `TimeInterval` inside the window `span_us`
 reports, and a `StepInterval` that ends at or before `n_values`. A span that reaches past either
-end raises `TimeFValidationError`. Pass `clip=True` to keep only the part of the span inside the
-Signal instead.
+end raises an error. Pass `clip=True` to keep only the part of the span inside the Signal instead.
 
 `overlaps_with()` tells you whether a `TimeInterval` or `TimePoint` holds at least one value of a
 Signal, so you can skip the Signals it misses, such as other segments of one recording. It uses the
@@ -112,9 +109,8 @@ between two values, or after the last one, holds no value. On an irregular Signa
 `overlaps_with()` reads the time offsets, unless the span lies outside the window `span_us`
 reports.
 
-An ordinal Signal has no timeline. `overlaps_with()` and `slice()` raise `TimeFValidationError` for
-a time span on it, so test `is_ordinal` first and scope an ordinal Signal in steps. `slice()` also
-raises for a point span.
+An ordinal Signal has no timeline. `overlaps_with()` and `slice()` reject a time span on it, so test
+`is_ordinal` first and scope an ordinal Signal in steps. `slice()` also rejects a point span.
 
 To cut every Signal of a Record that an interval selects, ask `is_selected_by()` first, and cut
 with `clip=True`, because an interval can overlap a Signal only in part:

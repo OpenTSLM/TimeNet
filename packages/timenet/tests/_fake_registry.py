@@ -16,6 +16,10 @@ import httpx
 from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.registry import LocalRegistry
+from timenet.types import Access
+
+
+_GATED = {"detail": "dataset is gated; a token grant is required"}
 
 
 def _summary(manifest: Manifest) -> dict:
@@ -28,6 +32,8 @@ def _summary(manifest: Manifest) -> dict:
         "license": md.license.value,
         "domains": [d.value for d in md.domains],
         "tags": list(md.tags),
+        "access": md.access.value,
+        "access_url": md.access_url,
     }
 
 
@@ -40,7 +46,9 @@ def _detail(manifest: Manifest) -> dict:
     }
 
 
-def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = "http://blob.local"):
+def build_fake(
+    version_dir: Path, *, token: str | None = None, blob_base: str = "http://blob.local", gate: bool = False
+):
     """Serve one on-disk version through a MockTransport; return (transport, recorded_requests).
 
     The version_dir is ``<...>/<org>/<name>/<version>``; its ``manifest.json`` drives every response.
@@ -51,6 +59,9 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
 
     The default blob host never contacts the network. It reads existing files from the temporary
     fixture release; this download handler does not create files.
+
+    With ``gate``, the manifest, files and download routes of a release whose card is not open answer 403,
+    as the service does for an anonymous caller.
     """
     version_dir = Path(version_dir)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
@@ -72,6 +83,8 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
             return httpx.Response(200, json={"datasets": [_summary(manifest)]})
         if path == base:
             return httpx.Response(200, json=_detail(manifest))
+        if gate and manifest.metadata.access is not Access.OPEN and path.startswith(f"{base}/{version}/"):
+            return httpx.Response(403, json=_GATED)
         if path == f"{base}/{version}/manifest":
             return httpx.Response(
                 200,
@@ -190,7 +203,7 @@ def build_publish_fake(*, token: str = "tok_rw"):  # ruff: ignore[hardcoded-pass
             relpath = request.url.path.removeprefix("/upload/")
             state["store"][relpath] = request.content
             return httpx.Response(200)
-        if request.headers.get("authorization") != f"Bearer {token}":
+        if request.method != "GET" and request.headers.get("authorization") != f"Bearer {token}":
             return httpx.Response(403, json={"detail": "write scope required"})
         if path.endswith("/publish"):
             state["manifest"] = json.loads(request.content)
@@ -241,7 +254,7 @@ def _blob(request: httpx.Request, root: Path) -> httpx.Response:
 
 
 # ruff: ignore[too-many-return-statements]
-def _service_read(local: LocalRegistry, root: Path, parts: list[str]) -> httpx.Response:
+def _service_read(local: LocalRegistry, root: Path, parts: list[str], gate: bool) -> httpx.Response:
     """Serve the anonymous read endpoints from a LocalRegistry over ``root``."""
     if not parts:  # GET /api/v1/datasets
         summaries = [_summary(local.get_manifest(md.dataset_id)) for md in local.list_datasets()]
@@ -253,8 +266,10 @@ def _service_read(local: LocalRegistry, root: Path, parts: list[str]) -> httpx.R
         except TimeNetDatasetNotFoundError as exc:
             return httpx.Response(404, json={"detail": str(exc)})
     version, action = parts[2], parts[3] if len(parts) > 3 else ""
+    path = root / dataset_id / version / "manifest.json"
+    if gate and path.exists() and Manifest.model_validate_json(path.read_text()).metadata.access is not Access.OPEN:
+        return httpx.Response(403, json=_GATED)
     if action == "manifest":
-        path = root / dataset_id / version / "manifest.json"
         if not path.exists():
             return httpx.Response(404, json={"detail": f"no manifest for {dataset_id}@{version}"})
         return httpx.Response(200, content=path.read_bytes(), headers={"content-type": "application/json"})
@@ -283,7 +298,7 @@ def _service_write(root: Path, manifests: dict, parts: list[str], request: httpx
     return httpx.Response(404, json={"detail": action})
 
 
-def build_service_fake(root: Path, *, token: str | None = None):
+def build_service_fake(root: Path, *, token: str | None = None, gate: bool = False):
     """Emulate the whole registry API over a real on-disk tree at ``root``; return (transport, requests).
 
     Reads (list, detail, manifest, presigned download) are anonymous and served by a
@@ -292,6 +307,8 @@ def build_service_fake(root: Path, *, token: str | None = None):
     downloads redirect to a ``blob.local`` host this same transport serves (GET with Range), and uploads
     PUT their bytes to that host. This is enough to drive a :class:`RemoteRegistry` end to end, publish
     included, without a network.
+
+    With ``gate``, the manifest and download routes of a release whose card is not open answer 403.
     """
     root = Path(root)
     local = LocalRegistry(root)
@@ -304,7 +321,7 @@ def build_service_fake(root: Path, *, token: str | None = None):
             return _blob(request, root)
         parts = [p for p in request.url.path.removeprefix("/api/v1/datasets").split("/") if p]
         if request.method == "GET":
-            return _service_read(local, root, parts)
+            return _service_read(local, root, parts, gate)
         if token is not None and request.headers.get("authorization") != f"Bearer {token}":
             return httpx.Response(403, json={"detail": "write scope required"})
         return _service_write(root, manifests, parts, request)

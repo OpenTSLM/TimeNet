@@ -38,8 +38,9 @@ agreement and sign in before you pull a record. TimeNet does not remove that ste
 
 ## Redistribution
 
-The hosted TimeNet registry serves built datasets only when the dataset and every ancestor in its
-lineage declare open access. For every other dataset, a connector downloads the raw source data
-from the original source and builds the dataset on your machine. In both cases, the data keeps the
+The hosted TimeNet registry accepts a built dataset only when its card declares open access. The
+registry service checks the card of the dataset itself, not the cards of the ancestors in its
+lineage. For every other dataset, a connector downloads the raw source data from the original
+source and builds the dataset on your machine. In both cases, the data keeps the
 license that its source grants. If you redistribute a converted dataset, keep its original license
 with it.

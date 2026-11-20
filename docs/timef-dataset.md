@@ -401,8 +401,8 @@ copy, they stay removed. A new task copy that derives from a task copy in the ch
 copy.
 
 The import refuses a `TSCorrespondenceTask` without `candidate_records`, because the candidates of
-such a task are all Records of the parent. For a child that streams its tasks, `tasks=` raises
-`TimeFValidationError`.
+such a task are all Records of the parent. For a child that streams its tasks, the import rejects
+`tasks=`.
 
 Each call reads the selected tasks, the tasks that they derive from, and the Records that they
 reference in one batch, before the other Records. This read loads no stored values either. `load=`
@@ -442,13 +442,13 @@ now, by the rules in [Signals](#signals), and did not keep before. Other annotat
 the child stay as they are. So an import of a whole Record completes a partial copy.
 
 The import checks a copy that it adds to, as for a new Record. For example, a new Signal must lie
-inside the `time_span` of the copy. If a check fails, the import raises `TimeFValidationError` and
-restores the copy as it was.
+inside the `time_span` of the copy. If a check fails, the import fails and restores the copy as it
+was.
 
 A Signal that an import adds goes below the copy of its Source. The import finds that copy through
 the Signals that it imported below the Source before, or else by the name of the Source. Sibling
 Sources have distinct names. If the child moved or renamed Sources of the copy, the import can find
-another Source, or it raises `TimeFValidationError`.
+another Source, or it fails.
 
 Do not assign `Source.signals` or `Source.sources` on a copy. A later import can then attach an
 annotation that the copy already holds a second time. To remove a Signal from a copy, use

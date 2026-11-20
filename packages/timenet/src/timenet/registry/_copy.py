@@ -8,7 +8,12 @@ from collections.abc import Callable
 from pathlib import Path
 import tempfile
 
-from timenet.errors import TimeFValidationError, TimeNetMissingParentError, TimeNetVersionConflictError
+from timenet.errors import (
+    TimeFValidationError,
+    TimeNetAccessError,
+    TimeNetMissingParentError,
+    TimeNetVersionConflictError,
+)
 from timenet.manifest import Manifest
 from timenet.progress import BytesMoved, ProgressCallback, StepFinished, StepStarted
 from timenet.registry._paths import release_dir
@@ -16,7 +21,6 @@ from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import find_payload_sources, validate_manifest_reference
 from timenet.registry.local import LocalRegistry
 from timenet.registry.writable import WritableRegistry
-from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef
 
 
@@ -49,7 +53,7 @@ def copy_release(  # ruff: ignore[too-many-arguments]
         TimeNetRegistryError: If ``dest`` is read-only.
         TimeFValidationError: If ``force`` is set and ``dest`` is not local.
         TimeNetVersionConflictError: If ``dest`` holds the same release with other files or another card.
-        TimeNetAccessError: If a release lacks open access and either registry requires it.
+        TimeNetAccessError: If ``source`` does not serve a release to this caller.
         TimeNetBuildError: If ``dest`` is not local and a copied release records TimeNet code with local changes.
         TimeNetDatasetNotFoundError: If ``source`` lacks the release.
         TimeNetMissingParentError: If neither registry holds a complete payload source.
@@ -67,7 +71,6 @@ def copy_release(  # ruff: ignore[too-many-arguments]
         for ref, manifest in manifests.items()
         if _needs_copy(reference, ref, manifest, source, dest) or (force and ref == reference)
     ]
-    _check_access(manifests, set(pending), source, dest)
     for ref in pending:
         dest.require_clean_code_provenance(manifests[ref])
     if not pending:
@@ -145,29 +148,6 @@ def _bytes_of(reference: DatasetRef, manifest: Manifest, progress: ProgressCallb
     return report
 
 
-def _check_access(
-    manifests: dict[DatasetRef, Manifest], fetched: set[DatasetRef], source: BaseRegistry, dest: WritableRegistry
-) -> None:
-    """Check release access against the source and destination requirements.
-
-    Check all releases against ``dest`` and fetched releases against ``source``.
-
-    Args:
-        manifests: Release references mapped to their manifests.
-        fetched: The releases that the copy fetches from ``source``.
-        source: The registry to copy from.
-        dest: The registry to copy to.
-
-    Raises:
-        TimeNetAccessError: If a release or its lineage lacks open access where a registry requires it.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by require_open_access
-    for reference, manifest in manifests.items():
-        dest_needs_open = dest.requires_open_access
-        source_needs_open = reference in fetched and source.requires_open_access
-        if dest_needs_open or source_needs_open:
-            require_open_access(manifest.metadata, manifest.lineage)
-
-
 def _manifests(
     reference: DatasetRef, source: BaseRegistry, dest: WritableRegistry, *, with_payload_sources: bool
 ) -> dict[DatasetRef, Manifest]:
@@ -185,21 +165,27 @@ def _manifests(
         Manifests keyed by release, with the payload sources before the release.
 
     Raises:
-        TimeNetAccessError: If ``source`` lists a payload source without serving it and ``dest`` lacks a complete copy.
+        TimeNetAccessError: If ``source`` does not serve the release or a payload source to this caller, and
+            ``dest`` lacks a complete copy of that payload source.
         TimeNetMissingParentError: If neither ``source`` nor ``dest`` holds a complete payload source.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by require_open_access
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by get_manifest
     manifest = source.get_manifest(reference.dataset_id, str(reference.version))
     validate_manifest_reference(manifest, reference)
     if not with_payload_sources:
         return {reference: manifest}
-    sources = find_payload_sources(
-        reference, manifest, source, find=source.find_manifest, held=lambda ref: _complete_copy(ref, dest)
-    )
+    refused: dict[DatasetRef, TimeNetAccessError] = {}
+
+    def served(payload_source: DatasetRef) -> Manifest | None:
+        try:
+            return source.find_manifest(payload_source)
+        except TimeNetAccessError as refusal:
+            refused[payload_source] = refusal
+            return None
+
+    sources = find_payload_sources(reference, manifest, find=served, held=lambda ref: _complete_copy(ref, dest))
     for missing in sources.missing:
-        listed = source.find_manifest(missing)
-        if listed is not None:
-            # The source lists the payload source, but does not serve its files.
-            require_open_access(listed.metadata, listed.lineage)
+        if missing in refused:
+            raise refused[missing]
         raise TimeNetMissingParentError(missing, reference, f"{source} or {dest}", payload_source=True)
     return {**sources.fetched, **sources.held, reference: manifest}
 

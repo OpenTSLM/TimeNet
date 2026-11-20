@@ -120,12 +120,11 @@ does not find an older version that matches. A
 It reads only for a row whose card matches the other filters, and only until `limit` rows match. A
 connector card has no manifest, so it never matches these two filters.
 
-The calls ask the sources one after another, in order. A registry without a catalog, such as an
-S3 registry, is left out with a `CatalogWarning`. If no source has a catalog, the calls raise
-`TimeNetNoCatalogError`, and its hint names `open('<id>@<version>')`, the read of an exact release.
-If two sources list a dataset at the same version, the row of the earlier source stays. A listed
-version can be newer than the version that `open()` reads without a version. To query one registry
-alone, open it and ask it:
+The calls ask the sources one after another, in order. A registry without a catalog, such as an S3
+registry, is left out with a `CatalogWarning`. If no source has a catalog, the calls fail with a
+hint that names `open('<id>@<version>')`, the read of an exact release. If two sources list a
+dataset at the same version, the row of the earlier source stays. A listed version can be newer than
+the version that `open()` reads without a version. To query one registry alone, open it and ask it:
 
 ```python
 from timenet.registry import open_registry
@@ -145,11 +144,9 @@ nothing.
 | `get_manifest(dataset_id, version=None)` | The [manifest](manifest.md) of the release. |
 | `get_card(dataset_id, version=None)` | The card of the release. |
 
-`get_manifest()` reads only the manifest, and checks no other file. A registry can list a
-release without serving its files, for example a credentialed release on the hosted registry. Then
-`get_manifest()` returns the listed manifest, which shows the access level and the access page of
-each card. A release gets its manifest when it is built. So for a release that only
-`InstalledConnectors()` provides, `get_manifest()` raises `TimeNetNotBuiltError`.
+`get_manifest()` reads only the manifest, and checks no other file. A release gets its manifest
+when it is built. So for a release that only `InstalledConnectors()` provides, `get_manifest()`
+raises `TimeNetNotBuiltError`.
 
 `get_card()` returns the card of the release. The card comes from the manifest, or from the
 installed connector for a release that is not built yet. `TimeNetNotBuiltError` holds the release
@@ -265,14 +262,13 @@ local registry lacks or holds damaged. Each one comes from the first other regis
 it, so they can come from different registries. If the local registry holds a complete copy of the
 release, the call copies only the payload sources that it lacks.
 
-A download never builds. For a release that only `InstalledConnectors()` provides, it raises
-`TimeNetNotBuiltError`.
+A download never builds. For a release that only `InstalledConnectors()` provides, it fails.
 
 By default, the call uses a complete release in the local registry that matches the requested
 dataset ID and version. If the local release is missing or damaged (a listed file is missing or has
 another size), or you set `force=True`, the call copies the release from the next lookup source
 that has it. If the local registry holds that version with other files or another card, the copy
-raises `TimeNetVersionConflictError`.
+fails.
 
 `progress=` takes a function that receives the progress events of `timenet.progress`. For each
 release that the call copies, the function receives `StepStarted`, then `BytesMoved` events as the
@@ -310,9 +306,9 @@ that an installed connector built. `source` names the registry, or the connector
 version. To read it, call `store.read_origin(release)` on the `LocalRegistry`. It returns an
 `Origin` from `timenet.registry.origin`, whose `kind` is an `OriginKind`.
 
-A record that is not valid raises `TimeNetOriginError`, which names its first problem. To replace
-the release and its record, get the release again: call `download(release, force=True)` if it came
-from a registry, or `timenet.build(release, force=True)` if it was built.
+`read_origin()` rejects a record that is not valid, and the error names its first problem. To
+replace the release and its record, get the release again: call `download(release, force=True)` if
+it came from a registry, or `timenet.build(release, force=True)` if it was built.
 
 ## Pin a version
 

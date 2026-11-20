@@ -15,8 +15,9 @@ from timenet.errors import (  # ruff: ignore[module-import-not-at-top-of-file]
 )
 from timenet.reader import TimeFReader  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.registry import LocalRegistry, S3Registry, open_local_version  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.sources import FoundInRegistry  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
-from timenet.types import DatasetFilter, DatasetSchema, Version  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types import Access, DatasetFilter, DatasetSchema, Version  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types.references import DatasetRef  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.values_backends import ValuesBackend  # ruff: ignore[module-import-not-at-top-of-file]
 
@@ -153,3 +154,11 @@ def test_the_latest_version_over_an_unreachable_bucket_names_the_version_in_the_
         "Ask for timenet/hello-world@1.0.0 to read the copy in the local registry, or leave the unreachable "
         "registry out of the sources."
     )
+
+
+def test_an_s3_registry_holds_and_serves_a_release_that_is_not_open(s3_root):
+    registry = S3Registry(s3_root)
+    gated = make_dataset(access=Access.CREDENTIALED, access_url="https://example.org/dua")
+    reference = registry.put_dataset(gated)
+    assert registry.resolve(reference.dataset_id, None) == FoundInRegistry(reference.version, registry)
+    assert_datasets_equal(gated, TimeNet(sources=[registry]).load(reference.dataset_id))

@@ -54,7 +54,8 @@ which is how you point at a private or a dev deployment.
 
 The HTTP transport authenticates with a bearer token read from `$TIMENET_TOKEN`. When it is unset the
 SDK talks to the registry anonymously (no `Authorization` header), which is enough for public reads.
-Set it to reach private datasets or to write:
+Set it to reach private datasets or to write. The service decides which releases a token can read,
+and which releases it accepts:
 
 ```bash
 export TIMENET_TOKEN=your-token
@@ -87,7 +88,6 @@ Every backend implements this contract.
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version. Raises `TimeNetManifestError` if the stored manifest is not valid, `TimeFFormatVersionError` if it has an unsupported older or newer TimeF format, or `TimeFFormatError` if its own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
 | `location` | Where the registry is: the base URL of a remote registry, the `s3://bucket/prefix` root of an S3 registry, or the resolved root directory of a local registry. Each backend must define it. |
-| `requires_open_access` | Whether the registry holds and serves only releases with open access. `False` only for `LocalRegistry`. |
 | `find_manifest(release)` | The manifest of an exact release, or `None` if the registry does not hold it. Raises `TimeFFormatError` if the stored manifest names another release. |
 | `download_release(reference, directory, *, force=False, manifest=None, progress_cb=None)` | Download the files of one release, without its payload sources, into a local directory. A failed download leaves no partial copy, and it keeps the copy that was there before. |
 | `open_release(reference, *, manifest=None)` | A `DatasetVersion` of one exact release without its payload sources: the parsed manifest and a handle to the files. Pass `manifest` if you already read it from this registry. A local registry raises `TimeNetFileError` for a missing or resized file. |
@@ -104,8 +104,7 @@ over the versioned REST contract (`GET /api/v1/datasets`, `/api/v1/datasets/{id}
 `.../download/{relpath}`); `S3Registry` serves the same layout under an `s3://bucket/prefix` root. The
 S3 backend has no catalog: its `has_catalog` is `False`, and `list_datasets` and `search` raise
 `NotImplementedError`. `TimeNet.list()` and `TimeNet.search()` leave a registry without a catalog
-out, with a `CatalogWarning` that names it. If no source of the list has a catalog, they raise
-`TimeNetNoCatalogError`.
+out, with a `CatalogWarning` that names it. If no source of the list has a catalog, they fail.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
 disk, at `<root>/chengsenwang/tsqa/<version>/`. Use lowercase ids to avoid casing clashes on
@@ -122,7 +121,7 @@ names each one and pins the files it reads from it (see
   [Opening a version](timef-reader.md#opening-a-version) for the checks and their errors.
 - `TimeNet.download()` and `copy_release()` copy complete copies of the version and of each payload
   source, and check each source against the pins. If a downloaded file has another size or checksum
-  than its manifest records, the copy raises `TimeNetFileError` and keeps no partial copy.
+  than its manifest records, the copy fails and keeps no partial copy.
 - `put_dataset` refuses a version if the registry does not hold one of its payload sources.
 
 ### Remote reads
@@ -153,15 +152,17 @@ A source gives one of these answers:
 | `FoundInRegistry(version, registry)` | The registry serves the release. |
 | `FoundInConnector(builder)` | An installed connector builds the release. `version` is the version that its card declares. |
 | `NotFound()` | The source does not know the release. |
-| `NotServed(version, access, requirements)` | The source lists the release, but does not serve its files. `access` is the effective access of the release, and `requirements` names each card that is not open, with its access page. `access_error(dataset_id)` returns the `TimeNetAccessError` that names each page. |
+| `NotServed(version, access, requirements, reason)` | The source lists the release, but does not serve its files to this caller. `access` is the access level of the release and `requirements` names the cards with their access pages, or `None` and `()` if the source does not say. `reason` is the reason that the source gives, or `None`. `access_error(dataset_id)` returns the matching `TimeNetAccessError`. |
 
-The type `Found` covers `FoundInRegistry` and `FoundInConnector`. `FoundInRegistry` and
-`NotServed` also carry the `manifest` that the source read, or `None`, so that you do not need to
-fetch it again.
+The type `Found` covers `FoundInRegistry` and `FoundInConnector`. `FoundInRegistry` also carries
+the `manifest` that the source read, or `None`, so that you do not need to fetch it again.
 
-A `LocalRegistry` serves every release that it holds, so it never answers `NotServed`. A registry
-that is not local serves the files of a release only if its effective access is `open`, and
-answers `NotServed` otherwise.
+A registry does not check the access level of a release. A `LocalRegistry` and an `S3Registry`
+serve every release that they hold, so they never answer `NotServed`. For an `S3Registry`, the
+owner of the bucket decides through the bucket permissions who can read and write releases. A
+`RemoteRegistry` asks its service. The service decides which releases a caller can read, and a
+refusal becomes `NotServed` with the reason that the service gives. The service does not send the
+access level or the access page, so `access` is `None`.
 
 `InstalledConnectors()` answers `Found` only for the version that the card of a connector declares,
 because a connector builds only that version. For any other request, it answers `NotFound`.
@@ -212,7 +213,7 @@ so you can publish to a local directory, a remote registry, or an S3 bucket:
 | `requires_clean_code_provenance` | Whether the registry refuses releases built from locally modified TimeNet code. `False` only for `LocalRegistry`. Otherwise `put_dataset` and `put_release` raise `TimeNetBuildError` for a release whose manifest records local changes. |
 
 `LocalRegistry`, `RemoteRegistry` and `S3Registry` take `read_only=True`. A read-only registry
-refuses each write with `TimeNetRegistryError`.
+refuses each write.
 
 `put_dataset` writes the dataset with a [`TimeFWriter`](timef-writer.md) and checks each payload
 source of the new release in the registry that receives it. In a local registry, `force=True`
@@ -238,16 +239,16 @@ release = registry.put_dataset(dataset)
 
 Every backend is a `WritableRegistry`. As a result, this type alone does not show if a backend is a
 directory the engine can write to or a remote stub. `local_registry_path(uri)` gives this
-information. It returns the directory that a `file://` URI or a plain path names. It raises
-`TimeNetRegistryError` for a remote scheme or an empty string.
+information. It returns the directory that a `file://` URI or a plain path names. It rejects a
+remote scheme or an empty string.
 
 ### Remote publishing
 
 `RemoteRegistry.put_dataset` compiles the dataset locally and then sends the files to the service.
 The data does not pass through the API. The service gives a presigned URL for each file, and the SDK
 uploads the file to the object store directly. You need a writer token in `$TIMENET_TOKEN`. The
-service refuses an anonymous or read-only caller. `RemoteRegistry.put_release` runs steps 2 to 4
-for a release directory that already exists.
+service refuses an anonymous or read-only caller. The service also decides which releases it
+accepts. `RemoteRegistry.put_release` runs steps 2 to 4 for a release directory that already exists.
 
 1. Compile into a temporary staging directory with a [`TimeFWriter`](timef-writer.md), deriving the
    schema first if the dataset has none. An already-committed version returns early. The writer
@@ -294,8 +295,8 @@ registry.search(DatasetFilter.of(domain=Domain.CARDIOLOGY, tag="ecg", limit=10))
 A `DatasetFilter` from `timenet.types` holds the filters and the limit. Each filter is a tuple, and
 an empty tuple sets no restriction. `DatasetFilter.of()` takes one value, a list, or `None` for
 each filter. The registry combines the filters with AND logic. `limit` caps the number of
-results, with a default of 100. `limit=0` returns no results, and a negative limit raises
-`TimeFValidationError`.
+results, with a default of 100. `limit=0` returns no results. `DatasetFilter` rejects a negative
+limit.
 
 `DatasetFilter.select()` does the filtering. It takes `ListedRelease` rows, each a card and the
 registry that lists it, and keeps their order. It checks the card first. A `task` or

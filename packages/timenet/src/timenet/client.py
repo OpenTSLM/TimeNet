@@ -255,7 +255,7 @@ class TimeNet:
             TimeNetNotBuiltError: If the release needs a build to create its manifest.
             TimeNetDatasetNotFoundError: If no source provides the release.
             TimeNetVersionUnavailableError: If the version is unavailable and a connector declares another version.
-            TimeNetAccessError: If a registry only lists the release and provides no manifest.
+            TimeNetAccessError: If a registry lists the release but does not serve it.
             TimeNetInvalidCardError: If the connector's card is unreadable or invalid.
             TimeFValidationError: If ``dataset_id`` and ``version`` both give a version.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by the resolution of the release)
@@ -281,7 +281,7 @@ class TimeNet:
         Raises:
             TimeNetDatasetNotFoundError: If no source provides the release.
             TimeNetVersionUnavailableError: If the version is unavailable and a connector declares another version.
-            TimeNetAccessError: If a registry only lists the release and provides no manifest.
+            TimeNetAccessError: If a registry lists the release but does not serve it.
             TimeNetInvalidCardError: If the connector's card is unreadable or invalid.
             TimeFValidationError: If ``dataset_id`` and ``version`` both give a version.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by the resolution of the release)
@@ -365,7 +365,7 @@ class TimeNet:
 
         Raises:
             TimeFValidationError: If the sources have no writable local registry.
-            TimeNetAccessError: If a required release is only listed or lacks open access in a remote registry.
+            TimeNetAccessError: If a registry lists a required release but does not serve it.
             TimeNetNotBuiltError: If only installed connectors provide the release.
             TimeNetDatasetNotFoundError: If no registry other than the local registry provides the release.
             TimeNetVersionUnavailableError: If the version is missing and its connector builds another version.
@@ -502,16 +502,14 @@ class TimeNet:
 
         Raises:
             TimeNetDatasetNotFoundError: If no source provides the release.
-            TimeNetAccessError: If a registry only lists the release and provides no manifest.
+            TimeNetAccessError: If a registry lists the release but does not serve it.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by raise_not_found)
         lookups = Lookups()
         answer = lookups.resolve(self._sources, dataset_id, version)
         if isinstance(answer, NotFound):
             raise_not_found(dataset_id, version, self._sources)
         if isinstance(answer, NotServed):
-            if answer.manifest is None:
-                raise answer.access_error(dataset_id)
-            return answer.manifest
+            raise answer.access_error(dataset_id)
         if isinstance(answer, FoundInConnector):
             return answer
         manifest = lookups.manifest(answer.registry, DatasetRef(dataset_id=dataset_id, version=answer.version))

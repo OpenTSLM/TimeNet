@@ -114,8 +114,7 @@ early development, and no TimeNet reads them.
 raises Pydantic's `ValidationError` with its native field locations and error details.
 
 Registries read a stored manifest with `read_manifest(path)` or `parse_manifest(text, where)` from
-`timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`. A manifest of an
-older or a newer unsupported TimeF format raises `TimeFFormatVersionError` instead.
+`timenet.manifest`.
 
 ### Serialization notes
 
