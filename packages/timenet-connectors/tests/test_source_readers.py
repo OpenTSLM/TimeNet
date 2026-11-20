@@ -1,4 +1,5 @@
 from contextlib import closing
+import csv
 import json
 from pathlib import Path
 
@@ -63,6 +64,26 @@ def test_csv_rejects_ambiguous_rows(tmp_path, content, message):
     path.write_text(content)
     with pytest.raises(TimeNetConnectorError, match=message):
         list(CsvDataReader(path, Row).iter_rows())
+
+
+_CSV_MODULE_DEFAULT_LIMIT = 128 * 1024
+"""The default cell limit of the csv module, in characters."""
+
+
+@pytest.fixture
+def csv_module_default_limit():
+    # The limit of the csv module is process-wide, so start from the default and restore the limit after.
+    previous = csv.field_size_limit(_CSV_MODULE_DEFAULT_LIMIT)
+    yield
+    csv.field_size_limit(previous)
+
+
+@pytest.mark.usefixtures("csv_module_default_limit")
+def test_csv_reads_a_cell_longer_than_the_default_limit_of_the_csv_module(tmp_path):
+    long_name = "x" * (_CSV_MODULE_DEFAULT_LIMIT + 1)
+    path = tmp_path / "source.csv"
+    path.write_text(f"name,count\n{long_name},1\n")
+    assert list(CsvDataReader(path, Row).iter_rows()) == [Row(name=long_name, count=1)]
 
 
 def test_csv_checks_expected_header_even_without_rows(tmp_path):

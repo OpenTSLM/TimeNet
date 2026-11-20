@@ -3,10 +3,16 @@
 from collections.abc import Generator, Mapping, Sequence
 import csv
 from pathlib import Path
+import sys
 from typing import TypeGuard
 
 from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataReader, RowT
+
+
+_NO_FIELD_SIZE_LIMIT = min(sys.maxsize, 2**31 - 1)
+"""The largest cell limit that the csv module accepts on every platform. On Windows, the limit is a
+32-bit C long, and a larger value raises OverflowError."""
 
 
 class CsvDataReader(DataReader[RowT]):
@@ -31,6 +37,8 @@ class CsvDataReader(DataReader[RowT]):
         Raises:
             TimeNetConnectorError: If the file or a row is invalid.
         """
+        # The csv module limits each cell to 131,072 characters, for the whole process.
+        csv.field_size_limit(_NO_FIELD_SIZE_LIMIT)
         try:
             with self.path.open(encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle, strict=True)
