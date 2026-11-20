@@ -4,7 +4,7 @@ Nebius released the trajectories of SWE-agent runs that try to resolve GitHub is
 whether its final patch passed the tests of the issue's pull request. Each checkpoint of a run (its
 first 5, 10, 20 or 30 steps, if the run is still going) becomes one Record of per-step signals, with
 the agent's thoughts for those steps as text. The issue text is a dataset annotation, stored once per
-distinct text. :mod:`~timenet_connectors.datasets.nebius.swe_agent_trajectories.tasks` describes the
+instance. :mod:`~timenet_connectors.datasets.nebius.swe_agent_trajectories.tasks` describes the
 three tasks of each checkpoint.
 """
 
@@ -18,7 +18,6 @@ import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
-from timenet.json import JsonMapping
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Task, TimeSeriesSpec, ureg
 from timenet.types.splits import Split
 from timenet.types.text import LazyTextList
@@ -30,9 +29,9 @@ from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     read_runs,
 )
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.tasks import (
+    ENDING_LABELS,
     ENDING_PROMPT,
-    ENDINGS,
-    OUTCOMES,
+    OUTCOME_LABELS,
     RESOLVE_PROMPT,
     RESOLVED,
     STATUS_PROMPT,
@@ -61,7 +60,10 @@ SPECS = {
     "observation_chars": _count_spec("agent_observation_length", "Environment reply length (characters)"),
     "context_chars": _count_spec("agent_context_length", "Conversation length so far (characters)"),
     "repeated_action": TimeSeriesSpec(
-        spec_type="agent_repeated_action", name="Command repeats an earlier one", unit_value=None, dtype="bool"
+        spec_type="agent_repeated_action",
+        name="Command repeats an earlier one",
+        unit_value=ureg.dimensionless,
+        dtype="bool",
     ),
     "action_kind": TimeSeriesSpec(
         spec_type="agent_action_kind",
@@ -110,21 +112,21 @@ class SWEAgentTrajectoriesConnector(BaseHuggingFaceConnector):
         dataset = TimeFDataset(metadata=self.metadata())
         for key, value in (("source_repository", self.HF_REPO), ("source_revision", self.SOURCE_REVISION)):
             dataset.annotate(Annotation(key=key, value=value))
-        issues: dict[str, Annotation] = {}
-        for run in runs:
-            if run.issue not in issues:
-                issues[run.issue] = dataset.annotate(
-                    Annotation(
-                        key=ISSUE,
-                        value=run.issue,
-                        description="The GitHub issue a run tries to resolve, as the agent read it.",
-                        metadata={"instance_id": run.instance_id},
-                    )
-                )
         split_of = split_runs(runs)
+        # One issue annotation per instance and text, made when a task first needs it.
+        issues: dict[tuple[str, str], Annotation] = {}
         records: list[tuple[Checkpoint, Record]] = []
         for run in runs:
             for checkpoint in checkpoints(run):
+                if (run.instance_id, run.issue) not in issues:
+                    issues[run.instance_id, run.issue] = dataset.annotate(
+                        Annotation(
+                            key=ISSUE,
+                            value=run.issue,
+                            description="The GitHub issue a run tries to resolve, as the agent read it.",
+                            metadata={"instance_id": run.instance_id},
+                        )
+                    )
                 records.append((checkpoint, dataset.add_record(record=self._make_record(checkpoint))))
         dataset.set_task_stream(
             [ClassificationTask, AnswerTask], functools.partial(_tasks, records, issues, split_of.__getitem__)
@@ -170,7 +172,9 @@ class SWEAgentTrajectoriesConnector(BaseHuggingFaceConnector):
 
 
 def _tasks(
-    records: list[tuple[Checkpoint, Record]], issues: dict[str, Annotation], split_of: Callable[[str], Split]
+    records: list[tuple[Checkpoint, Record]],
+    issues: dict[tuple[str, str], Annotation],
+    split_of: Callable[[str], Split],
 ) -> Iterator[Task]:
     """Yield the three tasks of every checkpoint, in Record order.
 
@@ -179,15 +183,8 @@ def _tasks(
     """
     for checkpoint, record in records:
         run = checkpoint.run
-        context = (issues[run.issue], *(a for a in record.annotations if a.key == THOUGHTS))
-        metadata: JsonMapping = {
-            "run_id": run.run_id,
-            "instance_id": run.instance_id,
-            "repository": run.repository,
-            "model_name": run.model_name,
-            "checkpoint_steps": checkpoint.steps,
-        }
-        inputs, split = (record,), split_of(run.run_id)
+        context = (issues[run.instance_id, run.issue], *(a for a in record.annotations if a.key == THOUGHTS))
+        inputs, split, metadata = (record,), split_of(run.run_id), record.metadata
         yield ClassificationTask(
             inputs=inputs,
             split=split,
@@ -195,7 +192,7 @@ def _tasks(
             metadata=metadata,
             prompt=RESOLVE_PROMPT,
             targets=(RESOLVED if run.resolved else UNRESOLVED,),
-            label_set=OUTCOMES,
+            label_set=OUTCOME_LABELS,
         )
         yield ClassificationTask(
             inputs=inputs,
@@ -204,7 +201,7 @@ def _tasks(
             metadata=metadata,
             prompt=ENDING_PROMPT,
             targets=(str(run.ending),),
-            label_set=ENDINGS,
+            label_set=ENDING_LABELS,
         )
         yield AnswerTask(
             inputs=inputs,

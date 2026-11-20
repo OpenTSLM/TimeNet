@@ -16,6 +16,8 @@ from timenet_connectors.datasets.nebius.swe_agent_trajectories import SWEAgentTr
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     ActionKind,
     ObservationKind,
+    Run,
+    SourceRow,
     action_kind,
     observation_kind,
     parse_run,
@@ -73,10 +75,16 @@ def _row(repository: int, number: int, n_steps: int, *, resolved: bool, exit_sta
     }
 
 
+def _parse(row: dict) -> Run:
+    # The reader selects the columns the connector reads; the patch and the test log are not among them.
+    return parse_run(SourceRow.model_validate({name: row[name] for name in SourceRow.model_fields}), SHARD, 0)
+
+
 def _rows() -> list[dict]:
     rows = []
     for repository in range(12):
-        rows.append(_row(repository, 1, 4, resolved=True))
+        # Instance 3 has only a 4-step run, so no checkpoint and no issue annotation.
+        rows.append(_row(repository, 3, 4, resolved=True))
         rows.append(_row(repository, 1, 12, resolved=repository % 3 == 0))
         rows.append(_row(repository, 2, 33, resolved=False, exit_status="submitted (exit_context)"))
     return rows
@@ -155,7 +163,7 @@ def test_observation_kind_applies_its_rules_in_order(reply: str, kind: str) -> N
 
 
 def test_a_run_keeps_its_first_steps_and_its_outcome_apart() -> None:
-    run = parse_run(_row(0, 1, 7, resolved=False), SHARD, 0)
+    run = _parse(_row(0, 1, 7, resolved=False))
     assert run.n_steps == 7
     assert run.issue == ISSUE
     assert run.repository == "owner0__repo0"
@@ -171,10 +179,18 @@ def test_a_run_keeps_its_first_steps_and_its_outcome_apart() -> None:
     assert run.steps.thought_texts(2) == ["Let's reproduce the bug first.", "Write the script."]
 
 
+def test_a_thought_is_kept_as_written() -> None:
+    row = _row(0, 1, 7, resolved=False)
+    row["trajectory"][2]["text"] = _agent("A thought with a NUL \0 and ```inline``` fences.", "ls")
+    run = _parse(row)
+    assert run.steps.thought_texts(2) == ["A thought with a NUL \0 and ```inline``` fences.", "Write the script."]
+    assert run.steps.thought_chars[0] == len(run.steps.thought_texts(1)[0])
+
+
 def test_only_a_run_that_goes_on_gets_a_checkpoint() -> None:
-    assert [c.steps for c in checkpoints(parse_run(_row(0, 1, 5, resolved=False), SHARD, 0))] == []
-    assert [c.steps for c in checkpoints(parse_run(_row(0, 1, 6, resolved=False), SHARD, 0))] == [5]
-    assert [c.steps for c in checkpoints(parse_run(_row(0, 1, 33, resolved=False), SHARD, 0))] == [5, 10, 20, 30]
+    assert [c.steps for c in checkpoints(_parse(_row(0, 1, 5, resolved=False)))] == []
+    assert [c.steps for c in checkpoints(_parse(_row(0, 1, 6, resolved=False)))] == [5]
+    assert [c.steps for c in checkpoints(_parse(_row(0, 1, 33, resolved=False)))] == [5, 10, 20, 30]
 
 
 def test_records_hold_the_steps_so_far_and_nothing_about_the_outcome(dataset) -> None:
@@ -196,11 +212,14 @@ def test_each_checkpoint_gives_three_tasks_with_the_issue_and_thoughts_as_input(
     tasks = list(dataset.iter_tasks())
     assert len(tasks) == 3 * 12 * 6
     assert Counter(type(task) for task in tasks) == {ClassificationTask: 2 * 72, AnswerTask: 72}
+    # One issue annotation per instance with a checkpoint: instances 1 and 2 of each repository.
     issues = [a for a in dataset.annotations if a.key == "issue"]
-    assert len(issues) == 1
+    assert len(issues) == 24
+    assert not any(a.metadata["instance_id"].endswith("-3") for a in issues)
     for task in tasks:
         assert [a.key for a in task.input_annotations] == ["issue", "agent_thoughts"]
-        assert task.input_annotations[0] is issues[0]
+        assert task.input_annotations[0].metadata["instance_id"] == task.metadata["instance_id"]
+        assert task.metadata == task.inputs[0].metadata
     endings = {
         read_value(t.targets[0])
         for t in tasks
@@ -209,15 +228,16 @@ def test_each_checkpoint_gives_three_tasks_with_the_issue_and_thoughts_as_input(
     assert endings == {"submitted", "context_limit"}
 
 
-def test_the_status_report_states_the_steps_so_far_and_the_outcome() -> None:
-    run = parse_run(_row(0, 1, 12, resolved=True), SHARD, 0)
+def test_the_status_report_states_the_steps_so_far_and_what_comes() -> None:
+    run = _parse(_row(0, 1, 12, resolved=True))
     (first, *_) = checkpoints(run)
     assert status(first) == (
         "In its first 5 steps the agent edited files 1 time, created 1 file, ran code 1 time, "
         "read or searched the repository 2 times and repeated an earlier command 0 times. "
         "The linter rejected 1 edit, 1 reply showed a Python traceback, 0 replies a command error "
         f"and 0 commands timed out. The conversation holds {int(run.steps.context_chars[4]):,} characters. "
-        "The run went on for 7 more steps, then the agent submitted its changes, and resolved the issue."
+        "The run will go on for 7 more steps, then the agent will submit its changes, and the agent will "
+        "resolve the issue."
     )
 
 
@@ -254,13 +274,23 @@ def test_dataset_survives_storage_round_trip(dataset, tmp_path: Path) -> None:
         (lambda row: row["trajectory"][3].update(role="ai"), "out of turn"),
         (lambda row: row["trajectory"].pop(), "does not end on an agent message"),
         (lambda row: row["trajectory"].pop(0), "must open with the system prompt"),
+        (lambda row: row["trajectory"][2].update(text=None), "message 2 has no text"),
+        (lambda row: row["trajectory"][0].update(text="more prompt"), "system_prompt only"),
+        (lambda row: row.update(model_name=""), "model_name is empty"),
     ],
 )
 def test_a_malformed_row_fails_the_build(change, message: str) -> None:
     row = _row(0, 1, 6, resolved=False)
     change(row)
     with pytest.raises(TimeNetConnectorError, match=message):
-        parse_run(row, SHARD, 0)
+        _parse(row)
+
+
+def test_a_row_without_a_target_fails_the_build(one_shard) -> None:
+    rows = _rows()
+    rows[1]["target"] = None
+    with pytest.raises(TimeNetConnectorError, match="target"):
+        list(read_runs(one_shard(rows)))
 
 
 def test_a_shard_with_another_row_count_fails_the_build(one_shard, monkeypatch: pytest.MonkeyPatch) -> None:

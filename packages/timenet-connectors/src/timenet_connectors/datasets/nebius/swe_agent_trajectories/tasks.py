@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from timenet.types import Label, LabelSet
 from timenet.types.splits import Split
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
+    EXIT_STATUSES,
     ActionKind,
     Ending,
     ObservationKind,
@@ -28,14 +29,14 @@ CHECKPOINTS = (5, 10, 20, 30)
 
 RESOLVED = "resolved"
 UNRESOLVED = "unresolved"
-OUTCOMES = LabelSet(
+OUTCOME_LABELS = LabelSet(
     name="run_outcome",
     labels=(
         Label(name=RESOLVED, description="The run's final patch passed the tests of the issue's pull request."),
         Label(name=UNRESOLVED, description="The run did not resolve the issue."),
     ),
 )
-ENDINGS = LabelSet(
+ENDING_LABELS = LabelSet(
     name="run_ending",
     labels=(
         Label(name=Ending.SUBMITTED, description="The agent submitted its changes."),
@@ -60,21 +61,9 @@ _CONTEXT = (
 RESOLVE_PROMPT = f"{_CONTEXT} Will the agent's final patch resolve the issue?"
 ENDING_PROMPT = f"{_CONTEXT} How will the run end?"
 STATUS_PROMPT = (
-    f"{_CONTEXT} Report how the agent is doing so far, then say how the run will end and whether it "
-    "will resolve the issue."
+    f"{_CONTEXT} Report how the agent is doing so far, then say how many more steps the run will take, "
+    "how it will end and whether the agent will resolve the issue."
 )
-
-_ENDING_TEXT = {
-    "submitted": "the agent submitted its changes",
-    "submitted (exit_context)": "it reached the context limit and SWE-agent submitted its changes",
-    "exit_context": "it reached the context limit",
-    "early_exit": "it ended with the status early_exit",
-    "submitted_no_patch": "the agent submitted without a patch",
-    "submitted (exit_format)": "SWE-agent stopped it after repeated malformed messages and submitted its changes",
-    "exit_format": "SWE-agent stopped it after repeated malformed messages",
-    "submitted (exit_cost)": "it reached its cost limit and SWE-agent submitted its changes",
-    "exit_cost": "it reached its cost limit",
-}
 
 
 @dataclass(frozen=True)
@@ -122,8 +111,8 @@ def status(checkpoint: Checkpoint) -> str:
     """Write the status report of a checkpoint from its steps' signals and the run's outcome.
 
     Returns:
-        Three sentences on the steps so far, then one on how the run ended and whether it resolved
-        the issue.
+        Three sentences on the steps so far, then one on how many more steps the run will take, how it
+        will end and whether the agent will resolve the issue.
     """
     k, run = checkpoint.steps, checkpoint.run
     actions = Counter(run.steps.action_kind[:k])
@@ -141,6 +130,6 @@ def status(checkpoint: Checkpoint) -> str:
         f"{_count(replies[ObservationKind.COMMAND_ERROR], 'reply', 'replies')} a command error "
         f"and {_count(replies[ObservationKind.TIMEOUT], 'command')} timed out. "
         f"The conversation holds {int(run.steps.context_chars[k - 1]):,} characters. "
-        f"The run went on for {_count(rest, 'more step')}, then {_ENDING_TEXT[run.exit_status]}, "
-        f"and {'resolved' if run.resolved else 'did not resolve'} the issue."
+        f"The run will go on for {_count(rest, 'more step')}, then {EXIT_STATUSES[run.exit_status].phrase}, "
+        f"and the agent will {'resolve' if run.resolved else 'not resolve'} the issue."
     )

@@ -10,6 +10,7 @@ is never part of a step.
 from __future__ import annotations
 
 from collections.abc import Iterator
+import dataclasses
 from dataclasses import dataclass
 from enum import StrEnum, unique
 from pathlib import Path
@@ -17,10 +18,10 @@ import re
 import zlib
 
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
+from pydantic import ConfigDict, StrictBool
 
 from timenet.errors import TimeNetConnectorError
+from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
 
 # The twelve parquet shards of the pinned revision and their row counts.
@@ -43,7 +44,6 @@ MAX_STEPS = 30
 # A trajectory opens with the system prompt and the issue message; the steps follow.
 _OPENING = 2
 _COLUMNS = ["instance_id", "model_name", "target", "trajectory", "exit_status"]
-_BATCH_ROWS = 256
 _ISSUE = re.compile(r"ISSUE:\n(.*?)\n\nINSTRUCTIONS:", re.DOTALL)
 # An instance id is "<owner>__<repository>-<issue or pull request number>".
 _INSTANCE = re.compile(r"(?P<repository>.+__.+)-\d+")
@@ -63,18 +63,33 @@ class Ending(StrEnum):
     COST_LIMIT = "cost_limit"
 
 
+@dataclass(frozen=True)
+class ExitStatus:
+    """How the release's ``exit_status`` maps onto an ending, and how a status report says it."""
+
+    ending: Ending
+    phrase: str
+    """The end of the sentence "The run will go on for n more steps, then ..."."""
+
+
 # Every exit_status of the release. "submitted (exit_x)" means SWE-agent hit limit x and submitted the
 # changes so far by itself.
-ENDINGS = {
-    "submitted": Ending.SUBMITTED,
-    "submitted (exit_context)": Ending.CONTEXT_LIMIT,
-    "exit_context": Ending.CONTEXT_LIMIT,
-    "early_exit": Ending.EARLY_EXIT,
-    "submitted_no_patch": Ending.SUBMITTED_NO_PATCH,
-    "submitted (exit_format)": Ending.FORMAT_ERRORS,
-    "exit_format": Ending.FORMAT_ERRORS,
-    "submitted (exit_cost)": Ending.COST_LIMIT,
-    "exit_cost": Ending.COST_LIMIT,
+EXIT_STATUSES = {
+    "submitted": ExitStatus(Ending.SUBMITTED, "the agent will submit its changes"),
+    "submitted (exit_context)": ExitStatus(
+        Ending.CONTEXT_LIMIT, "it will reach the context limit and SWE-agent will submit its changes"
+    ),
+    "exit_context": ExitStatus(Ending.CONTEXT_LIMIT, "it will reach the context limit"),
+    "early_exit": ExitStatus(Ending.EARLY_EXIT, "it will end with the status early_exit"),
+    "submitted_no_patch": ExitStatus(Ending.SUBMITTED_NO_PATCH, "the agent will submit without a patch"),
+    "submitted (exit_format)": ExitStatus(
+        Ending.FORMAT_ERRORS, "SWE-agent will stop it after repeated malformed messages and submit its changes"
+    ),
+    "exit_format": ExitStatus(Ending.FORMAT_ERRORS, "SWE-agent will stop it after repeated malformed messages"),
+    "submitted (exit_cost)": ExitStatus(
+        Ending.COST_LIMIT, "it will reach its cost limit and SWE-agent will submit its changes"
+    ),
+    "exit_cost": ExitStatus(Ending.COST_LIMIT, "it will reach its cost limit"),
 }
 
 
@@ -170,7 +185,7 @@ def observation_kind(text: str) -> ObservationKind:
 
     1. It starts with SWE-agent's message for an edit that its linter rejected.
     2. It starts with ``EXECUTION TIMED OUT``.
-    3. It contains a Python traceback.
+    3. It contains a Python traceback, also one shown inside a file the agent opened or edited.
     4. Its first line starts with ``Usage:`` or ``Error:``, or names a shell error.
     5. It is SWE-agent's message for a command that printed nothing.
     6. Otherwise it is plain output.
@@ -208,7 +223,8 @@ class Steps:
     action_kind: tuple[ActionKind, ...]
     observation_kind: tuple[ObservationKind, ...]
     thoughts: bytes
-    """The thoughts, NUL-joined and compressed, because the release holds about 0.7 GB of them."""
+    """The thoughts, concatenated and compressed, because the release holds about 0.7 GB of them.
+    ``thought_chars`` holds where each one ends."""
 
     def thought_texts(self, count: int) -> list[str]:
         """The thoughts of the first ``count`` steps.
@@ -216,7 +232,9 @@ class Steps:
         Returns:
             One string per step.
         """
-        return zlib.decompress(self.thoughts).decode().split("\0")[:count]
+        text = zlib.decompress(self.thoughts).decode()
+        ends = np.cumsum(self.thought_chars[:count])
+        return [text[end - length : end] for end, length in zip(ends, self.thought_chars[:count], strict=True)]
 
 
 @dataclass(frozen=True)
@@ -243,10 +261,36 @@ class Run:
     @property
     def ending(self) -> Ending:
         """How the run ended."""
-        return ENDINGS[self.exit_status]
+        return EXIT_STATUSES[self.exit_status].ending
 
 
-def _steps(messages: list[dict], opening: int, context: str) -> tuple[int, Steps]:
+class Message(DataRow):
+    """One message of a trajectory, as the release stores it."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    role: str
+    text: str | None
+    system_prompt: str | None
+
+
+class SourceRow(DataRow):
+    """The columns of a release row that the connector reads."""
+
+    instance_id: str
+    model_name: str
+    target: StrictBool
+    trajectory: list[Message]
+    exit_status: str
+
+
+def _text(message: Message, index: int, context: str) -> str:
+    if message.text is None:
+        raise TimeNetConnectorError(f"{context}: message {index} has no text")
+    return message.text
+
+
+def _steps(messages: list[Message], opening: int, context: str) -> tuple[int, Steps]:
     """Parse the agent and environment messages that follow the issue message.
 
     Args:
@@ -261,26 +305,27 @@ def _steps(messages: list[dict], opening: int, context: str) -> tuple[int, Steps
         TimeNetConnectorError: If the messages do not alternate agent, environment, ending on the agent.
     """
     for index, message in enumerate(messages):
-        if message["role"] != ("ai" if index % 2 == 0 else "user"):
-            raise TimeNetConnectorError(f"{context}: message {index + 2} is {message['role']!r} out of turn")
-    if messages and messages[-1]["role"] != "ai":
+        if message.role != ("ai" if index % 2 == 0 else "user"):
+            raise TimeNetConnectorError(f"{context}: message {index + _OPENING} is {message.role!r} out of turn")
+    if messages and messages[-1].role != "ai":
         raise TimeNetConnectorError(f"{context}: the trajectory does not end on an agent message")
+    texts = [_text(message, index + _OPENING, context) for index, message in enumerate(messages[: 2 * MAX_STEPS])]
     n_steps = (len(messages) + 1) // 2
     kept = min(n_steps, MAX_STEPS)
     numbers = np.zeros((4, kept), dtype=np.int32)
     repeated = np.zeros(kept, dtype=bool)
     actions, observations, thoughts, seen = [], [], [], set()
     for step in range(kept):
-        thought, command = split_message(messages[2 * step]["text"] or "")
+        thought, command = split_message(texts[2 * step])
         # The final step has no reply; every kept step of a checkpoint does.
-        reply = messages[2 * step + 1]["text"] or "" if 2 * step + 1 < len(messages) else ""
+        reply = texts[2 * step + 1] if 2 * step + 1 < len(texts) else ""
         numbers[:3, step] = len(thought), len(command), len(reply)
-        numbers[3, step] = len(messages[2 * step]["text"] or "") + len(reply)
+        numbers[3, step] = len(texts[2 * step]) + len(reply)
         repeated[step] = command in seen
         seen.add(command)
         actions.append(action_kind(command))
         observations.append(observation_kind(reply))
-        thoughts.append(thought.replace("\0", ""))
+        thoughts.append(thought)
     return n_steps, Steps(
         thought_chars=numbers[0],
         action_chars=numbers[1],
@@ -289,11 +334,11 @@ def _steps(messages: list[dict], opening: int, context: str) -> tuple[int, Steps
         repeated_action=repeated,
         action_kind=tuple(actions),
         observation_kind=tuple(observations),
-        thoughts=zlib.compress("\0".join(thoughts).encode()),
+        thoughts=zlib.compress("".join(thoughts).encode()),
     )
 
 
-def parse_run(row: dict, shard: str, index: int) -> Run:
+def parse_run(row: SourceRow, shard: str, index: int) -> Run:
     """Check one release row and parse it into a :class:`Run`.
 
     Returns:
@@ -302,32 +347,37 @@ def parse_run(row: dict, shard: str, index: int) -> Run:
     Raises:
         TimeNetConnectorError: If the row breaks the release's shape: an unknown exit status, a
             malformed instance id, a trajectory that does not open with the system prompt and the
-            issue, or messages out of turn.
+            issue, a message without text, or messages out of turn.
     """
     context = f"{shard} row {index}"
-    instance = _INSTANCE.fullmatch(row["instance_id"] or "")
+    instance = _INSTANCE.fullmatch(row.instance_id)
     if instance is None:
-        raise TimeNetConnectorError(f"{context}: malformed instance_id {row['instance_id']!r}")
-    if row["exit_status"] not in ENDINGS:
-        raise TimeNetConnectorError(f"{context}: unknown exit_status {row['exit_status']!r}")
-    if not isinstance(row["target"], bool) or not row["model_name"]:
-        raise TimeNetConnectorError(f"{context}: target must be true or false and model_name set")
-    messages = row["trajectory"] or []
-    if len(messages) < _OPENING or messages[0]["role"] != "system" or messages[1]["role"] != "user":
+        raise TimeNetConnectorError(f"{context}: malformed instance_id {row.instance_id!r}")
+    if row.exit_status not in EXIT_STATUSES:
+        raise TimeNetConnectorError(f"{context}: unknown exit_status {row.exit_status!r}")
+    if not row.model_name:
+        raise TimeNetConnectorError(f"{context}: model_name is empty")
+    messages = row.trajectory
+    if len(messages) < _OPENING or messages[0].role != "system" or messages[1].role != "user":
         raise TimeNetConnectorError(f"{context}: the trajectory must open with the system prompt and the issue")
-    issue = _ISSUE.search(messages[1]["text"] or "")
+    system = messages[0]
+    # The system message holds the prompt in system_prompt; its text is empty in every row of the release.
+    if system.system_prompt is None or system.text:
+        raise TimeNetConnectorError(f"{context}: the system message must hold its prompt in system_prompt only")
+    issue_message = _text(messages[1], 1, context)
+    issue = _ISSUE.search(issue_message)
     if issue is None:
         raise TimeNetConnectorError(f"{context}: the first message holds no ISSUE section")
-    opening = len(messages[0]["system_prompt"] or "") + len(messages[0]["text"] or "") + len(messages[1]["text"])
+    opening = len(system.system_prompt) + len(issue_message)
     n_steps, steps = _steps(messages[_OPENING:], opening, context)
     return Run(
         shard=shard,
         row=index,
-        instance_id=row["instance_id"],
+        instance_id=row.instance_id,
         repository=instance["repository"],
-        model_name=row["model_name"],
-        resolved=row["target"],
-        exit_status=row["exit_status"],
+        model_name=row.model_name,
+        resolved=row.target,
+        exit_status=row.exit_status,
         issue=issue.group(1),
         n_steps=n_steps,
         steps=steps,
@@ -347,18 +397,16 @@ def read_runs(root: Path) -> Iterator[Run]:
         TimeNetConnectorError: If a shard is missing, unreadable, or holds a different number of rows
             than the pinned revision.
     """
+    # Each issue has many runs; they share one copy of its text.
+    issues: dict[str, str] = {}
     for shard, expected in SHARD_ROWS.items():
         path = root / shard
         if not path.is_file():
             raise TimeNetConnectorError(f"{path} is missing")
         count = 0
-        try:
-            batches = pq.ParquetFile(path).iter_batches(batch_size=_BATCH_ROWS, columns=_COLUMNS)
-            for batch in batches:
-                for row in batch.to_pylist():
-                    yield parse_run(row, shard, count)
-                    count += 1
-        except (OSError, pa.ArrowException) as exc:
-            raise TimeNetConnectorError(f"{path}: {exc}") from exc
+        for row in ParquetDataReader(path, SourceRow, selected_columns=_COLUMNS).iter_rows():
+            run = parse_run(row, shard, count)
+            yield dataclasses.replace(run, issue=issues.setdefault(run.issue, run.issue))
+            count += 1
         if count != expected:
             raise TimeNetConnectorError(f"{path}: expected {expected} rows, found {count}")
