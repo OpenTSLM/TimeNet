@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: opentslm/m4-caption
+dataset_version: 1.0.0
+name: M4-Caption
+description: >-
+  99,294 univariate series from the M4 forecasting competition (79,436 train, 9,929 validation,
+  9,929 test). Each series has one caption in English. GPT-4o wrote each caption from a plot of the
+  series, with the prompt "Generate a detailed caption for the following time-series data:".
+  OpenTSLM publishes the series and the captions as one zip archive of CSV files on Polybox. The
+  series are the train part of M4, the history that the competitors received, without the forecast
+  horizon. There are 4,227 daily, 414 hourly, 48,000 monthly, 24,000 quarterly, 359 weekly and
+  23,000 yearly series, with 13 to 9,919 values each. The OpenTSLM paper gives 64 to 512 values, but
+  the Polybox release has the full length. The Polybox release has no timestamps and states no unit.
+  The M4 series come from the micro, industry, macro, finance, demographic and other domains. Each
+  record states the M4 id, such as M1, and the M4 frequency. For 706 series, the Polybox release has
+  an error message of the caption API instead of a caption, such as "Error generating caption:
+  Connection error.". The dataset leaves out these 253 daily, 57 monthly and 396 quarterly series. Each task asks for the caption with the
+  prompt of OpenTSLM's loader: "Please generate a detailed caption for this time-series, describing
+  it as accurately as possible.". The Polybox release has no split column, so the dataset gives
+  each series an 80/10/10 split, stratified by M4 frequency. M4 has 90 pairs of series whose
+  histories are equal value for value, and each pair stays in one split. This split is not the
+  random split of OpenTSLM's loader.
+
+  The Polybox release also holds m4_series.csv, a copy of the weekly series, and m4_captions.csv,
+  with 40 other captions of weekly series. OpenTSLM does not use these two files, and the dataset
+  does not include them.
+
+  The M4 organizers at the University of Nicosia state no license for the M4 data. OpenTSLM
+  releases the captions under MIT.
+license: NONE
+source_url: https://polybox.ethz.ch/index.php/s/MT3y9WdEebT8wfj
+citation: >-
+  Langer, P., et al. (2025). OpenTSLM: Time-Series Language Models for Reasoning over Multivariate
+  Medical Text- and Time-Series Data. https://doi.org/10.48550/arXiv.2510.02410. M4 series:
+  Makridakis, S., Spiliotis, E., & Assimakopoulos, V. (2020). The M4 Competition: 100,000 time series
+  and 61 forecasting methods. International Journal of Forecasting, 36(1), 54-74. Makridakis, S.,
+  Spiliotis, E., & Assimakopoulos, V. (2018). The M4 Competition: Results, findings, conclusion and
+  way forward. International Journal of Forecasting, 34(4), 802-808.
+domains:
+  - economics
+  - finance
+  - general
+tags:
+  - m4
+  - forecasting
+  - captioning
+  - generated-supervision
+  - demographics
