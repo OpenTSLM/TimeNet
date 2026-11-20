@@ -244,17 +244,24 @@ Labels come from the targets stored directly on the task or from the text of its
 annotations.
 
 A label set has no name. TimeF stores equal sets once. For this, two sets are equal if they have the
-same labels, label descriptions, `multi_label`, and `ordered`. The annotations do not matter. The
-order of labels matters only for an ordered set. `==` follows the same rule.
+same labels, label descriptions, `multi_label`, `ordered`, and annotations. The order of labels
+matters only for an ordered set. The order of annotations does not matter. `==` follows the same rule.
+
+Annotations are equal if all their fields are equal, the value included. So these two sets are two
+stored sets, each with its own id:
+
+```python
+LabelSet(["yes", "no"], annotations=[Annotation("name", value="afib_present")])
+LabelSet(["yes", "no"], annotations=[Annotation("name", value="signal_noisy")])
+```
 
 By default the order of labels does not matter. Use `ordered=True` when it has a meaning, for example
 for ordinal labels such as `low`, `medium` and `high`, or for answer options that a model sees in a
 fixed order. Then each order is its own set, and the stored set keeps it. An unordered set keeps the
 label order of the first equal set that the writer meets.
 
-The stored set gets one integer id, `label_set_id`. If equal sets carry different annotation
-occurrences, the stored set keeps each distinct occurrence. In one read, the reader gives tasks that
-use the same set a shared object.
+The stored set gets one integer id, `label_set_id`. In one read, the reader gives tasks that use the
+same set a shared object.
 
 ### Answer and rationale
 

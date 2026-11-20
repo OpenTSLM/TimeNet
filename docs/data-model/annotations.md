@@ -131,8 +131,9 @@ SLEEP_STAGE = LabelSet(
 SLEEP_STAGE.annotate(Annotation(key="description", value="Sleep stage of one epoch."))
 ```
 
-A label set annotation has no span. Annotations are not part of the identity of a set. TimeF stores
-equal label sets once. If equal sets carry different annotations, the stored set keeps all of them.
+A label set annotation has no span. Annotations are part of the identity of a set. Two sets with the
+same labels and different annotations are two sets, and TimeF stores each of them. TimeF stores sets
+with the same labels and the same annotations once.
 
 ## Valid values
 

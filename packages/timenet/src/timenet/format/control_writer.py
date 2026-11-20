@@ -8,7 +8,7 @@ from itertools import count, islice
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, assert_never, cast
-from weakref import WeakValueDictionary, ref
+from weakref import WeakValueDictionary
 
 import duckdb
 import numpy as np
@@ -212,9 +212,7 @@ class _LabelSetRows:
     """The ``label_sets`` rows of one write, one row for each distinct label set.
 
     Equal sets (see :meth:`LabelSet._content_key`) get one id, in the order that tasks first use them.
-    The row keeps the labels of the first set. The stored annotations are all the occurrences of the
-    first set, then each occurrence of a later equal set that differs from every stored one in a field.
-    A set object that many tasks share is checked and added once. The caller's sets do not change.
+    The row keeps the labels and the annotations of the first set.
     """
 
     def __init__(self, ids: Iterator[int]) -> None:
@@ -224,11 +222,10 @@ class _LabelSetRows:
             ids: The storage ids for new label sets.
         """
         self._new_ids = ids
-        self._sets: dict[Hashable, tuple[dict[str, object], list[Annotation], set[Hashable]]] = {}
-        self._known: dict[int, tuple[ref[LabelSet], int]] = {}
+        self._sets: dict[Hashable, tuple[dict[str, object], tuple[Annotation, ...]]] = {}
 
     def register(self, label_set: LabelSet) -> int:
-        """Add a label set and its annotations.
+        """Add a label set.
 
         Returns:
             The stored id of the set.
@@ -236,9 +233,6 @@ class _LabelSetRows:
         Raises:
             TimeFValidationError: If the set is not valid. A set can change after a task gets it.
         """  # ruff: ignore[docstring-extraneous-exception] - _validate raises it
-        known = self._known.get(id(label_set))
-        if known is not None and known[0]() is label_set:
-            return known[1]
         label_set._validate()
         key = label_set._content_key()
         stored = self._sets.get(key)
@@ -249,19 +243,8 @@ class _LabelSetRows:
                 "multi_label": label_set.multi_label,
                 "ordered": label_set.ordered,
             }
-            occurrences = list(label_set.annotations)
-            self._sets[key] = (row, occurrences, {_occurrence_key(annotation) for annotation in occurrences})
-        else:
-            row, occurrences, held = stored
-            for annotation in label_set.annotations:
-                occurrence = _occurrence_key(annotation)
-                if occurrence not in held:
-                    held.add(occurrence)
-                    occurrences.append(annotation)
-        label_set_id = cast("int", row["label_set_id"])
-        object_id = id(label_set)
-        self._known[object_id] = (ref(label_set, lambda _: self._known.pop(object_id, None)), label_set_id)
-        return label_set_id
+            stored = self._sets[key] = (row, label_set.annotations)
+        return cast("int", stored[0]["label_set_id"])
 
     def write(
         self, connection: duckdb.DuckDBPyConnection, annotations: list[tuple[ObjectKind, int | None, Annotation]]
@@ -272,24 +255,10 @@ class _LabelSetRows:
             connection: The open write transaction.
             annotations: The annotation triples that the writer collects. This method adds to them.
         """
-        insert_rows(connection, TABLES["label_sets"], [row for row, _, _ in self._sets.values()])
-        for row, occurrences, _ in self._sets.values():
+        insert_rows(connection, TABLES["label_sets"], [row for row, _ in self._sets.values()])
+        for row, occurrences in self._sets.values():
             label_set_id = cast("int", row["label_set_id"])
             annotations.extend((ObjectKind.LABEL_SET, label_set_id, annotation) for annotation in occurrences)
-
-
-def _occurrence_key(annotation: Annotation) -> tuple[Hashable, ...]:
-    """Return a key that is equal for two occurrences only if every field of them is equal.
-
-    Returns:
-        The hashable key.
-    """
-    return (
-        annotation._content_key,
-        annotation.source,
-        annotation.confidence,
-        json.dumps(annotation.occurrence_metadata, sort_keys=True),
-    )
 
 
 class DuckDBControlWriter:

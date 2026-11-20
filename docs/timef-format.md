@@ -194,9 +194,10 @@ A column that a task type does not use is `NULL`. SQL can filter these columns w
 
 Every classification task has a label set, and `tasks.label_set_id` stores its ID. Each row in
 `label_sets` stores one set with the fields `label_set_id`, `labels`, `multi_label`, and `ordered`.
-Sets with the same labels, label descriptions, `multi_label`, and `ordered` are one set, so a release
-stores them once. If `ordered` is true, the label order is part of the set, so the same labels in
-another order are a different set. The writer numbers the sets in the order that tasks first use them.
+Sets with the same labels, label descriptions, `multi_label`, `ordered`, and annotations are one set,
+so a release stores them once. If `ordered` is true, the label order is part of the set, so the same
+labels in another order are a different set. The same labels with different annotations are also a
+different set. The writer numbers the sets in the order that tasks first use them.
 The annotations of a set are rows of `annotation_occurrences` with `object_type` `LabelSet` and the
 `label_set_id` as `object_id`.
 

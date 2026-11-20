@@ -299,7 +299,9 @@ LABEL_SETS = Table(
 The ``labels`` column holds one ``{name, description}`` entry per label, in label order.
 ``ordered`` says whether that order is part of the identity of the set.
 If a label has no description, ``description`` is NULL. Tasks refer to a set by its id in
-``tasks.label_set_id``. The writer gives each distinct set one id, in the order that tasks first use it."""
+``tasks.label_set_id``. The writer gives each distinct set one id, in the order that tasks first use it.
+The annotations of a set are part of its identity, so two sets with the same labels and different
+annotations are two rows."""
 
 TASKS = Table(
     "tasks",

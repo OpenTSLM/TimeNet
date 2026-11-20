@@ -1,7 +1,9 @@
 """The allowed labels for a classification target."""
 
+from collections import Counter
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+import json
 from typing import TypeVar
 
 from timenet.errors import TimeFValidationError
@@ -72,11 +74,15 @@ class LabelSet(SupportsAnnotate):
     A plain string is a label without a description, so ``LabelSet(["yes", "no"])`` is enough when no label
     needs one.
 
-    A label set has no name. Two sets with the same labels (with the same descriptions), the same
-    ``multi_label`` and the same ``ordered`` are the same set, so ``==`` is true for them. If ``ordered`` is
-    ``False``, the labels can be in any order. If ``ordered`` is ``True``, the labels must be in the same order.
-    A dataset stores equal sets once, with the label order of the first of them that it writes.
-    Annotations are not part of that identity.
+    A label set has no name. Two sets are the same set if they have the same labels (with the same
+    descriptions), the same ``multi_label`` and the same ``ordered``. They must also have the same annotations
+    (with the same values). Then ``==`` is true for them. If ``ordered`` is ``False``, the labels can be in any
+    order. If ``ordered`` is ``True``, the labels must be in the same order. The annotations can be in any order.
+    A dataset stores equal sets once, with the label order and the annotation order of the first of them that
+    it writes. Two sets with the same labels and different annotations are two sets::
+
+        LabelSet(["yes", "no"], annotations=(Annotation(key="name", value="afib_present"),))
+        LabelSet(["yes", "no"], annotations=(Annotation(key="name", value="signal_noisy"),))
     """
 
     labels: tuple[Label, ...]
@@ -95,7 +101,7 @@ class LabelSet(SupportsAnnotate):
     """Annotations that describe the set, such as ``Annotation(key="name", value="sleep_stage")``.
 
     An annotation cannot have a span. The set holds its own occurrence of each annotation.
-    When a dataset holds several equal sets, it stores each distinct annotation occurrence of them once."""
+    The annotations are part of the identity of the set."""
 
     def __init__(
         self,
@@ -111,7 +117,7 @@ class LabelSet(SupportsAnnotate):
             labels: The allowed labels in order. A plain string is a label without a description.
             multi_label: Whether a target can hold more than one label.
             ordered: Whether the label order is part of the identity of the set.
-            annotations: Annotations that describe the set.
+            annotations: Annotations that describe the set. They are part of the identity of the set.
 
         Raises:
             TimeFValidationError: If the set is not valid (see :meth:`_validate`).
@@ -193,13 +199,20 @@ class LabelSet(SupportsAnnotate):
     def _content_key(self) -> tuple[Hashable, ...]:
         """Return the key that makes two sets equal.
 
-        The key ignores annotations. It ignores label order unless the set is ordered.
+        The key ignores label order unless the set is ordered. It ignores the order of the annotations.
+        It compares every field of each annotation.
 
         Returns:
             The hashable key.
         """
         labels = ((label.name, label.description) for label in self.labels)
-        return (self.multi_label, self.ordered, tuple(labels) if self.ordered else frozenset(labels))
+        annotations = Counter(_occurrence_key(annotation) for annotation in self.annotations)
+        return (
+            self.multi_label,
+            self.ordered,
+            tuple(labels) if self.ordered else frozenset(labels),
+            frozenset(annotations.items()),
+        )
 
     def check_targets(self, targets: Sequence[str]) -> None:
         """Make sure that the target labels follow the rules of this set.
@@ -227,3 +240,18 @@ class LabelSet(SupportsAnnotate):
         repeated = sorted({label for label in targets if targets.count(label) > 1})
         if repeated:
             raise TimeFValidationError(f"repeated labels of {self}: {repeated}")
+
+
+def _occurrence_key(annotation: Annotation) -> tuple[Hashable, ...]:
+    """Return a key that is equal for two occurrences if every field of them is equal.
+
+    Returns:
+        The hashable key.
+    """
+    confidence = annotation.confidence
+    return (
+        annotation._content_key,
+        annotation.source,
+        float.hex(confidence) if isinstance(confidence, float) else confidence,
+        json.dumps(annotation.occurrence_metadata, sort_keys=True),
+    )

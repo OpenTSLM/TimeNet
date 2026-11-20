@@ -65,17 +65,50 @@ def test_a_multi_label_target_rejects_a_repeated_label():
         FINDINGS.check_targets(("AF", "PVC", "AF"))
 
 
-def test_equality_ignores_label_order_and_annotations_but_not_descriptions_or_multi_label():
-    first = LabelSet(["F", "M"], annotations=(Annotation(key="name", value="sex"),))
+def test_equality_ignores_label_order_but_not_descriptions_or_multi_label():
+    first = LabelSet(["F", "M"])
     second = LabelSet(["M", "F"])
     described = LabelSet([Label(name="F", description="Female."), "M"])
     multi = LabelSet(["F", "M"], multi_label=True)
     assert first._content_key() == second._content_key()
     assert len({first._content_key(), described._content_key(), multi._content_key()}) == 3
-    assert first == LabelSet(["F", "M"])
     assert first == second
     assert first != described
     assert first != multi
+
+
+def _named(*annotations):
+    return LabelSet(["yes", "no"], annotations=annotations)
+
+
+def test_equality_compares_the_annotations_and_ignores_their_order():
+    name = Annotation(key="name", value="afib_present")
+    note = Annotation(key="note", value="manual")
+    assert _named(name) == _named(Annotation(key="name", value="afib_present"))
+    assert _named(name)._content_key() == _named(name)._content_key()
+    assert _named(name, note) == _named(note, name)
+    assert _named(name) != _named(Annotation(key="name", value="signal_noisy"))
+    assert _named(name) != _named(Annotation(key="title", value="afib_present"))
+    assert _named(name) != _named()
+    assert _named(name) != _named(name, note)
+    assert _named(name) != _named(name, name)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"source": "rater"}, {"confidence": 0.9}, {"occurrence_metadata": {"k": 1}}, {"description": "The name."}],
+)
+def test_equality_compares_every_field_of_an_annotation(changes):
+    assert _named(Annotation(key="name", value="x")) != _named(Annotation(key="name", value="x", **changes))
+    assert _named(Annotation(key="name", value="x", **changes)) == _named(Annotation(key="name", value="x", **changes))
+
+
+def test_sets_with_a_nan_confidence_are_equal():
+    def nan_named():
+        return _named(Annotation(key="name", value="x", confidence=float("nan")))
+
+    assert nan_named() == nan_named()
+    assert nan_named()._content_key() == nan_named()._content_key()
 
 
 def test_an_ordered_set_uses_its_label_order_for_equality():

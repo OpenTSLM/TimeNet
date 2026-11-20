@@ -9,10 +9,13 @@ from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_audit import audit_control_database
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.format.control_writer import DuckDBControlWriter
+from timenet.format.control_writer import DuckDBControlWriter, _LabelSetRows
 from timenet.format.duckdb import connect_control
 from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
+from timenet.reader import TimeFReader
+from timenet.registry import open_local_version
+from timenet.testing.builders import assert_datasets_equal
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -176,7 +179,7 @@ def _write_sets(tmp_path, *label_sets):
 
 
 def test_sets_are_stored_once_per_content_and_keep_the_first_label_order(tmp_path):
-    reordered = LabelSet(STAGE_LABELS.labels[::-1])
+    reordered = LabelSet(STAGE_LABELS.labels[::-1], annotations=STAGE_LABELS.annotations)
     described = LabelSet([Label(name="W", description="Awake."), "N1", "R"])
     multi = LabelSet(STAGE_LABELS.labels, multi_label=True)
     path = _write_sets(tmp_path, STAGE_LABELS, reordered, described, multi)
@@ -208,55 +211,101 @@ def test_ordered_sets_in_another_order_are_stored_as_two_rows_in_their_own_order
     assert fourth == unordered and not fourth.ordered
 
 
-def test_equal_sets_with_different_annotations_are_stored_once_with_both(tmp_path):
-    first = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),))
-    second = LabelSet(
-        STAGE_LABELS.labels,
-        annotations=(Annotation(key="name", value="stage"), Annotation(key="source", value="manual")),
-    )
-    bare = LabelSet(STAGE_LABELS.labels)
-    path = _write_sets(tmp_path, first, bare, second)
+def _names(label_set):
+    return [annotation.value for annotation in label_set.annotations if annotation.key == "name"]
+
+
+def test_sets_with_the_same_labels_and_different_names_are_stored_as_two_rows(tmp_path):
+    afib = LabelSet(["yes", "no"], annotations=(Annotation("name", value="afib_present"),))
+    noisy = LabelSet(["yes", "no"], annotations=(Annotation("name", value="signal_noisy"),))
+    path = _write_sets(tmp_path, afib, noisy, LabelSet(["yes", "no"]))
+
+    assert _stored_set_ids(path) == [1, 2, 3]
+    with connect_control(path, read_only=True) as connection:
+        audit_control_database(connection, require_chunks=False)
+        assert connection.execute(
+            "SELECT object_id FROM annotation_occurrences WHERE object_type = 'LabelSet' ORDER BY 1"
+        ).fetchall() == [(1,), (2,)]
+    first, second, bare = _label_sets(_read_tasks(path))
+    assert _names(first) == ["afib_present"]
+    assert _names(second) == ["signal_noisy"]
+    assert bare.annotations == ()
+    assert (first, second, bare) == (afib, noisy, LabelSet(["yes", "no"]))
+
+
+def test_sets_with_the_same_labels_and_the_same_annotations_are_stored_once(tmp_path):
+    name = Annotation("name", value="stage")
+    note = Annotation("note", value="manual", source="rater", confidence=0.9, occurrence_metadata={"k": 1})
+    first = LabelSet(STAGE_LABELS.labels, annotations=(name, note))
+    second = LabelSet(STAGE_LABELS.labels[::-1], annotations=(note, name))
+    path = _write_sets(tmp_path, first, second)
 
     assert _stored_set_ids(path) == [1]
     with connect_control(path, read_only=True) as connection:
-        audit_control_database(connection, require_chunks=False)
         assert connection.execute(
             "SELECT count(*) FROM annotation_occurrences WHERE object_type = 'LabelSet'"
         ).fetchone() == (2,)
     tasks = _read_tasks(path)
-    assert tasks[0].label_set is tasks[1].label_set is tasks[2].label_set
-    assert [(a.key, a.value) for a in tasks[0].label_set.annotations] == [("name", "stage"), ("source", "manual")]
-
-
-def test_occurrences_that_differ_only_in_occurrence_fields_are_all_stored(tmp_path):
-    first = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage", confidence=0.5),))
-    first.annotate(Annotation(key="name", value="stage", occurrence_metadata={"k": 1}))
-    second = LabelSet(
-        STAGE_LABELS.labels,
-        annotations=(
-            Annotation(key="name", value="stage", confidence=0.5),
-            Annotation(key="name", value="stage", source="rater", confidence=0.9),
-        ),
-    )
-    path = _write_sets(tmp_path, first, second)
-
-    (label_set, _) = _label_sets(_read_tasks(path))
-    assert [(a.source, a.confidence, a.occurrence_metadata) for a in label_set.annotations] == [
-        (None, 0.5, {}),
-        (None, None, {"k": 1}),
-        ("rater", 0.9, {}),
+    assert tasks[0].label_set is tasks[1].label_set
+    assert [(a.key, a.source, a.confidence, a.occurrence_metadata) for a in tasks[0].label_set.annotations] == [
+        ("name", None, None, {}),
+        ("note", "rater", 0.9, {"k": 1}),
     ]
 
 
-def test_writing_does_not_change_the_callers_label_sets(tmp_path):
-    first = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="name", value="stage"),))
-    second = LabelSet(STAGE_LABELS.labels, annotations=(Annotation(key="source", value="manual"),))
-    first_annotations, second_annotations = first.annotations, second.annotations
+@pytest.mark.parametrize(
+    "changes",
+    [{"source": "rater"}, {"confidence": 0.9}, {"occurrence_metadata": {"k": 1}}],
+)
+def test_sets_whose_annotations_differ_in_one_occurrence_field_are_stored_as_two_rows(tmp_path, changes):
+    first = LabelSet(STAGE_LABELS.labels, annotations=(Annotation("name", value="stage"),))
+    second = LabelSet(STAGE_LABELS.labels, annotations=(Annotation("name", value="stage", **changes),))
+    path = _write_sets(tmp_path, first, second)
 
-    _write_sets(tmp_path, first, second)
+    assert _stored_set_ids(path) == [1, 2]
+    with connect_control(path, read_only=True) as connection:
+        assert connection.execute("SELECT count(*) FROM annotation_contents").fetchone() == (1,)
 
-    assert first.annotations is first_annotations
-    assert second.annotations is second_annotations
+
+def _round_trip(dataset, tmp_path):
+    with TimeFReader(open_local_version(dataset.write(path=tmp_path / "out"))) as reader:
+        return reader.read()
+
+
+def test_sets_with_their_annotations_in_another_order_round_trip_as_equal(tmp_path):
+    name = Annotation("name", value="stage")
+    note = Annotation("note", value="manual")
+    dataset, record = _dataset()
+    dataset.add_tasks(
+        tasks=[
+            ClassificationTask(inputs=(record,), targets=("W",), label_set=LabelSet(["W"], annotations=(name, note))),
+            ClassificationTask(inputs=(record,), targets=("W",), label_set=LabelSet(["W"], annotations=(note, name))),
+        ]
+    )
+
+    assert_datasets_equal(dataset, _round_trip(dataset, tmp_path))
+
+
+def test_sets_with_a_nan_confidence_are_stored_once(tmp_path):
+    def nan_named():
+        return LabelSet(["W"], annotations=(Annotation("name", value="stage", confidence=float("nan")),))
+
+    path = _write_sets(tmp_path, nan_named(), nan_named())
+
+    assert _stored_set_ids(path) == [1]
+    first, second = _label_sets(_read_tasks(path))
+    assert first is second
+    assert first == nan_named()
+
+
+def test_a_set_annotated_after_a_task_uses_it_is_another_set():
+    label_set = LabelSet(["W"])
+    rows = _LabelSetRows(iter((1, 2)))
+
+    assert rows.register(label_set) == 1
+    label_set.annotate(Annotation("name", value="stage"))
+    assert rows.register(label_set) == 2
+    assert rows.register(LabelSet(["W"])) == 1
 
 
 def test_equal_annotations_of_two_sets_share_one_content_row(tmp_path):

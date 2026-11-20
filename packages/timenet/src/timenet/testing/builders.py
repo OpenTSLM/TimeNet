@@ -247,10 +247,6 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
         assert replace(exp_task, scope=None, input_modalities=exp_task.resolved_input_modalities) == replace(
             act_task, scope=None, input_modalities=act_task.resolved_input_modalities
         ), f"task {task_id} differs"
-        if isinstance(exp_task, ClassificationTask) and isinstance(act_task, ClassificationTask):
-            assert exp_task.label_set.annotations == act_task.label_set.annotations, (
-                f"task {task_id} label set annotations differ"
-            )
 
 
 def _assert_sources_equal(record_id: EntityId, expected: Record, actual: Record) -> None:
