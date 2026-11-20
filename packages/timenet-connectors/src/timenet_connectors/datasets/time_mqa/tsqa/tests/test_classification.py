@@ -45,7 +45,7 @@ _ROWS = [
 
 
 def _convert(write_part, rows=_ROWS):
-    return TimeMqaConnector().convert([write_part(ReleasePart.CLASSIFICATION, rows)])
+    return TimeMqaConnector().convert(write_part(ReleasePart.CLASSIFICATION, rows))
 
 
 def test_a_wisdm_window_becomes_three_axis_signals_at_20_hz(write_part):

@@ -37,7 +37,7 @@ _ROWS = [_anomaly_row(values, label, domain=domain) for values, label, domain in
 
 
 def _convert(write_part, rows: list[dict[str, str]] = _ROWS) -> TimeFDataset:
-    return TimeMqaConnector().convert([write_part(ReleasePart.ANOMALY_DETECTION, rows)])
+    return TimeMqaConnector().convert(write_part(ReleasePart.ANOMALY_DETECTION, rows))
 
 
 def test_each_row_becomes_a_record_and_a_classification_task(write_part):

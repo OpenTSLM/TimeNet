@@ -14,19 +14,14 @@ from dataclasses import dataclass
 from enum import StrEnum, unique
 from pathlib import Path
 import re
-from typing import Protocol, Self
+from typing import Protocol
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.json import JsonMapping
 from timenet.types import LabelSet, Task, TimeSeriesSpec
-from timenet_connectors.bases.huggingface import HubFileRef
 
-
-HF_REPO = "Time-MQA/TSQA"
-SOURCE_REVISION = "a7f9e95667b695d2647b9eff92bb6a38b5183a34"
-"""The commit of the Hub repo that the connector reads."""
 
 # The release states no unit and no sampling rate for a printed series.
 SERIES = TimeSeriesSpec(spec_type="series", name="Series", unit_value=None, dtype="float64")
@@ -114,7 +109,7 @@ class PrintedSeries:
             The Record, not yet added to a dataset.
         """
         signal = Signal.from_values(self.values, spec=SERIES, name="series", time_axis=OrdinalAxis())
-        return Record(sources=(Source(name="TSQA", signals=(signal,)),), metadata=dict(metadata))
+        return Record(sources=[Source(name="TSQA", signals=[signal])], metadata=dict(metadata))
 
 
 def find_printed_series(text: str) -> tuple[PrintedSeries, ...]:
@@ -260,15 +255,6 @@ class ReleaseFile:
 
     part: ReleasePart
     path: Path
-
-    @classmethod
-    def from_hub_file_ref(cls, ref: HubFileRef) -> Self:
-        """Return the file of a downloaded part.
-
-        Returns:
-            The file.
-        """
-        return cls(part=ReleasePart(ref.part), path=ref.path)
 
     def read_rows(self) -> Iterator[ReleaseRow]:
         """Read the question-and-answer rows of the file, in file order.
