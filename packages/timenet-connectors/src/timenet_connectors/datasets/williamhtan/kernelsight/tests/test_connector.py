@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+import shutil
+import struct
+import zipfile
 
 import numpy as np
 import pytest
@@ -32,6 +35,7 @@ from timenet_connectors.datasets.williamhtan.kernelsight.connector import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 """One real Snapshot of the pinned release: a warp-specialized GEMM with a multi-hot-only TMA track."""
+_REAL_PATH = f"kernels/cutlass_ws_overlap/_out/m1024_n1024_k1024_rH_s1_b0{INPUT_SUFFIX}"
 _BIN_NS = 1_000_000
 """One millisecond per bin, so bin ``i`` starts at ``i * 1000`` microseconds."""
 _MATMUL, _MEMORY = VOCAB_L1.index("matmul"), VOCAB_L1.index("memory_movement")
@@ -173,11 +177,10 @@ def test_segments_and_multihot_only_runs_become_interval_annotations(tmp_path):
 
 
 def test_a_real_snapshot_of_the_release_becomes_a_record():
-    path = f"kernels/cutlass_ws_overlap/_out/m1024_n1024_k1024_rH_s1_b0{INPUT_SUFFIX}"
-    record = _snapshot(path, "cutlass_ws_overlap").create_record(FIXTURES)
+    record = _snapshot(_REAL_PATH, "cutlass_ws_overlap").create_record(FIXTURES)
     signals = [signal for source in record.sources for signal in source.signals]
     assert len(signals) == len(COUNTER_NAMES)
-    with np.load(FIXTURES / path, allow_pickle=False) as archive:
+    with np.load(FIXTURES / _REAL_PATH, allow_pickle=False) as archive:
         np.testing.assert_array_equal(signals[5].to_numpy(), archive["data"][5])
     axis = signals[0].time_axis
     assert isinstance(axis, RegularAxis)
@@ -212,12 +215,17 @@ def test_variants_of_one_kernelbench_problem_share_a_partition():
     ("motif", "variant", "problem"),
     [
         ("cutlass_gemm", "m1024_n1024_k8192_rH_s8_b1", "cutlass_gemm/m1024_n1024_k8192"),
-        ("cutlass_ws_overlap", "m512_n512_k8192_rM_s1_b0", "cutlass_ws_overlap/m512_n512_k8192"),
-        ("cutlass_ws_overlap", "m1024_k2048", "cutlass_ws_overlap/m1024_k2048"),
+        ("cutlass_gemm", "m4096_rM", "cutlass_gemm/m4096"),
+        ("cutlass_gemm", "m2048_rN_b1", "cutlass_gemm/m2048"),
+        # cutlass_ws_overlap runs the kernel of cutlass_gemm.
+        ("cutlass_ws_overlap", "m512_n512_k8192_rM_s1_b0", "cutlass_gemm/m512_n512_k8192"),
+        ("cutlass_ws_overlap", "m2048_sw4", "cutlass_gemm/m2048"),
+        ("cutlass_ws_overlap", "m1024_k2048", "cutlass_gemm/m1024_k2048"),
         ("vector_add", "N16M_T1024", "vector_add/N16M"),
         ("reduction", "N16M_T256_I4", "reduction/N16M_I4"),
+        ("scatter", "N1M_B16_T512", "scatter/N1M_B16"),
         ("cutlass_fmha", "b2h16_q1024_d64_causal", "cutlass_fmha/b2h16_q1024_d64_causal"),
-        ("cutlass_ws_overlap", "", "cutlass_ws_overlap/baseline"),
+        ("cutlass_ws_overlap", "", "cutlass_gemm/baseline"),
     ],
 )
 def test_the_problem_of_a_variant_drops_its_launch_options(motif, variant, problem):
@@ -244,6 +252,21 @@ def test_a_corrupt_labels_file_raises(tmp_path):
     labels.write_bytes(b"not a zip archive")
     with pytest.raises(TimeNetConnectorError, match="cannot read segment_starts"):
         _snapshot(_gemm_path(0), "cutlass_gemm").create_record(tmp_path)
+
+
+def test_a_damaged_compressed_member_raises(tmp_path):
+    shutil.copytree(FIXTURES, tmp_path, dirs_exist_ok=True)
+    snapshot = _snapshot(_REAL_PATH, "cutlass_ws_overlap")
+    labels = tmp_path / snapshot.labels_path
+    with zipfile.ZipFile(labels) as archive:
+        offset = archive.getinfo("segment_starts.npy").header_offset
+    raw = bytearray(labels.read_bytes())
+    name_length, extra_length = struct.unpack_from("<HH", raw, offset + 26)
+    # The member is deflate-compressed. A first byte of 0xFF starts a block of the reserved type, so zlib fails.
+    raw[offset + 30 + name_length + extra_length] = 0xFF
+    labels.write_bytes(raw)
+    with pytest.raises(TimeNetConnectorError, match="cannot read segment_starts"):
+        snapshot.create_record(tmp_path)
 
 
 def test_an_l2_class_outside_its_l1_class_raises(tmp_path):

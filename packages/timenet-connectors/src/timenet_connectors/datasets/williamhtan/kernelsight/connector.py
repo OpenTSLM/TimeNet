@@ -24,6 +24,7 @@ from operator import attrgetter
 from pathlib import Path
 import re
 import zipfile
+import zlib
 
 import numpy as np
 import pyarrow as pa
@@ -185,9 +186,14 @@ MULTIHOT_TRACK = "multihot"
 INPUT_SUFFIX = "/input/tensor_input.npz"
 LABELS_SUFFIX = "/labels/labels.npz"
 
-# The launch options of a Variant, which leave its computation unchanged: the CUTLASS schedule suffix
-# (``m1024_n1024_k8192_rH_s8_b1``) and the thread-block size of a microbenchmark (``N1M_T256``).
-_LAUNCH_OPTIONS = re.compile(r"_r[A-Z]_s\d+_b\d+$|_T\d+")
+# The launch options of a Variant: the CUTLASS raster, swizzle and ``b`` options, alone or together
+# (``m1024_n1024_k8192_rH_s8_b1``, ``m4096_rM``, ``m2048_sw4``, ``m2048_rN_b1``), and the thread-block size
+# of a microbenchmark (``N1M_T256``).
+_LAUNCH_OPTIONS = re.compile(r"_(?:r[A-Z]|s\d+|sw\d+|b\d+)(?=_|$)|_T\d+")
+
+# NOTE: cutlass_ws_overlap runs the CUTLASS ex48 GEMM of cutlass_gemm with device timer markers added. One
+# shape of the two motifs gives near-identical traces, so it is one Problem.
+_SAME_KERNEL = {"cutlass_ws_overlap": "cutlass_gemm"}
 
 
 def _slug(name: str) -> str:
@@ -220,7 +226,7 @@ def _read_arrays(path: Path, *names: str) -> list[np.ndarray]:
     try:
         with np.load(path, allow_pickle=False) as archive:
             return [archive[name] for name in names]
-    except (OSError, EOFError, ValueError, KeyError, zipfile.BadZipFile) as error:
+    except (OSError, EOFError, ValueError, KeyError, zipfile.BadZipFile, zlib.error) as error:
         raise TimeNetConnectorError(f"{path}: cannot read {', '.join(names)}: {error}") from error
 
 
@@ -282,10 +288,10 @@ class Snapshot:
 
     @property
     def problem(self) -> str:
-        """The leakage group: the Variant without its dtype, seed and launch options."""
+        """The leakage group: the motif of its kernel, and the Variant without dtype, seed and launch options."""
         if self.motif == "kernelbench":
             return f"{self.motif}/{self.variant.split('/')[0]}"
-        return f"{self.motif}/{_LAUNCH_OPTIONS.sub('', self.variant)}"
+        return f"{_SAME_KERNEL.get(self.motif, self.motif)}/{_LAUNCH_OPTIONS.sub('', self.variant)}"
 
     @property
     def labels_path(self) -> str:
@@ -461,7 +467,7 @@ def assign_splits(snapshots: list[Snapshot]) -> DatasetSplits[Snapshot]:
         The train, validation and test Snapshots.
     """
     # NOTE: 3/1/1, not the 8/1/1 of docs/connectors.md. Several classes have only 6 to 8 Problems, and with
-    # 8/1/1 loss, normalization and pooling each get no validation or test Snapshot.
+    # 8/1/1 loss gets no validation or test Snapshot.
     splitter = StratifiedSplitter(
         train_folds=3,
         validation_folds=1,
