@@ -1112,6 +1112,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 annotations=annotations.get((ObjectKind.SIGNAL, row.signal_id), ()),
                 metadata=_decode_json(row.metadata, default={}),
             )
+            # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
+            object.__setattr__(built, "annotations", annotations.get((ObjectKind.SIGNAL, row.signal_id), ()))
             object.__setattr__(built, "_id", row.signal_id)  # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
             signals_by_source[row.source_id].append(built)
         return signals_by_source
@@ -1155,13 +1157,15 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
 
         def build_source(source_id: EntityId) -> Source:
             source_row = sources_by_id[source_id]
-            return Source(
+            source = Source(
                 name=source_row.name,
                 sources=tuple(build_source(child) for child in children[source_id]),
                 signals=tuple(signals_by_source[source_id]),
                 annotations=annotations.get((ObjectKind.SOURCE, source_id), ()),
                 metadata=_decode_json(source_row.metadata, default={}),
             )
+            source.annotations = annotations.get((ObjectKind.SOURCE, source_id), ())
+            return source
 
         records: list[Record] = []
         for record_row in hierarchy.records:
@@ -1179,6 +1183,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 time_span=span,
                 metadata=_decode_json(record_row.metadata, default={}),
             )
+            record.annotations = annotations.get((ObjectKind.RECORD, record_id), ())
             record._id = record_id
             records.append(record)
             self._record_occurrences[id(record)] = {
@@ -2475,7 +2480,7 @@ class _TaskBuilder:
             raise TimeFFormatError(f"task dependency refers to missing task {task_id!r}")
         return task
 
-    # ruff: ignore[too-many-locals] - one batch joins several tables
+    # ruff: ignore[too-many-locals, too-many-statements] - one batch joins several tables
     def _build(self, task_ids: list[EntityId] | None) -> _TasksById:
         """Read every table for one batch of task IDs and construct the tasks.
 
@@ -2595,6 +2600,7 @@ class _TaskBuilder:
                 "annotation occurrence",
             )
             task = cls(**kwargs)
+            task.annotations = kwargs["annotations"]
             task._id = row.task_id
             try:
                 TimeFDataset._check_task_record_scope(task)

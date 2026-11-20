@@ -262,7 +262,8 @@ class _Importer:
             The copy, with copies of its annotations. The child gives the copy an ID when it indexes
             the copy.
         """
-        return Signal.from_loader(
+        annotations = tuple(self.copy_annotation(annotation) for annotation in original.annotations)
+        copy = Signal.from_loader(
             spec=original.spec,
             time_axis=original.time_axis,
             name=original.name,
@@ -270,9 +271,11 @@ class _Importer:
             n_values=original.n_values,
             null_count=original.null_count,
             time_offsets_loader=original._time_offsets,
-            annotations=tuple(self.copy_annotation(annotation) for annotation in original.annotations),
+            annotations=annotations,
             metadata=deepcopy(original.metadata),
         )
+        _set_annotations(copy, annotations)
+        return copy
 
     def copy_annotation(self, original: Annotation) -> Annotation:
         """Copy a parent annotation occurrence as a value (see :func:`_copy_annotation`).

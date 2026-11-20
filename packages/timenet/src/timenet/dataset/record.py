@@ -36,7 +36,8 @@ class Record(SupportsAnnotate):
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
     annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
-    """Annotations attached to the record. Give any iterable. The record stores a tuple."""
+    """Annotations attached to the record. Give any iterable. The record stores a tuple. It attaches a new
+    occurrence of each annotation, as :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible recording metadata."""
     time_span: TimeInterval | None = None
@@ -61,6 +62,7 @@ class Record(SupportsAnnotate):
         self._check_times()
         for annotation in self.annotations:
             self._validate_annotation(annotation)
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
 
     def _check_times(self) -> None:
         """Check the time of each Signal and the ``time_span``, as construction does.

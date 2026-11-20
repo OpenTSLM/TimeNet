@@ -55,7 +55,8 @@ class Source(SupportsAnnotate):
     signals: TupleField[Signal] = field(default=ValueField(as_tuple, ()))
     """Signals produced directly by this source."""
     annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
-    """Annotations attached to this source."""
+    """Annotations attached to this source. The source attaches a new occurrence of each annotation, as
+    :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible source metadata."""
 
@@ -79,6 +80,7 @@ class Source(SupportsAnnotate):
                     tuple(self.walk_signals()),
                     f"source {self.name!r}",
                 )
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
 
     def walk_sources(self) -> Iterator["Source"]:
         """Yield this source and all descendants in deterministic depth-first order.

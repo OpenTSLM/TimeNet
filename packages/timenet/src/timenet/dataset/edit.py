@@ -483,9 +483,9 @@ def _rebuild_tasks(
             inputs=tuple(record for record in task.inputs if record.id in records_by_id),
             input_annotations=tuple(copies[id(annotation)] for annotation in input_annotations),
             target_annotations=tuple(copies[id(annotation)] for annotation in task.target_annotations),
-            annotations=_copied(task.annotations, copies),
             from_tasks=(),
         )
+        kept.annotations = _copied(task.annotations, copies)
         copy = kept.with_references(records_by_id, signals_by_id)
         copy._id = task.id
         rebuilt[task.id] = copy

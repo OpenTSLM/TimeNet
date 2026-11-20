@@ -157,6 +157,26 @@ def test_a_task_references_its_signal_targets_then_the_signals_of_its_spans_each
     assert AnswerTask(targets=("a",), scope=TimeInterval.seconds(0.0, 1.0)).referenced_signals() == ()
 
 
+def test_a_task_attaches_a_new_occurrence_of_its_own_annotations_and_keeps_its_references():
+    (record,) = _registered("a")
+    context = record.annotate(Annotation("context", value="ctx"))
+    quality = Annotation("quality", value="good")
+
+    task = AnswerTask(
+        inputs=(record,),
+        targets=("a",),
+        input_annotations=(context,),
+        target_annotations=(context,),
+        annotations=[quality],
+    )
+
+    (own,) = task.annotations
+    assert own == quality
+    assert own is not quality
+    assert task.input_annotations[0] is context
+    assert task.target_annotations[0] is context
+
+
 def test_a_copy_with_references_points_at_the_records_and_signals_of_the_same_ids():
     record, target, holder = _registered("a", "b", "c")
     records, signals = _replacements((record, target, holder))
