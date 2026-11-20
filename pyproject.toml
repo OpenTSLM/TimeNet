@@ -14,6 +14,7 @@ dev = [
     "packaging>=24.2",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
+    "pytest-xdist>=3.8",
     "ruff>=0.17.3",
     "ty>=0.0.92",
     "edfio>=0.4.14",
@@ -66,6 +67,8 @@ select = [
     "D",      # pydocstyle — docstring presence and formatting
     "DOC",    # pydoclint — args/returns match signatures
     "PL",     # Pylint — error/warning/convention rules (opinionated metrics dropped in `ignore`)
+    "banned-api",  # flake8-tidy-imports (TID251) — the imports banned below
+    "banned-module-level-imports",  # flake8-tidy-imports (TID253) — the lazy imports below
 ]
 ignore = [
     "line-too-long",  # Handled by the formatter
@@ -108,9 +111,28 @@ ignore = [
 ]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["assert"]
+# The ban on importing timenet_connectors applies only to the code of the timenet package.
+"!packages/timenet/src/**" = ["banned-api"]
+# Only the two CLIs load the CLI libraries at import. So the SDK loads the builder backend through
+# its entry point without them.
+"!packages/{timenet,timenet-connectors}/src/**" = ["banned-module-level-imports"]
+"packages/timenet/src/timenet/{__main__.py,cli/**}" = ["banned-module-level-imports"]
+"packages/timenet-connectors/src/timenet_connectors/builder/cli.py" = ["banned-module-level-imports"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports]
+# The CLI libraries, which library code imports only inside a function.
+banned-module-level-imports = ["typer", "timenet.cli", "timenet_connectors.builder.cli"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# timenet-connectors depends on timenet, so timenet never imports it and works without it.
+"timenet_connectors".msg = "timenet must work without timenet-connectors"
+
+[tool.ruff.lint.pydoclint]
+# A one-line docstring of a small helper does not need Returns or Raises sections.
+ignore-one-line-docstrings = true
 
 [tool.ruff.lint.flake8-bugbear]
 # Typer expects Option/Argument descriptors as parameter defaults.
@@ -127,6 +149,7 @@ testpaths = ["packages", "benchmarks/end_to_end/tests"]
 markers = [
     "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
     "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
+    "real_provenance: read the real commit of every install type instead of the stub in packages/conftest.py",
 ]
 
 [tool.ty.src]

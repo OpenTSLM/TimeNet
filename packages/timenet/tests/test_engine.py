@@ -2,23 +2,23 @@ from pathlib import Path
 import tempfile
 from typing import Any, ClassVar, cast
 
-import httpx
 import pytest
 
-from timenet.config import settings
+from timenet.config import is_cache_folder, settings
 from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
-from timenet.engine import open_parents, publish_pipeline, run_pipeline, store_dataset
-from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.engine import open_parents, run_pipeline, store_dataset
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry, RemoteRegistry
-from timenet.registry.writable import WritableRegistry
+from timenet.registry import LocalRegistry, open_local_version
+from timenet.registry._paths import release_dir
 from timenet.testing import make_dataset
 from timenet.types import Access, Version
-from timenet.types.access import AccessRequirement, effective_access
+from timenet.types.access import effective_access
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
+from timenet.values_backends import ValuesBackend
 from timenet.writer import TimeFWriter
 
 
@@ -54,7 +54,7 @@ def _write_demo_card() -> Path:
 _DEMO_CARD = _write_demo_card()
 
 
-class _DemoConnector(BaseConnector[str]):
+class _DemoConnector(BaseConnector[list[str]]):
     CARD = _DEMO_CARD
 
     def download(self, cache_dir: Path) -> list[str]:
@@ -88,51 +88,19 @@ def test_run_pipeline_end_to_end(tmp_path):
 
 
 def test_connector_defaults_to_the_parquet_values_backend():
-    assert _DemoConnector().values_backend == "parquet"
+    assert _DemoConnector().values_backend == ValuesBackend.PARQUET
 
 
 def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
     pytest.importorskip("zarr")
 
     class _ZarrConnector(_DemoConnector):
-        values_backend = "zarr"
+        values_backend = ValuesBackend.ZARR
 
-    connector = _ZarrConnector()
-    version_dir = run_pipeline(
-        connector,
-        tmp_path,
-        cache_dir=tmp_path / "cache",
-        values_backend=connector.values_backend,
-    )
+    version_dir = run_pipeline(_ZarrConnector(), tmp_path, cache_dir=tmp_path / "cache")
 
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
-
-
-def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tmp_path):
-    class _Registry:
-        def __init__(self) -> None:
-            self.values_backend: str | None = None
-
-        def exists(self, dataset_id: str, version: str) -> bool:
-            return False
-
-        def store(self, dataset, *, force: bool, values_backend: str, progress_cb) -> None:
-            self.values_backend = values_backend
-
-    class _ZarrConnector(_DemoConnector):
-        values_backend = "zarr"
-
-    connector = _ZarrConnector()
-    registry = _Registry()
-    publish_pipeline(
-        connector,
-        cast(WritableRegistry, registry),
-        cache_dir=tmp_path / "cache",
-        values_backend=connector.values_backend,
-    )
-
-    assert registry.values_backend == "zarr"
 
 
 class _CountingConnector(_DemoConnector):
@@ -176,21 +144,13 @@ def test_a_failed_forced_rebuild_keeps_the_committed_version(tmp_path, monkeypat
     assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
 
 
-@pytest.mark.parametrize("use_default", [False, True])
-def test_invalid_backend_preserves_committed_version(tmp_path, use_default):
+def test_invalid_backend_preserves_committed_version(tmp_path):
     connector = _CountingConnector()
     version_dir = run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache")
     before = {p.relative_to(version_dir): p.read_bytes() for p in version_dir.rglob("*") if p.is_file()}
-    if use_default:
-        connector.values_backend = "invalid"
+    connector.values_backend = cast("ValuesBackend", "invalid")
     with pytest.raises(TimeFValidationError, match="backend"):
-        run_pipeline(
-            connector,
-            tmp_path,
-            cache_dir=tmp_path / "cache",
-            force=True,
-            values_backend=None if use_default else "invalid",
-        )
+        run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache", force=True)
     assert {p.relative_to(version_dir): p.read_bytes() for p in version_dir.rglob("*") if p.is_file()} == before
     assert connector.downloads == 1
 
@@ -201,30 +161,42 @@ def test_clean_cache_keeps_caller_supplied_dir(tmp_path):
     assert cache.is_dir()  # a caller-owned cache_dir is never deleted, even when asked to clean it
 
 
-def _isolated_home(tmp_path, monkeypatch) -> None:
-    """Point the settings at a scratch home so the default cache lands under tmp_path."""
-    for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-
-
-def test_clean_cache_removes_the_auto_created_default(tmp_path, monkeypatch):
-    _isolated_home(tmp_path, monkeypatch)
+def test_clean_cache_removes_the_auto_created_default(tmp_path):
     run_pipeline(_DemoConnector(), tmp_path / "root")  # cache_dir=None -> the engine made it
-    assert not (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+    assert not (settings().downloads_dir / make_dataset().metadata.dataset_id).exists()
 
 
-def test_run_pipeline_keeps_the_cache_when_asked(tmp_path, monkeypatch):
-    _isolated_home(tmp_path, monkeypatch)
+def test_run_pipeline_keeps_the_cache_when_asked(tmp_path):
     run_pipeline(_DemoConnector(), tmp_path / "root", keep_cache=True)
-    assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+    assert (settings().downloads_dir / make_dataset().metadata.dataset_id).exists()
 
 
-def test_run_pipeline_keeps_the_cache_when_download_fails(tmp_path, monkeypatch):
+def test_the_engine_marks_the_downloads_folder_that_it_creates(tmp_path):
+    run_pipeline(_DemoConnector(), tmp_path / "root")
+    assert is_cache_folder(settings().downloads_dir)
+
+
+def test_a_build_into_the_downloads_that_it_removes_fails_before_the_download(tmp_path, monkeypatch):
+    monkeypatch.setattr(_DemoConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
+    root = settings().downloads_dir / make_dataset().metadata.dataset_id / "registry"
+    with pytest.raises(TimeFValidationError, match=r"^the local registry .* overlaps .*, which TimeNet deletes"):
+        run_pipeline(_DemoConnector(), root)
+    assert not root.exists()
+
+
+def test_the_engine_deletes_nothing_in_a_downloads_folder_without_the_marker(tmp_path):
+    # The folder existed before TimeNet used it, for example ~/Downloads on a volume that ignores case.
+    # So the engine leaves it unmarked, and the folder of the dataset in it can hold files of the user.
+    folder = settings().downloads_dir / make_dataset().metadata.dataset_id
+    folder.mkdir(parents=True)
+    (folder / "notes.txt").write_text("mine")
+    run_pipeline(_DemoConnector(), tmp_path / "root")
+    assert (folder / "notes.txt").read_text() == "mine"
+
+
+def test_run_pipeline_keeps_the_cache_when_download_fails(tmp_path):
     # Downloads resume: http writes a .part and renames it, so a file that landed is complete and the
     # next run skips it. Deleting the cache here would throw away good bytes.
-    _isolated_home(tmp_path, monkeypatch)
-
     class _HalfDownloadedConnector(_DemoConnector):
         def download(self, cache_dir: Path) -> list[str]:
             (cache_dir / "first.bin").write_bytes(b"complete")
@@ -232,14 +204,12 @@ def test_run_pipeline_keeps_the_cache_when_download_fails(tmp_path, monkeypatch)
 
     with pytest.raises(RuntimeError, match="download blew up"):
         run_pipeline(_HalfDownloadedConnector(), tmp_path / "root")
-    cache = settings().cache_dir / make_dataset().metadata.dataset_id
+    cache = settings().downloads_dir / make_dataset().metadata.dataset_id
     assert (cache / "first.bin").read_bytes() == b"complete"  # the finished file survives the retry
 
 
-def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
+def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path):
     # The rmtree runs after store_dataset, so a convert that raises keeps what download fetched.
-    _isolated_home(tmp_path, monkeypatch)
-
     class _FailingConnector(_DemoConnector):
         def download(self, cache_dir: Path) -> list[str]:
             (cache_dir / "source.bin").write_bytes(b"raw")
@@ -250,7 +220,7 @@ def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="convert blew up"):
         run_pipeline(_FailingConnector(), tmp_path / "root")
-    assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+    assert (settings().downloads_dir / make_dataset().metadata.dataset_id).exists()
 
 
 _PARENT = DatasetRef(dataset_id=make_dataset().metadata.dataset_id, version=make_dataset().metadata.dataset_version)
@@ -262,10 +232,10 @@ def _store_credentialed_parent(root: Path) -> None:
     parent._metadata = parent.metadata.model_copy(
         update={"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
     )
-    LocalRegistry(root).store(parent)
+    LocalRegistry(root).put_dataset(parent)
 
 
-class _ChildConnector(BaseConnector[str]):
+class _ChildConnector(BaseConnector[list[str]]):
     """Declares the demo dataset under the parent alias ``parent`` and imports one record with ``IMPORT``."""
 
     IMPORT: ClassVar[dict[str, Any] | None] = {}
@@ -278,7 +248,7 @@ class _ChildConnector(BaseConnector[str]):
     def download(self, cache_dir):
         return []
 
-    def compose(self, raw_refs, context):
+    def compose(self, raw_refs, /, context):
         dataset = TimeFDataset(metadata=self.metadata())
         if self.IMPORT is not None:
             dataset.import_from(
@@ -314,15 +284,11 @@ class _ConvertOnlyChild(_ChildConnector):
         return TimeFDataset(metadata=self.metadata())
 
 
-@pytest.mark.parametrize("pipeline", ["run", "publish"])
-def test_a_connector_without_compose_fails_before_opening_parents_or_downloading(tmp_path, monkeypatch, pipeline):
+def test_a_connector_without_compose_fails_before_opening_parents_or_downloading(tmp_path, monkeypatch):
     monkeypatch.setattr(_ConvertOnlyChild, "download", lambda self, cache_dir: pytest.fail("downloaded"))
     # The parent is missing too: the check runs before the engine looks for it.
     with pytest.raises(TimeFValidationError, match=r"declares parents \['parent'\].*implement compose"):
-        if pipeline == "run":
-            run_pipeline(_ConvertOnlyChild(), tmp_path, cache_dir=tmp_path / "cache")
-        else:
-            publish_pipeline(_ConvertOnlyChild(), LocalRegistry(tmp_path), cache_dir=tmp_path / "cache")
+        run_pipeline(_ConvertOnlyChild(), tmp_path, cache_dir=tmp_path / "cache")
     assert not (tmp_path / "cache").exists()
 
 
@@ -355,7 +321,6 @@ class _InPlaceDroppedParentChild(_ChildConnector):
         return dataset
 
 
-@pytest.mark.parametrize("pipeline", ["run", "publish"])
 @pytest.mark.parametrize(
     ("connector", "differ"),
     [
@@ -365,20 +330,15 @@ class _InPlaceDroppedParentChild(_ChildConnector):
     ],
     ids=["dropped-parent", "other-version", "dropped-parent-in-place"],
 )
-def test_a_dataset_with_another_card_than_the_engine_read_fails_and_stores_no_release(
-    tmp_path, pipeline, connector, differ
-):
+def test_a_dataset_with_another_card_than_the_engine_read_fails_and_stores_no_release(tmp_path, connector, differ):
     root = tmp_path / "root"
-    LocalRegistry(root).store(make_dataset())
+    LocalRegistry(root).put_dataset(make_dataset())
     before = sorted(root.rglob("*"))
     with pytest.raises(
         TimeFValidationError,
         match=rf"the dataset that compose\(\) returned has another card than test/child: {differ}$",
     ):
-        if pipeline == "run":
-            run_pipeline(connector(), root, cache_dir=tmp_path / "cache")
-        else:
-            publish_pipeline(connector(), LocalRegistry(root), cache_dir=tmp_path / "cache")
+        run_pipeline(connector(), root, cache_dir=tmp_path / "cache")
     assert sorted(root.rglob("*")) == before
 
 
@@ -390,7 +350,7 @@ def test_run_pipeline_fails_on_a_missing_parent_before_downloading(tmp_path, mon
 
 
 def test_open_parents_closes_the_parents_it_opened_when_a_later_one_is_missing(tmp_path, monkeypatch):
-    LocalRegistry(tmp_path).store(make_dataset())
+    LocalRegistry(tmp_path).put_dataset(make_dataset())
     missing = DatasetRef.parse("test/missing@1.0.0")
     metadata = (
         _ChildConnector()
@@ -416,7 +376,7 @@ def test_a_parent_reader_that_fails_to_close_does_not_keep_the_other_open(tmp_pa
     second = make_dataset()
     second._metadata = second.metadata.model_copy(update={"dataset_id": "test/second"})
     for dataset in (make_dataset(), second):
-        LocalRegistry(tmp_path).store(dataset)
+        LocalRegistry(tmp_path).put_dataset(dataset)
     parents = {ParentAlias("parent"): _PARENT, ParentAlias("second"): DatasetRef.parse("test/second@1.0.0")}
     context = open_parents(
         _ChildConnector().metadata().model_copy(update={"parents": parents}), LocalRegistry(tmp_path)
@@ -445,10 +405,10 @@ def test_a_build_context_made_directly_closes_its_parent_readers(tmp_path, monke
     second._metadata = second.metadata.model_copy(update={"dataset_id": "test/second"})
     registry = LocalRegistry(tmp_path)
     for dataset in (make_dataset(), second):
-        registry.store(dataset)
+        registry.put_dataset(dataset)
     readers = {
-        ParentAlias("parent"): TimeFReader(registry.open_version(_PARENT.dataset_id, str(_PARENT.version))),
-        ParentAlias("second"): TimeFReader(registry.open_version("test/second", "1.0.0")),
+        ParentAlias("parent"): TimeFReader(open_local_version(release_dir(registry.root, _PARENT))),
+        ParentAlias("second"): TimeFReader(open_local_version(registry.root / "test/second/1.0.0")),
     }
     closed = []
     close = TimeFReader.close
@@ -463,70 +423,3 @@ def test_a_build_context_made_directly_closes_its_parent_readers(tmp_path, monke
         assert closed == []
 
     assert closed == ["test/second", _PARENT.dataset_id]
-
-
-class _GatedConnector(_DemoConnector):
-    """The demo dataset, credentialed."""
-
-    def metadata(self):
-        return make_dataset().metadata.model_copy(
-            update={"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
-        )
-
-    def convert(self, raw_refs: list[str]) -> TimeFDataset:
-        dataset = make_dataset()
-        dataset._metadata = self.metadata()
-        return dataset
-
-
-def test_publish_pipeline_refuses_a_card_that_is_not_open_before_downloading(tmp_path, monkeypatch):
-    monkeypatch.setattr(_GatedConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
-    remote = RemoteRegistry(
-        "http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)), cache_dir=tmp_path
-    )
-
-    with pytest.raises(TimeNetAccessError) as caught:
-        publish_pipeline(_GatedConnector(), remote, cache_dir=tmp_path / "cache")
-
-    # A card has no lineage, so its own page is the only one.
-    assert (caught.value.dataset, caught.value.requirements) == (
-        _PARENT,
-        (AccessRequirement(_PARENT, Access.CREDENTIALED, "https://example.org/dua"),),
-    )
-    # A local registry is the user's own, so it may hold the credentialed release.
-    monkeypatch.undo()
-    publish_pipeline(_GatedConnector(), LocalRegistry(tmp_path / "local"), cache_dir=tmp_path / "cache")
-    assert LocalRegistry(tmp_path / "local").exists(_PARENT.dataset_id, str(_PARENT.version))
-
-
-class _HostedRegistry:
-    """A registry that is not local. It serves the parents from a local registry and refuses writes."""
-
-    def __init__(self, root: Path) -> None:
-        self.local = LocalRegistry(root)
-
-    def exists(self, dataset_id, version):
-        return False
-
-    def open_version(self, dataset_id, version=None):
-        return self.local.open_version(dataset_id, version)
-
-    def store(self, dataset, **kwargs):
-        pytest.fail("wrote a child whose parent is credentialed")
-
-
-def test_publish_pipeline_refuses_an_open_child_of_a_credentialed_parent_before_the_write(tmp_path):
-    _store_credentialed_parent(tmp_path)
-    registry = cast(WritableRegistry, _HostedRegistry(tmp_path))
-
-    with pytest.raises(TimeNetAccessError) as caught:
-        publish_pipeline(_ChildConnector(), registry, cache_dir=tmp_path / "cache")
-
-    # The card of the child is open, so the check before the download passes. Its lineage makes it
-    # credentialed.
-    child = DatasetRef(dataset_id="test/child", version=_PARENT.version)
-    assert (caught.value.dataset, caught.value.access, caught.value.requirements) == (
-        child,
-        Access.CREDENTIALED,
-        (AccessRequirement(_PARENT, Access.CREDENTIALED, "https://example.org/dua"),),
-    )

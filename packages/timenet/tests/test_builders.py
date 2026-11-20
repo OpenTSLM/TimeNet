@@ -1,52 +1,77 @@
-from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from timenet import builders
-from timenet.builders import find_builder, find_card
-from timenet.testing import make_dataset
+from timenet.builders import declared, installed_builder
+from timenet.errors import TimeNetBuildError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.testing import install_backends, make_dataset
+from timenet.types.references import DatasetRef
 
 
 class _Backend:
-    def __init__(self, known, card=None):
+    def __init__(self, *known, card=None):
         self._known = known
         self._card = card
 
-    def knows(self, dataset_id):
-        return dataset_id == self._known
+    def dataset_ids(self):
+        return iter(self._known)
 
     def card(self, dataset_id):
         return self._card
 
-    def build(self, dataset_id, root, *, force=False):
-        return Path(root) / dataset_id
+    def build(self, release, store, *, force, pinned_by, options):
+        raise AssertionError(f"the lookup does not build {release}")
 
 
-class _Entry:
-    def __init__(self, backend):
-        self._backend = backend
-
-    def load(self):
-        return lambda: self._backend
-
-
-def test_find_builder_returns_none_when_nothing_claims_the_id(monkeypatch):
-    monkeypatch.setattr(builders, "entry_points", lambda group: [_Entry(_Backend("a/b"))])
-    assert find_builder("x/y") is None
-
-
-def test_find_builder_returns_the_backend_that_claims_the_id(monkeypatch):
-    wanted = _Backend("x/y")
-    monkeypatch.setattr(builders, "entry_points", lambda group: [_Entry(_Backend("a/b")), _Entry(wanted)])
-    assert find_builder("x/y") is wanted
-
-
-def test_find_builder_returns_none_with_no_registered_backends(monkeypatch):
-    monkeypatch.setattr(builders, "entry_points", lambda group: [])
-    assert find_builder("x/y") is None
-
-
-def test_find_card_returns_the_card_of_the_backend_that_claims_the_id(monkeypatch):
+def test_installed_builder_returns_the_first_backend_whose_dataset_ids_hold_the_id(monkeypatch):
     card = make_dataset().metadata
-    backends = [_Backend("a/b"), _Backend(card.dataset_id, card)]
-    monkeypatch.setattr(builders, "entry_points", lambda group: [_Entry(backend) for backend in backends])
-    assert find_card(card.dataset_id) is card
-    assert find_card("x/y") is None
+    wanted = _Backend("a/c", card.dataset_id, card=card)
+    install_backends(monkeypatch, _Backend("a/b"), wanted, _Backend(card.dataset_id, card=card))
+    found = installed_builder(card.dataset_id)
+    assert found is not None
+    assert (found.backend, found.card) == (wanted, card)
+    assert installed_builder("x/y") is None
+
+
+def test_installed_builder_reads_no_backend_after_the_first_that_lists_the_id(monkeypatch):
+    class _Unread(_Backend):
+        def dataset_ids(self):
+            raise AssertionError("the lookup reads no backend after the match")
+
+    card = make_dataset().metadata
+    install_backends(monkeypatch, _Backend(card.dataset_id, card=card), _Unread())
+    found = installed_builder(card.dataset_id)
+    assert found is not None
+    assert found.card == card
+
+
+def test_declared_returns_the_release_of_the_card_and_refuses_another_version(monkeypatch):
+    card = make_dataset().metadata
+    install_backends(monkeypatch, _Backend(card.dataset_id, card=card))
+    release = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
+    assert declared(card.dataset_id).release == release
+    assert declared(card.dataset_id, card.dataset_version).release == release
+    with pytest.raises(TimeNetVersionUnavailableError) as raised:
+        declared(card.dataset_id, "2.0.0")
+    assert (raised.value.release, raised.value.declared) == (
+        DatasetRef.parse(f"{card.dataset_id}@2.0.0"),
+        card.dataset_version,
+    )
+    with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'x/y'"):
+        declared("x/y")
+
+
+def test_an_installed_builder_names_the_distribution_of_the_backend(monkeypatch):
+    install_backends(monkeypatch, _Backend("x/y", card=make_dataset().metadata))
+    builder = installed_builder("x/y")
+    assert builder is not None
+    assert builder.package == "timenet-testing 0"
+
+
+def test_a_backend_without_a_distribution_gives_no_installed_builder(monkeypatch):
+    backend = _Backend("a/b", card=make_dataset().metadata)
+    entry = SimpleNamespace(dist=None, load=lambda: lambda: backend)
+    monkeypatch.setattr(builders, "entry_points", lambda group: [entry])
+    with pytest.raises(TimeNetBuildError, match=f"the entry point of {__name__}._Backend names no installed package"):
+        installed_builder("a/b")

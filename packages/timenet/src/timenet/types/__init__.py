@@ -13,9 +13,9 @@ from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, 
 from timenet.types.domains import Domain
 from timenet.types.handles import ArrayHandle, ValueHandle
 from timenet.types.ids import EntityId, check_id
-from timenet.types.label_sets import Label, LabelSet, LabelSetRegistry
+from timenet.types.label_sets import Label, LabelSet
 from timenet.types.licenses import License
-from timenet.types.metadata import DatasetMetadata, DatasetSchema
+from timenet.types.metadata import DatasetFilter, DatasetMetadata, DatasetSchema, ListedRelease
 from timenet.types.modalities import InputModality
 from timenet.types.object_kind import ObjectKind
 from timenet.types.spans import (
@@ -27,7 +27,7 @@ from timenet.types.spans import (
     TimePoint,
     TimeSpan,
 )
-from timenet.types.specs import TimeSeriesSpec
+from timenet.types.specs import MissingReason, MissingValues, TimeSeriesSpec
 from timenet.types.splits import Split, parse_split
 from timenet.types.tasks import (
     TASKS,
@@ -59,6 +59,7 @@ __all__ = [
     "AnswerTask",
     "ArrayHandle",
     "ClassificationTask",
+    "DatasetFilter",
     "DatasetMetadata",
     "DatasetSchema",
     "Domain",
@@ -67,11 +68,13 @@ __all__ = [
     "InputModality",
     "Label",
     "LabelSet",
-    "LabelSetRegistry",
     "LazyText",
     "LazyTextList",
     "License",
+    "ListedRelease",
     "LocalizationMode",
+    "MissingReason",
+    "MissingValues",
     "ObjectKind",
     "ScalarPredictionTask",
     "Span",

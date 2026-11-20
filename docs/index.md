@@ -20,9 +20,12 @@ represent ECGs, accelerometer traces, market series, and other sequential data.
 ![TimeNet architecture diagram](assets/architecture.svg)
 
 A [connector](connectors.md) turns a raw source into a TimeF version. A
-[registry](registry.md) stores immutable versions. The [client](client.md) searches the registry and
-opens datasets with lazy Signal values, or loads them with every value in memory. Consumer code
-never runs a connector.
+[registry](registry.md) stores immutable versions. The [client](client.md) searches an
+[ordered list of lookup sources](client.md#choose-the-sources): by default, the local registry,
+the remote registry, then installed connectors. It opens datasets with lazy Signal values, or
+loads them with every value in memory. The client enables auto-build by default. If only an
+installed connector provides a release, `open()` and `load()` first build it into the local
+registry.
 
 - [`BaseConnector`](connectors.md) is the only contract a new data source must satisfy.
 - [`TimeFDataset`](timef-dataset.md) is the in-memory model a connector populates during `convert()`.

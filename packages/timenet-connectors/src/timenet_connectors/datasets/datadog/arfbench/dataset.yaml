@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# ARFBench asks 750 multiple-choice questions about 142 metrics from 63 Datadog incidents. A metric
+# is one monitored quantity, such as the request count of a service. Datadog splits a metric by
+# tags. Thus a metric holds one series per tag group, for example one series per host.
+#
+# Datadog stores a metric at several rollups. A rollup is the metric on a fixed time grid, with one
+# value per interval of 10, 60, 300, 1800, 3600, or 86400 seconds. The rollups of a metric are
+# separate exports, not resamplings of one series. Their time ranges and tag groups differ.
+#
+# Each metric is one record, with one source per tag group and one signal per rollup. A consumer
+# chooses the rollup. The paper and the charts use the finest rollup. The annotation
+# `finest_interval_s` names this rollup.
+#
+# A rollup file lists the tag groups at the steps of its grid. Where the metric reported nothing
+# for a group, the step holds a null or is not in the file. The dataset cuts each series to the
+# window from the first value of its group to the last value. Thus a group with no value at a
+# rollup has no series at that rollup. Inside the window, each such step is a missing timestep on
+# the regular grid, with the reason `not_recorded` from the spec. Values are float64. The release
+# names no units. The release stores naive epochs. The dataset reads them as UTC. The answer
+# options use the same clock.
+#
+# Each question becomes one test task over the cited metric records. Thus the test split holds 750
+# tasks. A task carries the row of the question as `question_index` in its metadata. The released
+# charts are in `datadog/arfbench-charts`. The chart tasks of that dataset carry the same
+# `question_index`.
+#
+# The dataset keeps three items as released:
+# - `query_name`. This identifier differs from the metric ID for 122 of the 142 metrics. The
+#   release does not explain it.
+# - One end-time answer (row 191, metric 36464_0). This answer is 140 seconds after the end of its
+#   series.
+# - 29 time options that are outside every rollup.
+yaml_schema_version: 1
+dataset_id: datadog/arfbench
+dataset_version: 1.0.0
+name: ARFBench
+description: >-
+  750 multiple-choice questions about anomalies in 142 metrics from 63 Datadog incidents.
+  The dataset includes every published metric rollup. The charts are in datadog/arfbench-charts.
+license: Apache-2.0
+source_url: https://huggingface.co/datasets/Datadog/ARFBench
+citation: >-
+  Xie, S., Cohen, B., Goswami, M., Shen, J., Khwaja, E., Liu, C., Asker, D., Abou-Amal, O., and
+  Talwalkar, A. (2026). ARFBench: Benchmarking Time Series Question Answering Ability for Software
+  Incident Response. arXiv:2604.21199. https://arxiv.org/abs/2604.21199
+access: open
+domains:
+  - observability
+tags:
+  - observability
+  - anomaly-detection
+  - qa
+  - multiple-choice
+  - datadog
+  - huggingface

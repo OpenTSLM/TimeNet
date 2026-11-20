@@ -1,27 +1,86 @@
-"""Inspect and clear the local TimeNet cache under ``~/.cache/timenet/`` (see :mod:`timenet.config`).
+"""Inspect and clear the cache and the downloads and builds in the local registry.
 
-Datasets live in the local registry (built locally) and the download storage. Raw sources land in the
-download cache. All three sit under the home directory.
+Cache removal requires TimeNet's ``CACHEDIR.TAG`` marker.
 """
 
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
-import os
 from pathlib import Path
-import shutil
 
-from timenet.config import settings
-from timenet.format.constants import MANIFEST_FILE
+from timenet._fs import delete_and_measure, lies_in
+from timenet.config import TimeNetSettings, is_cache_folder
+from timenet.errors import TimeFValidationError
+from timenet.registry import LocalRegistry
+from timenet.registry._paths import release_dir
+from timenet.registry.origin import Origin, OriginKind
+from timenet.types.references import DatasetRef
 
 
 @dataclass(frozen=True)
-class CachedDataset:
-    """One cached dataset version on disk."""
+class StoredRelease:
+    """A stored release with its path, provenance record, and size on disk."""
 
-    location: str  # "registry" or "storage"
-    dataset_id: str
-    version: str
+    release: DatasetRef
     path: Path
-    size_bytes: int
+    origin: Origin | None
+    """The record of how the release reached the local registry, or ``None`` if it has no record."""
+
+    def size(self) -> int:
+        """Measure the size of the release on disk.
+
+        Returns:
+            The size in bytes, measured on each call.
+        """
+        return _dir_size(self.path)
+
+    @property
+    def kind(self) -> OriginKind:
+        """The kind of the record, or :attr:`~OriginKind.BUILD` for a release without a record."""
+        return OriginKind.BUILD if self.origin is None else self.origin.kind
+
+
+@dataclass(frozen=True)
+class KeptRelease:
+    """A release that a clear keeps, because a release that stays needs it."""
+
+    release: DatasetRef
+    """The release that stays."""
+    needed_by: DatasetRef
+    """A release that stays and needs it, as a payload source or as the parent of a build."""
+
+
+@dataclass(frozen=True)
+class ReleasesToClear:
+    """The releases that a clear deletes, and the releases of the same kinds that it keeps."""
+
+    releases: list[StoredRelease]
+    """The releases to delete, sorted by dataset ID and version."""
+    kept: list[KeptRelease]
+    """The releases of the cleared kinds that stay, sorted by dataset ID and version."""
+
+
+@dataclass(frozen=True)
+class ClearedCache:
+    """The bytes freed and paths removed or kept by a cache clear."""
+
+    freed: int
+    """The number of bytes freed."""
+    removed: list[Path]
+    """The paths successfully removed."""
+    kept: list[Path]
+    """The cache paths kept because they lack TimeNet's cache marker."""
+
+
+@dataclass(frozen=True)
+class ClearedReleases:
+    """The bytes freed, release folders removed and releases kept by a release clear."""
+
+    freed: int
+    """The number of bytes freed."""
+    removed: list[Path]
+    """The release folders successfully removed."""
+    kept: list[KeptRelease]
+    """The releases of the cleared kinds that stay, because a release that stays needs them."""
 
 
 def human_bytes(n: int) -> str:
@@ -42,104 +101,223 @@ def human_bytes(n: int) -> str:
     return f"{size:.1f} TB"
 
 
-def cached_datasets() -> list[CachedDataset]:
-    """List every dataset version in the local registry and download storage, with sizes.
-
-    Returns:
-        The cached datasets, sorted by (location, id, version).
-    """
-    config = settings()
-    found = _scan(config.registry_path, "registry") + _scan(config.storage_dir, "storage")
-    return sorted(found, key=lambda dataset: (dataset.location, dataset.dataset_id, dataset.version))
-
-
-def raw_cache_size() -> int:
-    """Return the size in bytes of the raw download cache directory (0 if absent).
-
-    Returns:
-        The total size of ``<TIMENET_CACHE>``.
-    """
-    cache_dir = settings().cache_dir
-    return _dir_size(cache_dir) if cache_dir.is_dir() else 0
-
-
-def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
-    """Delete cached data and return the bytes freed and the directories removed.
-
-    This always clears the download storage and the raw download cache. The caller can fetch both again.
-    It removes the local registry (locally built datasets) only when the caller sets ``include_registry``.
+def stored_releases(store: LocalRegistry) -> list[StoredRelease]:
+    """List stored releases with their provenance records and sizes.
 
     Args:
-        include_registry: Also remove the local registry.
+        store: The local registry.
 
     Returns:
-        A ``(bytes_freed, removed_dirs)`` pair. Every directory in ``removed_dirs`` is gone when this
-        returns. This raises an ``OSError`` if it cannot fully remove a tree. This stops the caller from
-        reporting space it never freed.
-    """
-    config = settings()
-    targets = [config.storage_dir, config.cache_dir]
-    if include_registry:
-        targets.append(config.registry_path)
+        The releases, sorted by dataset ID and version.
 
+    Raises:
+        TimeFFormatError: If a provenance record is invalid.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by read_origin)
+    return [
+        StoredRelease(release, release_dir(store.root, release), store.read_origin(release))
+        for release in store.releases()
+    ]
+
+
+def stored_releases_by_kind(store: LocalRegistry) -> dict[OriginKind, list[StoredRelease]]:
+    """List stored releases with their provenance records and sizes, by kind.
+
+    Args:
+        store: The local registry.
+
+    Returns:
+        The releases of each kind, sorted by dataset ID and version, and an empty list for a kind without releases.
+
+    Raises:
+        TimeFFormatError: If a provenance record is invalid.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by read_origin)
+    by_kind: dict[OriginKind, list[StoredRelease]] = {kind: [] for kind in OriginKind}
+    for item in stored_releases(store):
+        by_kind[item.kind].append(item)
+    return by_kind
+
+
+def releases_to_clear(store: LocalRegistry, *, kinds: Collection[OriginKind]) -> ReleasesToClear:
+    """Find the releases of the given kinds that no release that stays needs.
+
+    A release that stays keeps its payload sources, and a build that stays also keeps its parents. This holds
+    for each release that stays, also for one that stays only because another one needs it.
+
+    Args:
+        store: The local registry.
+        kinds: The kinds of release to delete.
+
+    Returns:
+        The releases to delete, and the releases of those kinds that stay with a release that needs each.
+
+    Raises:
+        TimeFValidationError: If ``kinds`` is empty, or a dataset or release folder in the local registry is a symlink.
+        TimeFFormatError: If a provenance record or the manifest of a release that stays is damaged.
+        OSError: If a folder of the local registry cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by check_no_linked_folders and stored_releases)
+    _check_kinds(kinds)
+    store.check_no_linked_folders()
+    releases = stored_releases(store)
+    held = {item.release: item for item in releases}
+    # Walk from each release that stays to the releases that it needs. If every kind goes, nothing stays.
+    staying = [item.release for item in releases if item.kind not in kinds]
+    seen = set(staying)
+    needed_by: dict[DatasetRef, DatasetRef] = {}
+    while staying:
+        release = staying.pop()
+        manifest = store.get_manifest(release.dataset_id, str(release.version))
+        for need in manifest.required_releases(with_parents=held[release].kind is OriginKind.BUILD):
+            if need in held and need not in seen:
+                seen.add(need)
+                needed_by[need] = release
+                staying.append(need)
+    return ReleasesToClear(
+        [item for item in releases if item.kind in kinds and item.release not in needed_by],
+        [KeptRelease(item.release, needed_by[item.release]) for item in releases if item.release in needed_by],
+    )
+
+
+def cache_size(cache_dir: Path) -> int:
+    """Measure cached downloads and control databases marked as TimeNet's.
+
+    Only ``downloads`` and ``control`` folders with TimeNet's ``CACHEDIR.TAG`` file count.
+    A symlink contributes its own size rather than its target's size.
+
+    Args:
+        cache_dir: The cache directory.
+
+    Returns:
+        The total size in bytes, or ``0`` if no marked cache folders exist.
+    """
+    total = 0
+    for folder in _cache_folders(cache_dir):
+        if is_cache_folder(folder):
+            total += folder.lstat().st_size if folder.is_symlink() else _dir_size(folder)
+    return total
+
+
+def clear_cache(cache_dir: Path, *, local_registry: LocalRegistry) -> ClearedCache:
+    """Clear cached raw source files and control databases.
+
+    Only folders with TimeNet's ``CACHEDIR.TAG`` marker are removed.
+    Removing a symlink keeps its target.
+
+    Args:
+        cache_dir: The cache directory.
+        local_registry: The local registry, which must not overlap a cache folder selected for deletion.
+
+    Returns:
+        The bytes freed, paths successfully removed and cache paths kept.
+
+    Raises:
+        TimeFValidationError: Before any deletion, if the cache is the home folder or a folder above it, or the local
+            registry overlaps a cache folder selected for deletion.
+        OSError: If a folder cannot be removed completely.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _check_cache_deletion and delete_and_measure)
+    folders = _cache_folders(cache_dir)
+    marked = [folder for folder in folders if is_cache_folder(folder)]
+    if marked:
+        # A symlink goes and its target stays, so only the other folders can hold the local registry.
+        deleted = [folder for folder in marked if not folder.is_symlink()]
+        _check_cache_deletion(cache_dir, deleted, local_registry=local_registry.root)
     freed = 0
     removed: list[Path] = []
-    for target in targets:
-        if target.is_dir():
-            freed += _delete_and_measure(target)
-            removed.append(target)
-    return freed, removed
+    for folder in marked:
+        if folder.is_symlink():
+            freed += folder.lstat().st_size
+            folder.unlink()  # a symlink goes, and its target stays
+        else:
+            freed += delete_and_measure(folder)
+        removed.append(folder)
+    return ClearedCache(freed, removed, [folder for folder in folders if folder not in marked])
 
 
-def _delete_and_measure(path: Path) -> int:
-    """Delete a directory tree and return the bytes it held. It stats each file only once.
+def clear_releases(store: LocalRegistry, *, kinds: Collection[OriginKind]) -> ClearedReleases:
+    """Delete selected releases unless remaining releases need them.
 
-    One file pass both measures and unlinks each file. Then :func:`shutil.rmtree` removes the empty
-    directory skeleton. This avoids a second walk over every file.
-
-    An unreadable directory or a failed removal raises an ``OSError``.
+    Each dataset folder that this leaves empty goes too, and other files in the local registry stay.
 
     Args:
-        path: The directory to delete.
+        store: The local registry.
+        kinds: The kinds of release to delete.
 
     Returns:
-        The total size in bytes of the files removed.
-    """
+        The bytes freed, the release folders removed, and the releases kept with a release that needs each.
 
-    def fail(error: OSError) -> None:
-        raise error  # os.walk otherwise skips a directory it cannot read, silently leaving it behind
-
+    Raises:
+        TimeNetRegistryError: Before any deletion, if the local registry is read-only.
+        TimeFValidationError: Before any deletion, if ``kinds`` is empty or a dataset or release folder is a symlink.
+        TimeFFormatError: Before any deletion, if a provenance record or a kept release's manifest is damaged.
+        OSError: If a folder cannot be read or removed completely.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by releases_to_clear and remove_release)
+    _check_kinds(kinds)
+    store.check_writable("a clear of its releases")
+    found = releases_to_clear(store, kinds=kinds)
     freed = 0
-    for parent, _dirs, files in os.walk(path, topdown=False, onerror=fail):  # os.walk: Path.walk is 3.12+
-        parent_dir = Path(parent)
-        for name in files:
-            entry = parent_dir / name
-            # lstat: a symlink counts as itself, not as its (possibly huge, possibly external) target.
-            freed += entry.lstat().st_size
-            entry.unlink(missing_ok=True)  # a concurrent build may have removed it between walk and unlink
-    shutil.rmtree(path)
-    return freed
+    removed: list[Path] = []
+    for item in found.releases:
+        freed += store.remove_release(item.release)
+        removed.append(item.path)
+    return ClearedReleases(freed, removed, found.kept)
 
 
-def _scan(root: Path, location: str) -> list[CachedDataset]:
-    """Find every ``<...>/<version>/manifest.json`` under ``root`` and measure its version directory.
+def _check_kinds(kinds: Collection[OriginKind]) -> None:
+    """Refuse a clear that names no kind of release.
+
+    Raises:
+        TimeFValidationError: If ``kinds`` is empty.
+    """
+    if not kinds:
+        raise TimeFValidationError("kinds names no kind of release")
+
+
+def _check_cache_deletion(cache_dir: Path, folders: Iterable[Path], *, local_registry: Path) -> None:
+    """Check that TimeNet may delete folders of the cache.
+
+    Args:
+        cache_dir: The cache directory.
+        folders: The folders of the cache to delete.
+        local_registry: The local registry directory, which must stay.
+
+    Raises:
+        TimeFValidationError: If the cache is the home folder or a folder above it, or a folder and the local registry
+            overlap.
+    """
+    home = _home()
+    if home is not None and lies_in(home, cache_dir):
+        raise TimeFValidationError(
+            f"The cache {cache_dir} is the home folder or a folder above it. TimeNet deletes the downloads and control "
+            "folders of the cache, so give TIMENET_CACHE a folder of its own, for example "
+            f"{TimeNetSettings.model_fields['cache'].default}."
+        )
+    for folder in folders:
+        if lies_in(local_registry, folder) or lies_in(folder, local_registry):
+            raise TimeFValidationError(
+                f"the local registry {local_registry} overlaps {folder}, which TimeNet deletes. Move the local "
+                "registry out of the cache"
+            )
+
+
+def _home() -> Path | None:
+    """Find the user's home directory.
 
     Returns:
-        The cached datasets found under ``root``.
+        The home directory, or ``None`` if the system cannot find it.
     """
-    if not root.is_dir():
-        return []
-    datasets: list[CachedDataset] = []
-    for manifest_path in root.rglob(MANIFEST_FILE):
-        version_dir = manifest_path.parent
-        parts = version_dir.relative_to(root).parts
-        if any(part.startswith(".") or ".tmp-" in part for part in parts):
-            continue
-        dataset_id = "/".join(parts[:-1])
-        if not dataset_id:
-            continue
-        datasets.append(CachedDataset(location, dataset_id, parts[-1], version_dir, _dir_size(version_dir)))
-    return datasets
+    try:
+        return Path.home()
+    except RuntimeError:
+        return None
+
+
+def _cache_folders(cache_dir: Path) -> list[Path]:
+    """Find existing download and control cache paths.
+
+    Returns:
+        The ``downloads`` and ``control`` paths that exist, including symlinks.
+    """
+    folders = (cache_dir / "downloads", cache_dir / "control")
+    return [folder for folder in folders if folder.is_symlink() or folder.exists()]
 
 
 def _dir_size(path: Path) -> int:

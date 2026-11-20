@@ -20,6 +20,8 @@ from timenet.types import (  # ruff: ignore[module-import-not-at-top-of-file]
     DatasetMetadata,
     Domain,
     License,
+    MissingReason,
+    MissingValues,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -62,13 +64,13 @@ def test_transform_applied():
     assert isinstance(ds[0], torch.Tensor)
 
 
-def _typed_dataset(dtype, values, *, nullable=False):
+def _typed_dataset(dtype, values, *, missing=None):
     spec = TimeSeriesSpec(
         spec_type=f"chan_{dtype}",
         name=dtype,
         unit_value=ureg.dimensionless,
         dtype=dtype,
-        nullable=nullable,
+        missing=missing,
     )
     ts = Signal.from_values(values, spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1))
     dataset = TimeFDataset(
@@ -96,9 +98,9 @@ def test_int16_series_stays_an_int16_tensor():
     assert item["series"][0].dtype == torch.int16
 
 
-@pytest.mark.parametrize("nullable", [False, True])
-def test_numpy_values_use_numpy_reads_without_arrow_conversion(monkeypatch, nullable):
-    dataset = _typed_dataset("float32", np.array([1.0, 0.0], dtype=np.float32), nullable=nullable)
+@pytest.mark.parametrize("missing", [None, MissingValues(reason=MissingReason.SENSOR_GAP)])
+def test_numpy_values_use_numpy_reads_without_arrow_conversion(monkeypatch, missing):
+    dataset = _typed_dataset("float32", np.array([1.0, 0.0], dtype=np.float32), missing=missing)
 
     def reject_arrow(*args, **kwargs):
         raise AssertionError("numeric values must use the normal NumPy read")

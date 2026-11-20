@@ -14,8 +14,7 @@ A `Signal` is one named stream of values. Its `TimeSeriesSpec` describes each va
 ```python
 import numpy as np
 
-from timenet.dataset import Signal
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import RegularAxis, Signal
 from timenet.types import TimeSeriesSpec
 
 temperature = Signal(
@@ -83,7 +82,8 @@ present = values.is_valid()
 ```
 
 The mask marks present timesteps. The PyTorch adapter raises `TimeFValidationError` for actual nulls,
-even when `nullable=True`. Consumers must handle missing data before tensor conversion.
+even when the spec has a `missing` record. Consumers must handle missing data before tensor
+conversion.
 
 ## Cut a window
 

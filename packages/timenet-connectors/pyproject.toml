@@ -1,6 +1,6 @@
 [project]
 name = "timenet-connectors"
-version = "0.11.0"
+version = "0.12.0"
 description = "Dataset connectors for TimeNet: dataset-specific logic to fetch and convert sources into the TimeF format."
 readme = "README.md"
 license = "MIT"
@@ -29,7 +29,7 @@ dependencies = [
     # [build] pulls PyYAML: connectors load and validate their card YAML at build time.
     # Fold assignments are persisted data; review dataset versions before upgrading.
     "scikit-learn==1.9.1",
-    "timenet[build]>=0.11.0",
+    "timenet[build]>=0.12.0",
     "typer>=0.12",
 ]
 

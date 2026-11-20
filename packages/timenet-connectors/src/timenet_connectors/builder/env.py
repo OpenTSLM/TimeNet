@@ -2,7 +2,7 @@
 
 The parent resolves the connector's ``requirements.txt`` without importing the connector (see
 :func:`timenet_connectors.discovery.requirements_for`). It layers that over a base pinned to the
-parent's own ``timenet`` and ``timenet-connectors``, then runs ``timenet-build build`` in that
+parent's own ``timenet`` and ``timenet-connectors``, then runs ``timenet-build`` in that
 environment. uv owns resolution and caching. A repeat build with an unchanged requirement set is a
 cache hit.
 """
@@ -18,22 +18,14 @@ import shlex
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the command is a fixed argument vector
 import sys
 import tempfile
-import threading
-from urllib.parse import urlparse
-from urllib.request import url2pathname
 
 from uv import find_uv_bin
 
-from timenet.errors import TimeNetBuildError
+from timenet.errors import TimeNetBuildError, TimeNetIsolationError
 from timenet.manifest import PayloadSource
+from timenet.provenance import InstalledDistribution, TimeNetSnapshot
 from timenet.types.references import DatasetRef
 from timenet_connectors.discovery import requirements_for
-
-
-BASE_DISTRIBUTIONS = ("timenet", "timenet-connectors")
-"""Pinned to the parent's own versions, so the code that writes the TimeF bytes is the code that
-reads them back. ``timenet-connectors`` depends on ``timenet[build]``, so the card-YAML
-dependencies arrive transitively and the extra never needs naming here."""
 
 
 @dataclass(frozen=True)
@@ -48,26 +40,24 @@ class EnvSpec:
     """The interpreter the environment is built on. Always one outside a virtualenv."""
 
 
-def env_spec(dataset_id: str, *, values_backend: str | None = None) -> EnvSpec:
-    """Describe the environment a dataset's connector needs.
+def env_spec(dataset_id: str) -> EnvSpec:
+    """Describe the dependencies and interpreter for a connector's build.
 
     Args:
         dataset_id: The dataset id.
-        values_backend: Selected backend, or ``None`` for a default resolved by the child.
 
     Returns:
         The environment specification.
 
     Raises:
         LookupError: If no connector exists for the id.
-        TimeNetBuildError: If a base distribution is not installed.
+        TimeNetIsolationError: If a base distribution is not installed.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
     base = _base_args()
-    # The parent cannot import the connector before its dependencies exist. When its default is
-    # unknown, include the optional backend too. An explicit Parquet build needs no Zarr dependency.
-    # Keep the parent's source/version pin; the additional requirement only requests its extra.
-    if values_backend != "parquet":
-        base += ("--with", f"timenet[zarr]=={Distribution.from_name('timenet').version}")
+    # The parent cannot read the connector's backend before the environment exists, so the
+    # environment always includes the optional Zarr backend. Keep the parent's source/version pin;
+    # the additional requirement only requests its extra.
+    base += ("--with", f"timenet[zarr]=={Distribution.from_name('timenet').version}")
     return EnvSpec(base=base, requirements=requirements_for(dataset_id), python=_base_interpreter())
 
 
@@ -86,86 +76,61 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
         The full argument vector.
 
     Raises:
-        TimeNetBuildError: If the uv executable is missing.
+        TimeNetIsolationError: If the uv executable is missing.
     """
     try:
         uv = find_uv_bin()
     except FileNotFoundError as exc:
-        raise TimeNetBuildError(
-            "cannot run an isolated build: no uv executable found. Install uv, or build in this "
-            "interpreter with TIMENET_ISOLATION=off."
-        ) from exc
+        raise TimeNetIsolationError("cannot run an isolated build: no uv executable found.") from exc
     command = [uv, "run", "--no-project", "--python", spec.python, *spec.base]
     if spec.requirements is not None:
         command += ["--with-requirements", str(spec.requirements)]
     return [*command, *argv]
 
 
-def run_isolated(  # ruff: ignore[too-many-arguments]
-    dataset_id: str,
-    out: str | Path,
+def run_isolated_build(  # ruff: ignore[too-many-arguments]
+    release: DatasetRef,
+    store_root: Path,
     *,
-    force: bool = False,
-    keep_cache: bool = False,
-    values_backend: str | None = None,
-    quiet: bool = False,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-) -> str:
-    """Build a dataset in its own environment and return what the child printed on stdout.
+    force: bool,
+    keep_cache: bool,
+    quiet: bool,
+    pinned_by: Mapping[DatasetRef, PayloadSource],
+) -> None:
+    """Build one release in its connector's environment.
 
-    The child's stderr is streamed live (a long download still shows progress) and also captured, so
-    a failed build's message carries the child's own error. Its stdout is captured, because the last
-    line is the build's result: the committed version directory for a local ``out``, or the published
-    version for a remote one. ``out`` is forwarded to the child's ``--out`` unchanged, so it publishes
-    or writes exactly as a direct build would.
+    The local registry must already contain the release's parents and their payload sources.
+    Build errors include the last lines of stderr.
 
     Args:
-        dataset_id: The dataset id.
-        out: The output target, forwarded to the child's ``--out``: a local directory or a
-            ``timenet://`` / ``http(s)://`` / ``s3://`` URL.
-        force: Rebuild even if the version is already built.
+        release: The exact dataset ID and version to build.
+        store_root: The local registry directory to build into.
+        force: Rebuild the release even if the registry already holds it.
         keep_cache: Keep the raw download cache after building.
-        values_backend: Values-plane backend to forward to the child (``"parquet"`` or
-            ``"zarr"``). ``None`` forwards nothing, leaving the child on the connector's
-            declared backend.
-        quiet: Suppress the child's status output, as ``--quiet`` does in this process.
-        pinned_by: The releases that already read files of the dataset, with their pins. The child
-            receives them in a file through the hidden ``--pinned-by`` option, and publishes only
-            if it reproduces each pinned file.
-
-    Returns:
-        The child's last non-empty stdout line: a version directory or a published version.
+        quiet: Hide build status messages.
+        pinned_by: File records the build must match, grouped by the release that pins them.
 
     Raises:
-        TimeNetBuildError: If the child failed, or printed nothing.
-        LookupError: If no connector exists for the id.
+        TimeNetBuildError: If the build fails.
+        LookupError: If no connector exists for the dataset ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
-    # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
-    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
-    if force:
-        argv.append("--force")
-    if keep_cache:
-        argv.append("--keep-cache")
-    if values_backend is not None:
-        argv += ["--values-backend", values_backend]
-    spec = env_spec(dataset_id, values_backend=values_backend)
+    # --quiet belongs to timenet-build, not to build-prepared-release, so it goes before the subcommand.
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build-prepared-release", str(release)]
+    argv += ["--store", str(store_root), *(["--force"] if force else []), *(["--keep-cache"] if keep_cache else [])]
+    spec = env_spec(release.dataset_id)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
     with _pins_file(pinned_by) as pins:
         if pins is not None:
             argv += ["--pinned-by", str(pins)]
         command = uv_command(spec, argv)
-        stdout, stderr, returncode = _run_build(command, child_env)
+        stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()
         detail = f"\n{tail}" if tail else " The child produced no error output."
         raise TimeNetBuildError(
-            f"building {dataset_id!r} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
+            f"building {release} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
         )
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if not lines:
-        raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
-    return lines[-1]
 
 
 @contextmanager
@@ -185,37 +150,29 @@ def _pins_file(pinned_by: Mapping[DatasetRef, PayloadSource] | None) -> Generato
         yield path
 
 
-def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
+def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, int]:
     """Run the build child, streaming its stderr live while also capturing it.
 
-    stdout is captured whole, because its last line is the version directory. stderr is echoed to
-    this process's stderr line by line, so a long download still shows progress, and captured too, so
-    a failure carries the child's own error.
+    stderr is echoed to this process's stderr line by line, so a long download still shows progress,
+    and captured too, so a failure carries the child's own error.
 
     Args:
         command: The full argument vector to run.
         env: The child's environment.
 
     Returns:
-        The child's captured stdout, its captured stderr, and its exit code.
+        The child's captured stderr and its exit code.
     """
     process = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true]
-        command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
     )
     captured: list[str] = []
-
-    def tee_stderr() -> None:
-        for line in process.stderr or []:
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            captured.append(line)
-
-    pump = threading.Thread(target=tee_stderr)
-    pump.start()
-    stdout = process.stdout.read() if process.stdout is not None else ""
+    for line in process.stderr or []:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+        captured.append(line)
     process.wait()
-    pump.join()
-    return stdout, "".join(captured), process.returncode
+    return "".join(captured), process.returncode
 
 
 def _base_interpreter() -> str:
@@ -239,48 +196,22 @@ def _base_args() -> tuple[str, ...]:
         Alternating flag/value arguments for uv.
 
     Raises:
-        TimeNetBuildError: If a base distribution is not installed in this interpreter.
+        TimeNetIsolationError: If a base distribution is not installed in this interpreter.
     """
     args: list[str] = []
-    for name in BASE_DISTRIBUTIONS:
+    # Pin TimeNet to the parent's own versions, so the code that writes the TimeF bytes is the code
+    # that reads them back. timenet-connectors depends on timenet[build], so the card-YAML
+    # dependencies arrive transitively and the extra never needs naming here.
+    for name in TimeNetSnapshot.package_names():
         try:
-            dist = Distribution.from_name(name)
+            installed = InstalledDistribution.from_name(name)
         except PackageNotFoundError as exc:
-            raise TimeNetBuildError(
-                f"cannot build a build environment: {name} is not installed in {sys.executable}. "
-                "Reinstall it, or build in this interpreter with TIMENET_ISOLATION=off."
+            raise TimeNetIsolationError(
+                f"cannot make a build environment: {name} is not installed in {sys.executable}."
             ) from exc
-        source = _local_source_path(dist)
+        source = installed.path_to_ondisk_project_directory()
         if source is not None:
             args += ["--with-editable", str(source)]
         else:
-            args += ["--with", f"{name}=={dist.version}"]
+            args += ["--with", f"{name}=={installed.version}"]
     return tuple(args)
-
-
-def _local_source_path(dist: Distribution) -> Path | None:
-    """Return the on-disk project directory an editable or local path install points at.
-
-    ``direct_url.json`` records how a distribution was installed. An editable install carries
-    ``dir_info.editable``. A plain path install (``pip install ./packages/timenet``) records a
-    ``file://`` URL to the same source tree without that flag. Both let the child build against the
-    parent's on-disk source, so both return the directory. An index or wheel install has no
-    ``file://`` directory and returns ``None``, leaving the caller to pin the exact version.
-
-    Args:
-        dist: The installed distribution.
-
-    Returns:
-        The source directory for an editable or local path install, else ``None``.
-    """
-    raw = dist.read_text("direct_url.json")
-    if raw is None:
-        return None
-    info = json.loads(raw)
-    parsed = urlparse(info.get("url", ""))
-    if parsed.scheme != "file":
-        return None
-    path = Path(url2pathname(parsed.path))
-    if info.get("dir_info", {}).get("editable") or path.is_dir():
-        return path
-    return None
