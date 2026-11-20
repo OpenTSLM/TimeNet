@@ -203,4 +203,4 @@ The release's own partition was 2018 for training and 2019 for evaluation. **Thi
 - Training and evaluating time-series language models that detect, time, size and describe leaks from SCADA data.
 - Studying explanations that can be checked against a known ground truth.
 
-*Added during the TimeNet hackathon, Round 1 (November 2026).*
+*Contributed by Team RAMadan during the TimeNet hackathon, Round 1 (November 2026).*
