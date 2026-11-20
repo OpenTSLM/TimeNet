@@ -15,7 +15,9 @@ provides one API to find, build, download, and load them.
 TimeNet handles the data layer. Model training, inference, and evaluation stay in your chosen
 framework.
 
-[![Watch the TimeNet video on YouTube](https://github.com/user-attachments/assets/2a07bec6-2b26-4d07-92ae-ff0f53f1ad21)](https://youtu.be/fy-7zQUTNi4)
+## TimeNet video
+
+<a href="https://youtu.be/fy-7zQUTNi4"><img width="600" alt="Watch the TimeNet video on YouTube" src="https://github.com/user-attachments/assets/36355987-bc07-4bf3-aee5-4ebfbdfa5dd7" /></a>
 
 > ### TimeNet Hackathon
 >
