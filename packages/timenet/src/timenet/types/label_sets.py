@@ -1,12 +1,12 @@
 """The allowed labels for a classification target."""
 
 from collections import Counter
-from collections.abc import Hashable, Iterable, Mapping, Sequence
+from collections.abc import Hashable, Iterable, Sequence
 from dataclasses import dataclass
 import json
-from typing import TypeVar
 
 from timenet.errors import TimeFValidationError
+from timenet.types._fields import as_tuple
 from timenet.types._model import TimeFModel
 from timenet.types.annotations import Annotation, SupportsAnnotate
 from timenet.types.wire import NonEmptyString
@@ -19,25 +19,6 @@ class Label(TimeFModel):
     """The text that a target holds for this label."""
     description: NonEmptyString | None = None
     """What the label means, such as ``The subject is awake.``."""
-
-
-_Item = TypeVar("_Item")
-
-
-def _as_tuple(value: object, item_type: type[_Item]) -> tuple[_Item, ...]:
-    """Return the items of a label set field as a tuple.
-
-    Returns:
-        The items. :meth:`LabelSet._validate` checks their type.
-
-    Raises:
-        TimeFValidationError: If the value is one item, a string, a mapping, or not iterable.
-    """
-    if isinstance(value, (item_type, str, Mapping)) or not isinstance(value, Iterable):
-        raise TimeFValidationError(
-            f"a label set takes a list of {item_type.__name__} items, got {type(value).__name__} {value!r}"
-        )
-    return tuple(value)
 
 
 def _as_label(item: object) -> object:
@@ -124,10 +105,10 @@ class LabelSet(SupportsAnnotate):
         """
         if ordered and isinstance(labels, (set, frozenset)):
             raise TimeFValidationError("an ordered label set needs labels in a fixed order, got a set")
-        self.labels = tuple(_as_label(label) for label in _as_tuple(labels, Label))  # ty: ignore[invalid-assignment]
+        self.labels = tuple(_as_label(label) for label in as_tuple(labels, item_type=Label))  # ty: ignore[invalid-assignment]
         self.multi_label = multi_label
         self.ordered = ordered
-        self.annotations = _as_tuple(annotations, Annotation)
+        self.annotations = as_tuple(annotations, item_type=Annotation)
         self._validate()
         self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
 
