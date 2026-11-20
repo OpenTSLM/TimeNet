@@ -34,8 +34,7 @@ A `Signal` is one named stream. Pass `data` to the constructor for eager values.
 `Signal.from_loader()` with `loader` and `n_values` for lazy values.
 
 ```python
-from timenet.dataset import Signal
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import RegularAxis, Signal
 
 axis = RegularAxis.from_rate_hz(500)
 
@@ -56,7 +55,7 @@ lead_i = Signal(
 | `data` | array-like | Eager values. Mutually exclusive with `loader`. |
 | `loader` | `ArrayHandle` or callable | Lazy values, passed to `Signal.from_loader()`. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
-| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
+| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. The constructors accept any iterable. |
 | `metadata` | `JsonMapping` | Optional JSON-compatible metadata. |
 
 Read values through `to_arrow()`, `to_numpy()`, and `read_steps()`. These accessors apply the
@@ -77,7 +76,8 @@ An irregular Signal also needs its time offsets. Pass `time_offsets_us` to
 `time_offsets_us()`. Regular axes calculate their offsets from their cadence, and ordinal axes
 describe order without a clock.
 
-Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
+Pass `annotations=[...]` to the constructor to attach annotations when you build the Signal. Call
+`signal.annotate(annotation)` to attach an occurrence to a Signal that exists.
 
 ## Source
 
@@ -88,12 +88,12 @@ Sources. [Sources](data-model/sources.md) describes the concept in full.
 from timenet.dataset import Source
 
 accelerometer = Source(
-    name="Accelerometer",
+    "Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 
 imu = Source(
-    name="IMU",
+    "IMU",
     sources=(accelerometer, gyroscope, magnetometer),
 )
 ```
@@ -101,9 +101,9 @@ imu = Source(
 | Field | Type | Description |
 | --- | --- | --- |
 | `name` | `str` | Human-readable Source name. |
-| `sources` | `tuple[Source, ...]` | Direct child Sources. |
-| `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
-| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Source. |
+| `sources` | `Iterable[Source]`, stored as a tuple | Direct child Sources. |
+| `signals` | `Iterable[Signal]`, stored as a tuple | Signals produced directly by this Source. |
+| `annotations` | `Iterable[Annotation]`, stored as a tuple | Annotation occurrences attached to this Source. |
 | `metadata` | `JsonMapping` | Optional device, sensor, or subsystem metadata. |
 
 `walk_sources()` and `walk_signals()` traverse a complete subtree. TimeNet rejects cycles, a Source
@@ -111,8 +111,9 @@ with two parents, and a Signal with two owners.
 
 Sources group Signals. All timed Signals in a Record use its common relative origin.
 
-Call `source.annotate(annotation)` for a Source annotation. A selection attaches annotation content
-to several Signals in one operation:
+Pass `annotations=[...]` to the constructor to attach annotations when you build the Source. Call
+`source.annotate(annotation)` to attach an occurrence to a Source that exists. A selection attaches
+annotation content to several Signals in one operation:
 
 ```python
 source.select(signals=(lead_i, lead_ii)).annotate(annotation)
@@ -129,9 +130,11 @@ annotations and metadata:
 
 ```python
 from timenet.dataset import Record
+from timenet.types import Annotation
 
 record = Record(
     sources=(imu,),
+    annotations=[Annotation("condition", value="healthy")],
     metadata={"site": "lab-a", "session": "record-123"},
 )
 ```
@@ -139,8 +142,8 @@ record = Record(
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | `int` | Read-only identity. Set when the Record joins a dataset. |
-| `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
-| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
+| `sources` | `Iterable[Source]`, stored as a tuple | Root Sources in the recording hierarchy. |
+| `annotations` | `Iterable[Annotation]`, stored as a tuple | Annotation occurrences attached to this Record. |
 | `metadata` | `JsonMapping` | Optional session metadata. |
 | `start_time` | `TimeOrigin` | Common relative zero with an optional absolute timestamp. |
 | `time_span` | `TimeInterval \| None` | Optional overall session interval. |
@@ -148,16 +151,19 @@ record = Record(
 `record.signals` flattens every Signal in the hierarchy. `walk_sources()` and `walk_signals()` expose
 the same deterministic traversal used by the writer.
 
-Call `record.annotate(annotation)` to attach an occurrence. `time_point()` and `time_interval()`
+Pass `annotations=[...]` to the constructor to attach annotations when you build the Record. Call
+`record.annotate(annotation)` to attach an occurrence to a Record that exists. `time_point()` and `time_interval()`
 convert wall-clock values against the Record origin. They require a known absolute timestamp.
 
 Store subject identifiers as a list-valued record annotation. Omit it for a record with no subjects:
 
 ```python
+from timenet.dataset import Record
 from timenet.types import Annotation
 
-record.annotate(
-    Annotation(key="subject_ids", value=["patient-1", "patient-2"])
+record = Record(
+    sources=(imu,),
+    annotations=[Annotation("subject_ids", value=["patient-1", "patient-2"])],
 )
 ```
 
@@ -173,7 +179,7 @@ from timenet.types import AnswerTask
 task = AnswerTask(
     inputs=(record,),
     prompt="Diagnose this patient.",
-    targets=("The recording shows no cardiac activity.",),
+    targets="The recording shows no cardiac activity.",
 )
 ```
 
@@ -198,11 +204,18 @@ Register complete Records independently of Tasks. This supports datasets with or
 
 ```python
 from timenet.dataset import TimeFDataset
+from timenet.types import Annotation
 
-dataset = TimeFDataset(metadata=metadata)
-dataset.add_record(record=record)
-dataset.add_task(task=task)
+dataset = TimeFDataset(
+    metadata=metadata,
+    annotations=[Annotation("source_revision", value="4f2a9c1")],
+)
+dataset.add_record(record)
+dataset.add_task(task)
 ```
+
+`annotations` is optional. It takes an iterable of `Annotation` objects and attaches each one to the
+dataset in order, as `dataset.annotate()` does. A dataset annotation cannot have a `span`.
 
 `add_record()` validates hierarchy ownership. It rejects a Record that is already in a dataset,
 and a Source or Signal that another Record owns. It then gives the Record and its Signals their IDs.
@@ -214,17 +227,23 @@ inserts that stream once without retaining every Task in memory.
 
 ## Annotations
 
-The same `Annotation` type can annotate a Dataset, Task, Record, Source, or Signal. Annotation
-content is immutable and reusable. Every call to `annotate()` creates a separate occurrence, so a
-long payload can be stored once while its occurrences carry independent placement, confidence, and
-provenance. `Annotation` is final: reuse content through a constant, or a builder function for
-content that varies, as [Annotations](data-model/annotations.md#reuse-content) shows.
+The same `Annotation` type can annotate a Dataset, Task, Record, Source, Signal, or label set. Each of
+them takes `annotations=[...]` at construction. This is the usual way to attach annotations. Use
+`annotate()` when the owner exists already, or when a Task refers to the occurrence that the call
+returns.
+
+Annotation content is immutable and reusable. Every call to `annotate()` and every constructor creates
+a separate occurrence, so a long payload can be stored once while its occurrences carry independent
+placement, confidence, and provenance. `Annotation` is final: reuse content through a constant, or a
+builder function for content that varies, as [Annotations](data-model/annotations.md#reuse-content)
+shows.
 
 ```python
+from timenet.dataset import Record
 from timenet.types import Annotation, TimePoint
 
-male = Annotation(key="patient_sex", value="male")
-record.annotate(male)
+male = Annotation("patient_sex", value="male")
+record = Record(sources=(imu,), annotations=[male])
 
 lead_i.annotate(
     Annotation(
@@ -238,7 +257,9 @@ lead_i.annotate(
 ## Schema and persistence
 
 `derive_schema()` collects the time-series specifications, annotation descriptors, and concrete Task
-types found in the dataset. It does not load Signal values.
+types found in the dataset. Annotation descriptors come from every owner: the Dataset, Records,
+Sources, Signals, Tasks, and label sets. The Tasks of a task stream are not read here. The writer
+adds their keys to the schema while it writes them. It does not load Signal values.
 
 Write a version with the declarative helper:
 
@@ -265,7 +286,7 @@ The stored version contains `manifest.json`, an immutable `control.duckdb`, and 
 values plane. See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer.md) for the physical
 layout.
 
-See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.
+See the [API reference for `timenet.dataset`](api/timenet.dataset.md) for the full symbol listing.
 
 ## Importing from a parent
 
@@ -305,6 +326,9 @@ still say `open`. The effective access level of a dataset is the strictest level
 of the cards in its `lineage`. A user must have this level of access to use the data of the dataset.
 
 `timenet info` shows the effective access level and the page of each card that requires access.
+Before a build, a release has no lineage yet. So for a release that only a connector provides,
+`timenet info` shows the level of its own card. If the card declares parents, the access row says
+so, for example `open (this card only: the access of its 2 parents is known after a build)`.
 `effective_access()` and `access_requirements()` in `timenet.types.access` return the same
 information.
 

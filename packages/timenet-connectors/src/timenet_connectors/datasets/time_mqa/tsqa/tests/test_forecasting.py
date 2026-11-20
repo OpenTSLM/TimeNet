@@ -51,7 +51,7 @@ _ROWS = [_series_row(_HISTORY, _FUTURE), _EARNINGS_ROW, _PROSE_ROW]
 
 
 def _convert(write_part, rows=_ROWS):
-    return TimeMqaConnector().convert([write_part(ReleasePart.FORECASTING_IMPUTATION_1, rows)])
+    return TimeMqaConnector().convert(write_part(ReleasePart.FORECASTING_IMPUTATION_1, rows))
 
 
 def test_a_series_question_becomes_a_forecasting_task_from_the_history_record_to_the_future_record(write_part):

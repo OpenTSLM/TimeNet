@@ -6,19 +6,18 @@ Each family module parses the texts of its rows and builds their Records and tas
 """
 
 from collections.abc import Callable, Mapping
-from typing import ClassVar
+from pathlib import Path
 
 from timenet.dataset import TimeFDataset
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.time_mqa.tsqa.anomaly_detection import AnomalyDetectionRow
 from timenet_connectors.datasets.time_mqa.tsqa.classification import ClassificationRow
 from timenet_connectors.datasets.time_mqa.tsqa.forecasting import parse_forecasting_row
 from timenet_connectors.datasets.time_mqa.tsqa.imputation import ImputationRow
 from timenet_connectors.datasets.time_mqa.tsqa.release import (
-    HF_REPO,
     SOURCE_FILES,
-    SOURCE_REVISION,
     ReleaseFile,
+    ReleasePart,
     ReleaseRow,
     TaskFamily,
     TaskRow,
@@ -34,25 +33,26 @@ _PARSERS: Mapping[TaskFamily, Callable[[ReleaseRow], TaskRow]] = {
 """The parser of each task family."""
 
 
-class TimeMqaConnector(BaseHuggingFaceConnector):
+class TimeMqaConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="Time-MQA/TSQA",
+    source_revision="a7f9e95667b695d2647b9eff92bb6a38b5183a34",
+    source_files=SOURCE_FILES,
+):
     """Connector for the TSQA release of Time-MQA (Hub repo ``Time-MQA/TSQA``)."""
 
-    HF_REPO = HF_REPO
-    SOURCE_REVISION = SOURCE_REVISION
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = SOURCE_FILES
-
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Create the Records and the task of each question-and-answer row.
 
         Args:
-            raw_refs: The downloaded files, one for each part.
+            files: The local path of each downloaded part.
 
         Returns:
             The populated dataset.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for ref in raw_refs:
-            for row in ReleaseFile.from_hub_file_ref(ref).read_rows():
+        for part, path in files.items():
+            for row in ReleaseFile(part=ReleasePart(part), path=path).read_rows():
                 _PARSERS[row.family](row).add_records_and_task_to(dataset)
         return dataset
 

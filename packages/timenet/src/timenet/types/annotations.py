@@ -13,7 +13,8 @@ manifest.
 """
 
 from collections.abc import Hashable
-from dataclasses import dataclass, field, replace
+from copy import deepcopy
+from dataclasses import KW_ONLY, dataclass, field, replace
 from enum import StrEnum, unique
 import json
 from typing import Annotated, Any, Protocol, final
@@ -58,30 +59,32 @@ def _annotation_value(value: Any) -> AnnotationValue:
 
 
 @final
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class Annotation:
     """Contextual metadata attached to a record, optionally anchored to a region of its timeline.
 
     An annotation carries a ``value``, a ``span``, or both. With a span, it says where on the
     Record timeline it applies. Its owner determines which Signals it covers. Without a span, it is record-scoped
     context that has no place in time, like a subject's age. The span's own shape says whether the
-    annotation marks a time offset or covers a stretch. One class covers every shape::
+    annotation marks a time offset or covers a stretch. One class covers every shape. ``key``
+    can be positional. All other fields are keyword-only::
 
-        Annotation(key="age", value=64)
-        Annotation(key="stimulus", span=TimePoint.seconds(0.5))
-        Annotation(key="artifact", value="motion", span=TimeInterval.seconds(0.0, 0.25))
+        Annotation("age", value=64)
+        Annotation("stimulus", span=TimePoint.seconds(0.5))
+        Annotation("artifact", value="motion", span=TimeInterval.seconds(0.0, 0.25))
 
     The class is final. Reuse content as a constant, or build content that varies with a function::
 
-        HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy")
+        HEALTHY_ANNOTATION = Annotation("condition", value="healthy")
 
 
         def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
-            return Annotation(key="quality", value=level)
+            return Annotation("quality", value=level)
     """
 
     key: str
     """Name identifying the annotation."""
+    _: KW_ONLY
     value: ValueField[Any, AnnotationValue] = field(default=ValueField(_annotation_value, None))
     """A native scalar or a text handle. Call ``read()`` for string and string-list values.
 
@@ -182,6 +185,23 @@ class Annotation:
         return replace(self)
 
 
+def _copy_annotation(original: Annotation) -> Annotation:
+    """Copy an annotation occurrence as a value, with the handle of a stored value.
+
+    The copy has deep copies of the value, the metadata, and the occurrence metadata. So a change to
+    one of them in the copy leaves the original as it is. Imports and edits copy annotations this way.
+
+    Returns:
+        The copy.
+    """
+    return replace(
+        original,
+        value=deepcopy(original.value),
+        metadata=deepcopy(original.metadata),
+        occurrence_metadata=deepcopy(original.occurrence_metadata),
+    )
+
+
 def annotation_type_of(annotation: Annotation) -> AnnotationType:
     """Return the :class:`AnnotationType` shape of an annotation instance.
 
@@ -201,8 +221,8 @@ class SupportsAnnotate(Protocol):
 
     ``annotate`` binds a fresh occurrence of ``annotation`` to this object and returns it; the
     returned occurrence is what a Task names in ``input_annotations`` or ``target_annotations``.
-    ``annotations`` lists every occurrence attached so far. Records, Sources, Signals, Tasks, and
-    the dataset itself implement it. A :class:`~timenet.dataset.SignalSelection` does not: it fans
+    ``annotations`` lists every occurrence attached so far. Records, Sources, Signals, Tasks, label
+    sets, and the dataset itself implement it. A :class:`~timenet.dataset.SignalSelection` does not: it fans
     one annotation out over several Signals and returns every occurrence it created. The contract is
     checked statically; there is no runtime ``isinstance`` support because ``annotations`` is a
     property.

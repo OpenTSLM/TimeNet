@@ -11,19 +11,24 @@ import asyncio
 from collections.abc import Coroutine
 import hashlib
 from pathlib import Path
-import shutil
 import threading
 from typing import Any
-import uuid
 
 import httpx
 
+from timenet._fs import staged_directory
 from timenet.errors import TimeNetFileError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
-from timenet.registry.base import ProgressCallback
-from timenet.registry.remote._http import RegistryHttpClient, _download_path, _raise_for_status, _redirect_target
+from timenet.registry.base import ByteCountCallback
+from timenet.registry.remote._http import (
+    RegistryHttpClient,
+    _download_path,
+    _raise_for_status,
+    _redirect_target,
+    _send_with_retry_async,
+)
 from timenet.registry.shared import complete_copy
 from timenet.types.references import DatasetRef
 
@@ -40,19 +45,19 @@ def download_version_files(  # ruff: ignore[too-many-arguments]
     *,
     force: bool = False,
     max_concurrency: int = 8,
-    progress_cb: ProgressCallback | None = None,
+    progress_cb: ByteCountCallback | None = None,
 ) -> Path:
     """Download every file of a version into ``dest_dir`` atomically.
 
     Args:
         http: The registry HTTP client.
-        manifest: The version's parsed manifest (its file list drives the download).
+        manifest: The release's manifest.
         dataset_id: The ``org/name`` id.
         version: The version string.
         dest_dir: The target ``<...>/<id>/<version>`` directory.
         force: Re-download even if ``dest_dir/manifest.json`` already exists.
         max_concurrency: Maximum concurrent file downloads.
-        progress_cb: Called with each chunk's byte count as it is written, for a progress display.
+        progress_cb: Callback that receives each downloaded chunk's byte count, or ``None``.
 
     Returns:
         ``dest_dir``.
@@ -61,21 +66,9 @@ def download_version_files(  # ruff: ignore[too-many-arguments]
     if complete_copy(dest_dir, manifest) and not force:
         return dest_dir
     files = list(manifest.files.all_files())
-    parent = dest_dir.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    # Each download stages into a unique dir and removes it in the finally below. A hard kill
-    # (SIGKILL/power loss) can leave one behind, but do NOT sweep sibling <version>.tmp-* dirs here: a
-    # concurrent download of the same version has a live staging dir with the same prefix, and sweeping
-    # it would break that download mid-write. A rare orphaned dir is the lesser evil.
-    staging = parent / f"{dest_dir.name}.tmp-{uuid.uuid4().hex}"
-    try:
+    with staged_directory(dest_dir) as staging:
         _run(_download_all(http, dataset_id, version, files, staging, max_concurrency, progress_cb))
         (staging / "manifest.json").write_text(manifest.to_json())  # already parsed; no extra round trip
-        if dest_dir.exists():
-            shutil.rmtree(dest_dir)
-        staging.replace(dest_dir)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
     return dest_dir
 
 
@@ -86,7 +79,7 @@ async def _download_all(  # ruff: ignore[too-many-arguments, too-many-positional
     files: list[FilePart],
     staging: Path,
     max_concurrency: int,
-    progress_cb: ProgressCallback | None,
+    progress_cb: ByteCountCallback | None,
 ) -> None:
     """Download all files concurrently into the staging directory.
 
@@ -139,7 +132,7 @@ async def _resolve(client: httpx.AsyncClient, headers: dict, dataset_id: str, ve
         TimeNetRegistryError: If the download endpoint does not redirect.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _redirect_target
     path = _download_path(dataset_id, version, relpath)
-    response = await client.get(path, headers=headers, follow_redirects=False)
+    response = await _send_with_retry_async(lambda: client.get(path, headers=headers, follow_redirects=False))
     return _redirect_target(response, path)
 
 
@@ -150,7 +143,7 @@ async def _stream_one(  # ruff: ignore[too-many-arguments]
     *,
     release: DatasetRef,
     record: FilePart,
-    progress_cb: ProgressCallback | None = None,
+    progress_cb: ByteCountCallback | None = None,
 ) -> None:
     """Stream one presigned URL to ``dest`` via a ``.part`` temp file, renamed on success.
 

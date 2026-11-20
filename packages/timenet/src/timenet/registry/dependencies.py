@@ -9,7 +9,7 @@ only those and never walks a source's own sources.
 """
 
 from collections.abc import Callable, Iterable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,10 +23,10 @@ from timenet.errors import (
     TimeNetMissingParentError,
 )
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import FilePart, Manifest, PayloadSource
+from timenet.manifest import FilePart, Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
-from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
+from timenet.types.access import Access, effective_access
 from timenet.types.reference_keys import SourceKey
 from timenet.types.references import DatasetRef
 
@@ -63,7 +63,7 @@ def open_local_version(path: str | Path, *, sources_root: str | Path | None = No
     manifest_path = directory / MANIFEST_FILE
     if not manifest_path.is_file():
         raise FileNotFoundError(f"no manifest at {manifest_path}")
-    manifest = Manifest.model_validate_json(manifest_path.read_text())
+    manifest = read_manifest(manifest_path)
     if not manifest.payload_sources:
         return open_local_release(directory, manifest, sources_root=None)
     if sources_root is None:
@@ -77,15 +77,13 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
     Args:
         directory: The release directory.
         manifest: The release's manifest.
-        sources_root: The registry root that holds its payload sources. Only a release without
-            payload sources may omit it.
+        sources_root: The registry root of the payload sources, required if the release has any.
 
     Returns:
         A handle with each payload source opened and checked.
 
     Raises:
-        TimeNetFileError: If a file of the release or of a payload source is missing or has another
-            size than recorded.
+        TimeNetFileError: If a required file is missing or its size differs from its manifest record.
         TimeFFormatError: If a payload source differs from the files the release pins.
         TimeNetMissingParentError: If a payload source is not under ``sources_root``.
         TimeFValidationError: If the release has payload sources but no ``sources_root``.
@@ -103,15 +101,13 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
         source_manifest = source_dir / MANIFEST_FILE
         if not source_manifest.is_file():
             raise TimeNetDatasetNotFoundError(f"no manifest at {source_manifest}")
-        return DatasetVersion(
-            Manifest.model_validate_json(source_manifest.read_text()), version.filesystem, str(source_dir)
-        )
+        return DatasetVersion(read_manifest(source_manifest), version.filesystem, str(source_dir))
 
-    return attach_payload_sources(version, open_source, searched=str(root))
+    return attach_payload_sources(version, open_source, searched=lambda: str(root))
 
 
 def attach_payload_sources(
-    version: DatasetVersion, open_source: Callable[[DatasetRef], DatasetVersion], *, searched: str
+    version: DatasetVersion, open_source: Callable[[DatasetRef], DatasetVersion], *, searched: Callable[[], str]
 ) -> DatasetVersion:
     """Open a release's payload sources and check each against the files the release pins.
 
@@ -122,7 +118,7 @@ def attach_payload_sources(
         version: The opened release, without its payload sources.
         open_source: Open one exact release, without its payload sources. It raises
             :class:`~timenet.errors.TimeNetDatasetNotFoundError` when the release is absent.
-        searched: Where ``open_source`` looks, for the error that names a missing source.
+        searched: Describe where ``open_source`` looks, only for the error that names a missing source.
 
     Returns:
         The release with each payload source attached.
@@ -139,12 +135,80 @@ def attach_payload_sources(
         try:
             source = open_source(pinned.release)
         except TimeNetDatasetNotFoundError as error:
-            raise TimeNetMissingParentError(pinned.release, release, True, searched) from error
+            raise TimeNetMissingParentError(pinned.release, release, searched(), payload_source=True) from error
         validate_manifest_reference(source.manifest, pinned.release)
         check_pins(release, pinned, source.manifest)
         check_file_sizes(source, pinned.files, owner=f"payload source {pinned.release} of {release}")
         sources[key] = source
     return replace(version, payload_sources=sources)
+
+
+@dataclass(frozen=True)
+class CopySources:
+    """The payload sources of a release, by where a copy of the release finds them."""
+
+    fetched: dict[DatasetRef, Manifest] = field(default_factory=dict)
+    """The payload sources that the registry serves, with their manifests there. The copy brings them."""
+    held: dict[DatasetRef, Manifest] = field(default_factory=dict)
+    """The other payload sources that the destination holds as complete copies, with their manifests."""
+    missing: dict[DatasetRef, PayloadSource] = field(default_factory=dict)
+    """The payload sources that neither holds, with the pins of the release on each."""
+
+
+def find_payload_sources(
+    release: DatasetRef,
+    manifest: Manifest,
+    registry: "BaseRegistry",
+    *,
+    find: Callable[[DatasetRef], Manifest | None],
+    held: Callable[[DatasetRef], Manifest | None],
+) -> CopySources:
+    """Find each payload source of a release in the registry to copy from, else in the destination.
+
+    A release needs exactly the payload sources that its manifest lists, never their own payload sources.
+
+    Args:
+        release: The release to copy.
+        manifest: The manifest of ``release``.
+        registry: The registry to copy from.
+        find: Return the manifest of a release in ``registry``, or ``None`` if it lacks the release.
+        held: Return the manifest of a complete copy in the destination, or ``None``.
+
+    Returns:
+        The payload sources, by where the copy finds them.
+
+    Raises:
+        TimeFFormatError: If a payload source that the copy finds differs from the files that ``release`` pins.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by check_pins
+    sources = CopySources()
+    for pinned in manifest.payload_sources.values():
+        source = pinned.release
+        found = find(source)
+        if found is not None and _serves(registry, found):
+            sources.fetched[source] = found
+        elif (found := held(source)) is not None:
+            sources.held[source] = found
+        else:
+            sources.missing[source] = pinned
+            continue
+        check_pins(release, pinned, found)
+    return sources
+
+
+def _serves(registry: "BaseRegistry", manifest: Manifest) -> bool:
+    """Check whether a registry serves the files of a release that it holds.
+
+    A registry that requires open access serves a release only if its card and each card in its lineage are open.
+
+    Args:
+        registry: The registry that holds the release.
+        manifest: The manifest of the release in ``registry``.
+
+    Returns:
+        ``True`` if the registry serves the files.
+    """
+    open_access = effective_access(manifest.metadata, manifest.lineage) is Access.OPEN
+    return open_access or not registry.requires_open_access
 
 
 def check_pins(release: DatasetRef, pinned: PayloadSource, manifest: Manifest) -> None:
@@ -207,7 +271,6 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
     manifest: Manifest | None = None,
     force: bool = False,
     progress_cb: Callable[[int], None] | None = None,
-    before_fetch: Callable[[Manifest], object] | None = None,
 ) -> DatasetVersion:
     """Ensure complete local copies of a release and of each of its payload sources.
 
@@ -229,9 +292,6 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
         manifest: An already-loaded manifest for the requested release.
         force: Fetch the requested release again, even if it is cached.
         progress_cb: Report downloaded bytes.
-        before_fetch: A callback that gets the manifest of each release before this function
-            downloads the files of the release. For example, the callback can check the access
-            requirement of the release.
 
     Returns:
         The requested release with its payload sources attached and checked against its pins.
@@ -254,44 +314,11 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
             manifest=manifest if requested else None,
             force=force and requested,
             progress_cb=progress_cb,
-            before_fetch=before_fetch,
         )
         return DatasetVersion(release, pafs.LocalFileSystem(), str(directory))
 
     version = open_complete(reference, requested=True)
-    return attach_payload_sources(version, lambda ref: open_complete(ref, requested=False), searched=str(root))
-
-
-def open_cached_or_remote(
-    root: Path,
-    reference: DatasetRef,
-    open_remote_version: Callable[[DatasetRef], DatasetVersion],
-    *,
-    searched: str,
-) -> DatasetVersion:
-    """Open a release and its payload sources from complete cached copies or remotely.
-
-    Args:
-        root: The cache directory, checked for complete releases before using remote files.
-        reference: The exact dataset ID and version to open.
-        open_remote_version: Open one remote release without its payload sources.
-        searched: The remote registry, for the error that names a missing source.
-
-    Returns:
-        A local or remote handle with each payload source attached and checked against its pins.
-        No catalogs or payload files are opened here.
-    """
-
-    def open_one(ref: DatasetRef) -> DatasetVersion:
-        directory = release_dir(root, ref)
-        cached = _load_complete_local_manifest(directory, ref)
-        if cached is not None:
-            return DatasetVersion(cached, pafs.LocalFileSystem(), str(directory))
-        return open_remote_version(ref)
-
-    version = open_one(reference)
-    validate_manifest_reference(version.manifest, reference)
-    return attach_payload_sources(version, open_one, searched=f"{searched} or its cache {root}")
+    return attach_payload_sources(version, lambda ref: open_complete(ref, requested=False), searched=lambda: str(root))
 
 
 def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-arguments]
@@ -302,26 +329,23 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
     manifest: Manifest | None,
     force: bool,
     progress_cb: Callable[[int], None] | None,
-    before_fetch: Callable[[Manifest], object] | None = None,
 ) -> Manifest:
-    """Reuse or fetch one complete release, and repair a damaged copy only by fetching it.
+    """Reuse a complete local release or fetch it from a registry.
+
+    Local checks compare file sizes. Downloads also check file hashes.
 
     Returns:
-        The release manifest. File hashes are checked during transfer, not on every read.
+        The complete release's manifest.
 
     Raises:
-        TimeNetDatasetNotFoundError: If the release is absent and this function cannot fetch it.
-        TimeNetFileError: If the local manifest is present but a file is missing or has another
-            size, and ``fetch_from`` is not given. Also if a fetched file does not match its
-            manifest record.
+        TimeNetDatasetNotFoundError: If the release is missing and ``fetch_from`` is unset or lacks it.
+        TimeNetFileError: If a local file is damaged and ``fetch_from`` is unset, or a downloaded file is damaged.
         TimeFFormatError: If a manifest identifies a different release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     if manifest is not None:
         validate_manifest_reference(manifest, reference)
     if not force and (directory / MANIFEST_FILE).is_file():
-        local = (
-            manifest if manifest is not None else Manifest.model_validate_json((directory / MANIFEST_FILE).read_text())
-        )
+        local = manifest if manifest is not None else read_manifest(directory / MANIFEST_FILE)
         validate_manifest_reference(local, reference)
         try:
             check_file_sizes(
@@ -335,60 +359,27 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
         else:
             return local
     if fetch_from is not None:
-        return _download_dataset_version(
-            directory, reference, fetch_from, manifest=manifest, progress_cb=progress_cb, before_fetch=before_fetch
-        )
+        return _download_dataset_version(directory, reference, fetch_from, manifest=manifest, progress_cb=progress_cb)
     raise TimeNetDatasetNotFoundError(f"complete release {reference} is missing at {directory}")
 
 
-def _load_complete_local_manifest(
-    directory: Path,
-    reference: DatasetRef,
-    *,
-    manifest: Manifest | None = None,
-) -> Manifest | None:
-    """Load and validate a local release, returning None if files are missing or incomplete.
-
-    Returns:
-        The manifest if all declared files exist with their expected sizes, otherwise None.
-        Invalid manifests raise an error instead of being treated as missing releases.
-    """
-    manifest_path = directory / MANIFEST_FILE
-    if not manifest_path.is_file():
-        return None
-    if manifest is None:
-        manifest = Manifest.model_validate_json(manifest_path.read_text())
-    validate_manifest_reference(manifest, reference)
-    return manifest if complete_copy(directory, manifest) else None
-
-
-def _download_dataset_version(  # ruff: ignore[too-many-arguments]
+def _download_dataset_version(
     directory: Path,
     reference: DatasetRef,
     registry: "BaseRegistry",
     *,
     manifest: Manifest | None,
     progress_cb: Callable[[int], None] | None,
-    before_fetch: Callable[[Manifest], object] | None = None,
 ) -> Manifest:
-    """Fetch one complete release, checking its identity before downloading its files.
+    """Download a complete release after checking its dataset ID and version.
 
     Returns:
-        The manifest after the registry has verified and stored the downloaded files.
+        The manifest for the downloaded and verified release.
     """
     if manifest is None:
         manifest = registry.get_manifest(reference.dataset_id, str(reference.version))
     validate_manifest_reference(manifest, reference)
-    if before_fetch is not None:
-        before_fetch(manifest)
-    registry._download_release(
-        reference.dataset_id,
-        str(reference.version),
-        directory,
-        force=True,
-        manifest=manifest,
-        progress_cb=progress_cb,
-    )
+    registry.download_release(reference, directory, force=True, manifest=manifest, progress_cb=progress_cb)
     return manifest
 
 

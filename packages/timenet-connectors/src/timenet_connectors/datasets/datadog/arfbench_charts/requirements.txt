@@ -1,0 +1,5 @@
+# huggingface_hub downloads the release from the HuggingFace Hub. Version 1.1 adds tqdm_class.
+huggingface_hub>=1.1
+# Pillow decodes the chart PNGs. Zarr stores their tensor values. The connector base installs neither.
+pillow>=11
+zarr>=3

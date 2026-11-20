@@ -17,14 +17,14 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
-from timenet.client import TimeNet
-import timenet_connectors
+import timenet
+from timenet import TimeNet
 
 
 # Build and load through the same explicit local registry.
 registry = Path(".timenet-registry")
-timenet_connectors.build("timenet/test-mean", out=registry)
-dataset = TimeNet(registry).load("timenet/test-mean")
+timenet.build("timenet/test-mean", local_registry=registry)
+dataset = TimeNet(sources=[registry]).load("timenet/test-mean")
 
 # A quick tour of what we loaded: identity, counts, specs, and a record preview.
 dataset.describe()

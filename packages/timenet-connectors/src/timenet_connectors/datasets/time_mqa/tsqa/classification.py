@@ -15,28 +15,27 @@ from typing import Self
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.json import JsonMapping
-from timenet.types import ClassificationTask, Label, LabelSet, TimeSeriesSpec, ureg
+from timenet.types import Annotation, ClassificationTask, Label, LabelSet, TimeSeriesSpec, ureg
 from timenet_connectors.datasets.time_mqa.tsqa.release import PrintedSeries, ReleaseRow
 
 
 # The labels are the words of the released answers, in the order of the question text.
 ACTIVITY = LabelSet(
-    name="activity",
-    labels=(
-        Label(name="Walking"),
-        Label(name="Jogging"),
+    [
+        "Walking",
+        "Jogging",
         Label(name="Upstairs", description="Walking up stairs."),
         Label(name="Downstairs", description="Walking down stairs."),
-        Label(name="Sitting"),
-        Label(name="Standing"),
-    ),
+        "Sitting",
+        "Standing",
+    ],
+    ordered=True,
+    annotations=[Annotation("name", value="activity")],
 )
 GAIT_FREEZING = LabelSet(
-    name="gait_freezing",
-    labels=(
-        Label(name="No freeze"),
-        Label(name="Freeze", description="Freezing of gait."),
-    ),
+    ["No freeze", Label(name="Freeze", description="Freezing of gait.")],
+    ordered=True,
+    annotations=[Annotation("name", value="gait_freezing")],
 )
 # The WISDM question states that 10 represents 1g, so its values are in meters per second squared.
 PHONE_ACCELERATION = TimeSeriesSpec(
@@ -84,13 +83,13 @@ class AccelerometerSource:
         Returns:
             The Record, not yet added to a dataset.
         """
-        signals = tuple(
+        signals = [
             Signal.from_values(
                 series.values[position :: len(self.axes)], spec=self.spec, name=axis, time_axis=self.time_axis
             )
             for position, axis in enumerate(self.axes)
-        )
-        return Record(sources=(Source(name="Accelerometer", signals=signals),), metadata=dict(metadata))
+        ]
+        return Record(sources=[Source(name="Accelerometer", signals=signals)], metadata=dict(metadata))
 
 
 WISDM = AccelerometerSource(
@@ -152,15 +151,15 @@ class ClassificationRow:
         Returns:
             The added task.
         """
-        record = dataset.add_record(record=self.source.create_record(self.series, self.row.record_metadata("series_1")))
+        record = dataset.add_record(self.source.create_record(self.series, self.row.record_metadata("series_1")))
         task = ClassificationTask(
-            inputs=(record,),
+            inputs=[record],
             prompt=self.row.question_with_series_placeholders((self.series,)),
-            targets=(self.label,),
+            targets=self.label,
             label_set=self.source.label_set,
             metadata=self.row.task_metadata(),
         )
-        dataset.add_task(task=task)
+        dataset.add_task(task)
         return task
 
 

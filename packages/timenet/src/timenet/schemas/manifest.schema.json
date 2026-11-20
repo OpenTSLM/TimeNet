@@ -86,7 +86,7 @@
     },
     "BuildEnvironment": {
       "additionalProperties": false,
-      "description": "Build-provenance fields recorded in a manifest.",
+      "description": "The Python version, the installed packages, and the TimeNet commits that produced a version.",
       "properties": {
         "python": {
           "title": "Python",
@@ -98,8 +98,20 @@
           },
           "title": "Packages",
           "type": "object"
+        },
+        "git": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GitSource"
+          },
+          "title": "Git",
+          "type": "object"
         }
       },
+      "required": [
+        "python",
+        "packages",
+        "git"
+      ],
       "title": "BuildEnvironment",
       "type": "object"
     },
@@ -363,6 +375,27 @@
       "title": "FilePart",
       "type": "object"
     },
+    "GitSource": {
+      "additionalProperties": false,
+      "description": "The git commit that one TimeNet package was built from.",
+      "properties": {
+        "sha": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Sha",
+          "type": "string"
+        },
+        "contains_local_changes": {
+          "title": "Contains Local Changes",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sha",
+        "contains_local_changes"
+      ],
+      "title": "GitSource",
+      "type": "object"
+    },
     "InputModality": {
       "description": "A kind of input supplied to a task.",
       "enum": [
@@ -499,6 +532,45 @@
       "title": "ManifestFiles",
       "type": "object"
     },
+    "MissingReason": {
+      "description": "Reasons why a series can have missing timesteps.",
+      "enum": [
+        "sensor_gap",
+        "not_recorded",
+        "alignment_padding",
+        "not_applicable",
+        "redacted"
+      ],
+      "title": "MissingReason",
+      "type": "string"
+    },
+    "MissingValues": {
+      "additionalProperties": false,
+      "description": "The reason for missing timesteps in a series.\n\nA time-series specification without this record allows no missing timesteps.\nAn Arrow null represents a missing timestep.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/MissingReason"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "MissingValues",
+      "type": "object"
+    },
     "ParentDatasetCard": {
       "additionalProperties": false,
       "description": "A copy of the card for a parent dataset used by a build.\n\nA child manifest stores these cards in ``parent_cards``, indexed by parent alias.\nThe card records the parent's exact release, license, citation, and access requirements.\nReaders can inspect this information without opening the parent dataset.",
@@ -606,10 +678,16 @@
           "title": "Dimension Names",
           "type": "array"
         },
-        "nullable": {
-          "default": false,
-          "title": "Nullable",
-          "type": "boolean"
+        "missing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MissingValues"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "modality": {
           "$ref": "#/$defs/InputModality",
@@ -696,8 +774,8 @@
       "$ref": "#/$defs/BuildEnvironment"
     },
     "timef_format_version": {
-      "maximum": 1,
-      "minimum": 1,
+      "maximum": 2,
+      "minimum": 2,
       "title": "Timef Format Version",
       "type": "integer"
     }
@@ -706,6 +784,7 @@
     "dataset_id",
     "metadata",
     "files",
+    "build_env",
     "timef_format_version"
   ],
   "title": "Manifest",

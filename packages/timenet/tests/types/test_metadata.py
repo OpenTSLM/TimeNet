@@ -3,11 +3,14 @@ import pickle
 from pydantic import ValidationError
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import (
     Access,
     AnnotationDescriptor,
     AnnotationType,
+    AnswerTask,
     ClassificationTask,
+    DatasetFilter,
     DatasetMetadata,
     DatasetSchema,
     Domain,
@@ -191,3 +194,52 @@ def test_metadata_model_validate_exposes_pydantic_validation_errors():
 def test_metadata_rejects_invalid_field_types_and_values(field, value):
     with pytest.raises(ValidationError, match=field):
         _metadata(**{field: value})
+
+
+# ---- DatasetFilter ----------------------------------------------------------------------------
+
+
+def test_dataset_filter_of_takes_one_value_a_list_or_none():
+    built = DatasetFilter.of(domain=Domain.GENERAL, tag=["demo", "sine"], query=None, limit=5)
+    assert built == DatasetFilter(domain=(Domain.GENERAL,), tag=("demo", "sine"), limit=5)
+
+
+def test_a_dataset_filter_rejects_a_negative_limit():
+    with pytest.raises(TimeFValidationError, match=r"^limit must be 0 or more, got -1$"):
+        DatasetFilter(limit=-1)
+
+
+def test_a_dataset_filter_matches_a_card_by_any_value_of_a_filter_and_every_filter():
+    card = _metadata(domains=(Domain.GENERAL,), tags=("demo", "sine"))
+    matching = [
+        DatasetFilter(),
+        DatasetFilter(query=("WORLD",)),
+        DatasetFilter(query=("nothing", "synthetic")),
+        DatasetFilter(query=("sine",)),
+        DatasetFilter(domain=(Domain.CARDIOLOGY, Domain.GENERAL)),
+        DatasetFilter(license=(License.MIT, License.CC_BY_4_0)),
+        DatasetFilter(dataset_id=("x/y", "timenet/hello-world")),
+        DatasetFilter(tag=("demo", "sine")),
+        DatasetFilter(domain=(Domain.GENERAL,), license=(License.CC_BY_4_0,)),
+    ]
+    assert [wanted.matches_card(card) for wanted in matching] == [True] * len(matching)
+    # A tag filter needs all its tags, and the filters combine with AND.
+    failing = [
+        DatasetFilter(query=("nothing",)),
+        DatasetFilter(domain=(Domain.CARDIOLOGY,)),
+        DatasetFilter(license=(License.MIT,)),
+        DatasetFilter(dataset_id=("x/y",)),
+        DatasetFilter(tag=("demo", "other")),
+        DatasetFilter(domain=(Domain.GENERAL,), license=(License.MIT,)),
+    ]
+    assert [wanted.matches_card(card) for wanted in failing] == [False] * len(failing)
+
+
+def test_a_dataset_filter_matches_a_schema_by_any_task_and_all_specs():
+    specs = tuple(TimeSeriesSpec(spec_type=kind, name=kind, unit_value=ureg.millivolt) for kind in ("ecg_lead", "ppg"))
+    schema = DatasetSchema(time_series_specs=specs, tasks=(ClassificationTask,))
+    assert DatasetFilter(task=(AnswerTask, ClassificationTask), time_series_spec=("ecg_lead", "ppg")).matches_schema(
+        schema
+    )
+    assert not DatasetFilter(task=(AnswerTask,)).matches_schema(schema)
+    assert not DatasetFilter(time_series_spec=("ecg_lead", "eeg")).matches_schema(schema)

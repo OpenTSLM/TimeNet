@@ -5,8 +5,6 @@ module-level ``CONNECTOR``. There is no central registry. TimeNet finds them laz
 (see :mod:`timenet_connectors.discovery`). Reusable bases, for example for the HuggingFace Hub, live
 under ``timenet_connectors.bases``. The connector contract is :class:`timenet.connectors.BaseConnector`.
 
-The module-level helpers :func:`build` and :func:`load` (from :mod:`timenet_connectors.api`) are the
-producer-side shortcuts. Use them to build and consume a dataset from local code.
+To build a dataset from Python, call ``timenet.build("org/name")``, and read it with
+``TimeNet().load("org/name")``.
 """
-
-from timenet_connectors.api import build as build, load as load

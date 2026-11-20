@@ -1,26 +1,23 @@
-"""Convert pinned SensorCaps chat rows into lazy IMU Signals and streamed caption tasks.
+"""Convert pinned SensorCaps chat rows into IMU Signals and streamed caption tasks.
 
-The connector downloads the original JSONL files at a pinned commit through the HuggingFace base,
-indexes rows by byte offset, and keeps just one decoded sensor row cached across the six channel
-loaders, so the complete corpus is never held in memory. Tasks use the original system message
-followed by the original derived-feature text as their prompt, with the activity summary and optional
-sensor location as input annotations. Feature text is streamed rather than retained across the corpus.
+The connector reads the original pinned JSONL files with the shared source reader. Signal values
+are materialized during conversion; task text is streamed from the source files when needed.
 """
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
-import json
+from pathlib import Path
 from typing import Annotated, ClassVar
 
 import pyarrow as pa
-from pydantic import Field, FiniteFloat, JsonValue, Strict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, FiniteFloat, JsonValue, Strict, TypeAdapter, ValidationError
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import IrregularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
+from timenet_connectors.sources.readers import DataRow, JsonlDataReader
 
 
 DECLARED_SAMPLING_RATE_HZ = 10
@@ -38,7 +35,6 @@ _TIME_OFFSETS_US = pa.array(
     ],
     type=pa.int64(),
 )
-_AXIS = IrregularAxis(first_us=0, last_us=(_SOURCE_WINDOW_SAMPLES - 1) * (1_000_000 // _SOURCE_SAMPLING_RATE_HZ))
 _SPECS = (
     # Upstream rounds IMU values to six decimal places. Use compact float32 storage, accepting
     # normal binary floating-point rounding rather than implying exact decimal preservation.
@@ -73,19 +69,27 @@ _XYZValues = Annotated[list[Annotated[FiniteFloat, Strict()]], Field(min_length=
 _SENSOR_VALUES = TypeAdapter(Annotated[list[_XYZValues], Field(min_length=1)])
 
 
+class _SourceRow(DataRow):
+    """Published JSONL messages before SensorCaps-specific parsing."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    messages: JsonValue
+
+
 @dataclass(frozen=True)
 class _RowRef:
-    file: HubFileRef
+    part: str
+    path: Path
     index: int
-    offset: int
 
     @property
     def key(self) -> tuple[str, int]:
-        return self.file.part, self.index
+        return self.part, self.index
 
     @property
     def context(self) -> str:
-        return f"{self.file.path} ({self.file.part}, row {self.index})"
+        return f"{self.path} ({self.part}, row {self.index})"
 
 
 @dataclass(frozen=True)
@@ -190,7 +194,7 @@ def _section_values(sections: dict[str, str]) -> tuple[list[list[float]], list[l
     return accelerometer, gyroscope
 
 
-def _parse_row(raw: bytes, context: str) -> _ParsedRow:
+def _parse_row(row: _SourceRow, context: str) -> _ParsedRow:
     """Parse a source row, adding file and row context to decoding failures.
 
     Returns:
@@ -200,8 +204,7 @@ def _parse_row(raw: bytes, context: str) -> _ParsedRow:
         TimeFValidationError: If the JSON, messages, or sensor sections are malformed.
     """
     try:
-        row: JsonValue = json.loads(raw)
-        system, user, caption = _message_contents(row)
+        system, user, caption = _message_contents(row.model_dump())
         sections, features = _user_sections(user)
         values = _section_values(sections)
         return _ParsedRow(
@@ -217,63 +220,25 @@ def _parse_row(raw: bytes, context: str) -> _ParsedRow:
         raise TimeFValidationError(f"{context}: {exc}") from exc
 
 
-def _iter_rows(file: HubFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
-    """Read a JSONL file one row at a time, retaining seekable binary offsets.
+def _iter_rows(part: str, path: Path) -> Iterator[tuple[_RowRef, _ParsedRow]]:
+    """Read a JSONL file one row at a time.
 
     Yields:
-        Each lightweight row reference and its transient decoded contents.
+        Each row reference and its decoded contents.
     """
-    with file.path.open("rb") as handle:
-        index = 0
-        while True:
-            offset = handle.tell()
-            raw = handle.readline()
-            if not raw:
-                return
-            ref = _RowRef(file, index, offset)
-            yield ref, _parse_row(raw, ref.context)
-            index += 1
+    for index, row in enumerate(JsonlDataReader(path, _SourceRow).iter_rows()):
+        ref = _RowRef(part, path, index)
+        yield ref, _parse_row(row, ref.context)
 
 
-class _ValueLoader:
-    """Share one bounded sensor-row cache across a dataset's lazy channel loaders."""
-
-    def __init__(self) -> None:
-        self.cached: tuple[_RowRef, tuple[list[list[float]], list[list[float]]]] | None = None
-
-    def __call__(self, ref: _RowRef, sensor: int, axis: int) -> pa.Array:
-        cached = self.cached
-        if cached is None or cached[0] != ref:
-            with ref.file.path.open("rb") as handle:
-                handle.seek(ref.offset)
-                values = _parse_row(handle.readline(), ref.context).values
-            self.cached = ref, values
-        else:
-            values = cached[1]
-        # Preserve the HF benchmark values. Do not infer nulls from zeros or substitute
-        # original PAMAP2 readings: resampling has already mixed zero-filled gaps into
-        # the published arrays. See README.md for the missing-data limitation.
-        # Use the local values even if another consumer replaces the shared cache during this read.
-        return pa.array((sample[axis] for sample in values[sensor]), type=pa.float32())
-
-
-def _load_time_offsets() -> pa.Array:
-    """Return the shared reconstructed offsets in integer microseconds.
-
-    Returns:
-        One relative offset per exported sensor reading.
-    """
-    return _TIME_OFFSETS_US
-
-
-def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[tuple[str, int], Record]) -> Iterator[AnswerTask]:
+def _iter_tasks(files: Mapping[str, Path], records: Mapping[tuple[str, int], Record]) -> Iterator[AnswerTask]:
     """Re-read original system prompts and caption targets without retaining the corpus.
 
     Yields:
         A caption task with its instruction prompt and registered input Record.
     """
-    for file in files:
-        for ref, row in _iter_rows(file):
+    for part, path in files.items():
+        for ref, row in _iter_rows(part, path):
             record = records[ref.key]
             context = [
                 annotation
@@ -282,97 +247,103 @@ def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[tuple[str, int],
             ]
             yield AnswerTask(
                 inputs=(record,),
-                targets=(row.caption,),
+                targets=row.caption,
                 prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
-                input_annotations=tuple(context),
+                input_annotations=context,
                 split=Split.TRAIN,
             )
 
 
-class SensorCapsConnector(BaseHuggingFaceConnector):
-    """Build SensorCaps with lazy values and streamed captions."""
+# Pinned inventory of the original captioning files.
+_SOURCE_ROWS = {
+    "hhar_v2": 9166,
+    "motion_v2": 4534,
+    "pamap2_v2": 9672,
+    "shoaib_v2": 10500,
+    "uci_v2": 2088,
+}
 
-    HF_REPO = "BASH-Lab/SensorCaps"
-    SOURCE_REVISION = "4242e07feaacb0ee3aff86182a62914fa7abacef"
-    # Pinned inventory of the original captioning files.
-    SOURCE_ROWS: ClassVar[Mapping[str, int]] = {
-        "hhar_v2": 9166,
-        "motion_v2": 4534,
-        "pamap2_v2": 9672,
-        "shoaib_v2": 10500,
-        "uci_v2": 2088,
-    }
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {
-        partition: f"data/{partition}-00000-of-00001.jsonl" for partition in SOURCE_ROWS
-    }
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+class SensorCapsConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="BASH-Lab/SensorCaps",
+    source_revision="4242e07feaacb0ee3aff86182a62914fa7abacef",
+    source_files={partition: f"data/{partition}-00000-of-00001.jsonl" for partition in _SOURCE_ROWS},
+):
+    """Build SensorCaps with in-memory signals and streamed captions."""
+
+    SOURCE_ROWS: ClassVar[Mapping[str, int]] = _SOURCE_ROWS
+
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Index local rows into six-channel Records and a re-iterable caption stream.
 
+        Args:
+            files: The JSONL file of each partition.
+
         Returns:
-            A dataset retaining its hierarchy, small annotations, and file-backed loaders.
+            A dataset with materialized signals and streamed caption tasks.
 
         Raises:
-            TimeFValidationError: If references or source rows violate the SensorCaps mapping.
+            TimeFValidationError: If source rows violate the SensorCaps mapping.
         """
-        dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (
-            ("source_repository", self.HF_REPO),
-            ("source_revision", self.SOURCE_REVISION),
-            ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
-            ("source_sampling_rate_hz", _SOURCE_SAMPLING_RATE_HZ),
-            ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
-            ("time_axis_reconstruction", "round(linspace(0, 119, 60)) / 20 seconds relative to window start"),
-        ):
-            dataset.annotate(Annotation(key=key, value=value))
+        dataset = TimeFDataset(
+            metadata=self.metadata(),
+            annotations=[
+                Annotation("declared_sampling_rate_hz", value=DECLARED_SAMPLING_RATE_HZ),
+                Annotation("source_sampling_rate_hz", value=_SOURCE_SAMPLING_RATE_HZ),
+                Annotation("source_window_samples", value=_SOURCE_WINDOW_SAMPLES),
+                Annotation(
+                    "time_axis_reconstruction",
+                    value="round(linspace(0, 119, 60)) / 20 seconds relative to window start",
+                ),
+            ],
+        )
         records: dict[tuple[str, int], Record] = {}
-        loader = _ValueLoader()
-        for file in raw_refs:
+        for part, path in files.items():
             count = 0
-            for ref, row in _iter_rows(file):
-                record = self._make_record(ref, row, loader)
-                dataset.add_record(record=record)
+            for ref, row in _iter_rows(part, path):
+                record = self._make_record(ref, row)
+                dataset.add_record(record)
                 records[ref.key] = record
                 count += 1
             # Every pinned count is nonzero, so this also rejects an empty partition.
-            expected = self.SOURCE_ROWS[file.part]
+            expected = self.SOURCE_ROWS[part]
             if count != expected:
-                raise TimeFValidationError(f"{file.path} ({file.part}): expected {expected} rows, found {count}")
-        dataset.set_task_stream([AnswerTask], partial(_iter_tasks, tuple(raw_refs), records))
+                raise TimeFValidationError(f"{path} ({part}): expected {expected} rows, found {count}")
+        dataset.set_task_stream([AnswerTask], partial(_iter_tasks, files, records))
         return dataset
 
-    def _make_record(self, ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
+    def _make_record(self, ref: _RowRef, row: _ParsedRow) -> Record:
         """Build one six-channel IMU Record with its source provenance.
 
         Returns:
-            A Record with lazy sensor values and annotations from the original row.
+            A Record with materialized sensor values and annotations from the original row.
         """
-        channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
-        signals = tuple(
-            Signal.from_loader(
+        channels = _PAMAP2_CHANNELS if ref.part == "pamap2_v2" else _CHANNELS
+        # Retain published values, including upstream zero-filled PAMAP2 gaps.
+        signals = [
+            Signal.from_irregular(
+                pa.array((sample[dimension] for sample in row.values[sensor]), type=pa.float32()),
                 name=name,
                 spec=spec,
-                time_axis=_AXIS,
-                time_offsets_loader=_load_time_offsets,
-                n_values=len(row.values[sensor]),
-                loader=partial(loader, ref, sensor, dimension),
+                time_offsets_us=_TIME_OFFSETS_US.to_numpy(),
             )
             for spec, name, sensor, dimension in channels
-        )
-        record = Record(sources=(Source(name="IMU", signals=signals),))
-        source = ref.file.part.rsplit("_", 1)[0]
+        ]
+        source = ref.part.rsplit("_", 1)[0]
         metadata: dict[str, str | int] = {
             "source_dataset": source,
-            "source_partition": ref.file.part,
-            "source_file": self.SOURCE_FILES[ref.file.part],
+            "source_partition": ref.part,
+            "source_file": self.SOURCE_FILES[ref.part],
             "source_row": ref.index,
             "activity_summary": row.summary,
         }
         if row.location is not None:
             metadata["sensor_location"] = row.location
-        for key, value in metadata.items():
-            record.annotate(Annotation(key=key, value=value))
-        return record
+        return Record(
+            sources=[Source("IMU", signals=signals)],
+            annotations=[Annotation(key, value=value) for key, value in metadata.items()],
+        )
 
 
 CONNECTOR = SensorCapsConnector

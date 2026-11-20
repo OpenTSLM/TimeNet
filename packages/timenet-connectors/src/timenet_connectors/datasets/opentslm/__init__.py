@@ -1,4 +1,4 @@
-"""Connectors for datasets published by the ``OpenTSLM`` project.
+"""Connectors for datasets published by the OpenTSLM project."""
 
-Keep this regular package so pkgutil.walk_packages can discover its connector children.
-"""
+# Keep this a regular package, not a namespace package. pkgutil.walk_packages finds the
+# connector packages below it only through this __init__.py.

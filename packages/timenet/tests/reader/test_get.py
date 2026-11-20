@@ -448,7 +448,7 @@ def test_a_manifest_with_two_parent_cards_for_one_release_is_refused(child):
         Manifest.model_validate(doubled)
     # A release stored with such a manifest fails to open, before a reader reads anything.
     path.write_text(json.dumps(doubled))
-    with pytest.raises(ValidationError, match=match):
+    with pytest.raises(TimeFFormatError, match=f"is not a valid manifest: {match}"):
         open_local_version(child)
 
 

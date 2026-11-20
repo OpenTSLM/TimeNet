@@ -3,6 +3,7 @@ from pathlib import Path
 import pickle
 import shutil
 
+from fsspec.implementations.arrow import ArrowFSWrapper
 import pyarrow.fs as pafs
 import pytest
 
@@ -10,8 +11,9 @@ from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatase
 from timenet.format.checksums import file_checksum
 from timenet.manifest import PayloadSource
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.registry.dependencies import open_cached_or_remote, prepare_local_copy
+from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.shared import complete_copy
+from timenet.registry.version import _ArrowFileSystem
 from timenet.types.reference_keys import SourceKey
 from timenet.types.references import DatasetRef
 
@@ -153,14 +155,6 @@ def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_pa
     with pytest.raises(TimeNetDatasetNotFoundError, match=rf"payload source {parent_ref} of {reference} is not in"):
         prepare_local_copy(cache, reference)
 
-    def missing_remote(ref):
-        raise TimeNetDatasetNotFoundError(f"no remote release {ref}")
-
-    with pytest.raises(
-        TimeNetDatasetNotFoundError, match=rf"payload source {parent_ref} .* is not in remote or its cache"
-    ):
-        open_cached_or_remote(cache, reference, missing_remote, searched="remote")
-
     prepare_local_copy(cache, reference, fetch_from=LocalRegistry(registry_root))
     cached_parent = cache / "timenet/hello-world/1.0.0"
     assert (cached_parent / "control.duckdb").is_file()
@@ -175,15 +169,6 @@ def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_pa
     prepared = prepare_local_copy(cache, reference)
     assert set(prepared.payload_sources) == {SourceKey(str(parent_ref))}
     assert prepared.resolve_payload_source(SourceKey(str(parent_ref))).payload_sources == {}
-    assert open_cached_or_remote(cache, reference, missing_remote, searched="remote").payload_sources
-
-
-@pytest.mark.parametrize("suffix", ["different/ecg/2.0.0", "demo/ecg/3.0.0", "demo/ecg/latest"])
-def test_download_rejects_a_destination_for_another_release(registry_root, tmp_path, suffix):
-    destination = tmp_path / "downloads" / suffix
-    with pytest.raises(TimeFValidationError, match=r"expected demo/ecg@2\.0\.0|release directory"):
-        LocalRegistry(registry_root).download_version("demo/ecg", "2.0.0", destination)
-    assert not destination.exists()
 
 
 @pytest.mark.parametrize("damage", [None, "missing", "truncated"])
@@ -195,3 +180,31 @@ def test_a_complete_copy_has_every_file_with_its_recorded_size(registry_root, da
     elif damage == "truncated":
         path.write_bytes(path.read_bytes()[:-1])
     assert complete_copy(Path(version.root), version.manifest) is (damage is None)
+
+
+# The two tests below fail when fsspec fixes ArrowFSWrapper. Then raise the fsspec minimum to the release
+# with the fix, and remove the matching override in _ArrowFileSystem (registry/version.py) and the test.
+@pytest.mark.xfail(strict=True, raises=AttributeError, reason="ArrowFSWrapper.fsid reads the HDFS-only host")
+def test_fsspec_arrow_wrapper_has_an_fsid_for_a_non_hdfs_filesystem():
+    assert ArrowFSWrapper(pafs.LocalFileSystem()).fsid
+
+
+# Before fsspec 2026.7.0, cat_file returns the whole file. From 2026.7.0, it raises OSError.
+@pytest.mark.xfail(
+    strict=True,
+    raises=(AssertionError, OSError),
+    reason="ArrowFSWrapper.cat_file drops the range or seeks in a non-seekable stream",
+)
+def test_fsspec_arrow_wrapper_reads_a_byte_range_from_offset_zero(tmp_path):
+    (tmp_path / "file").write_bytes(b"abcdef")
+    assert ArrowFSWrapper(pafs.LocalFileSystem()).cat_file(str(tmp_path / "file"), start=0, end=2) == b"ab"
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected"), [(0, 2, b"ab"), (2, 4, b"cd"), (-2, None, b"ef"), (None, None, b"abcdef")]
+)
+def test_the_arrow_file_system_reads_byte_ranges_and_has_an_fsid(tmp_path, start, end, expected):
+    (tmp_path / "file").write_bytes(b"abcdef")
+    filesystem = _ArrowFileSystem(pafs.LocalFileSystem())
+    assert filesystem.cat_file(str(tmp_path / "file"), start=start, end=end) == expected
+    assert filesystem.fsid.startswith("arrow_local_")

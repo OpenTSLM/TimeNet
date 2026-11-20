@@ -7,7 +7,7 @@ description: Use when adding a new TimeNet dataset connector, i.e. converting an
 
 A connector fetches a dataset's raw source and converts it into a `TimeFDataset`. It implements the
 `BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. The engine drives
-it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that pipeline and
+it `download -> convert -> derive_schema -> store_dataset`; `timenet-build build <id>` runs that pipeline and
 writes the result into a registry.
 
 Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` for Hub datasets,
@@ -41,8 +41,9 @@ repo's files at the commit you will pin (`https://huggingface.co/api/datasets/<r
 latter). For PhysioNet, inspect the archive layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 
 ### 3. Pick the base connector
-- Hub dataset: subclass `BaseHuggingFaceConnector`, set `HF_REPO`, `SOURCE_REVISION` (a commit), and
-  `SOURCE_FILES`, inherit `download`, and implement `convert` over the `HubFileRef` list.
+- Hub dataset: subclass `BaseHuggingFaceConnector`, pass the class keywords `hf_repo`,
+  `source_revision` (a commit), and `source_files`, inherit `download`, and implement `convert`
+  over the part-to-path mapping. The base fills `source_url` and `source_revision` in the dataset metadata from `HF_REPO` and `SOURCE_REVISION`.
 - PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `ensure_archive` /
   `download_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.
@@ -86,6 +87,10 @@ Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only 
 with lazy value loaders (never materialize arrays in `convert`). See the worked example in
 `references/connector-anatomy.md`.
 
+Attach annotations when you build the owner: pass `annotations=[Annotation("key", value=value)]` to
+`TimeFDataset`, `Record`, `Source`, `Signal`, or the task. Use `annotate()` only when the owner
+exists already, or when a task refers to the occurrence that the call returns.
+
 You cannot pass ids. Records, signals, and tasks get a read-only int `id` when you add them to the
 dataset. Sources, axes, and annotations have no id. Put upstream identifiers in `Record.metadata`
 (for example `{"ecg_id": 17}`) or in an annotation. Refer to other objects by the Python object,
@@ -99,8 +104,8 @@ not by an id. A span takes Signal objects, for example
   in some docs are **not implemented**, so don't rely on them.
 - If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own
   environment. Otherwise `ty` reports your lazy import as unresolved and the connector test can't run.
-- Round-trip end to end: `uv run timenet-build build <id> --out <tmp-dir>`, then
-  `with TimeNet(registry="<tmp-dir>").open("<id>") as reader: reader.read().describe()`.
+- Round-trip end to end: `uv run timenet-build build <id> --local-registry <tmp-dir>`, then
+  `with timenet.TimeNet(sources=["<tmp-dir>"]).open("<id>") as reader: reader.read().describe()`.
 - Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
 
 ## Further reading

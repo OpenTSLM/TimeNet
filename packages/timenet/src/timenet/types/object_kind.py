@@ -12,6 +12,7 @@ class ObjectKind(StrEnum):
     SOURCE = "Source"
     SIGNAL = "Signal"
     TASK = "Task"
+    LABEL_SET = "LabelSet"
     ANNOTATION = "Annotation"
     ANNOTATION_CONTENT = "Content"
     AXIS = "Axis"

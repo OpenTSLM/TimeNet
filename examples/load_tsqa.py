@@ -1,28 +1,25 @@
-"""Load a built TimeF dataset and print a summary (no pandas or extras needed).
+"""Load a local TimeF dataset and print its summary and a sample.
 
-Build the dataset into an explicit local registry, then run this script::
+Build the dataset into a local registry first, then run this script::
 
-    uv run timenet-build build "chengsenwang/tsqa" --out .timenet-registry
+    uv run timenet-build build chengsenwang/tsqa --local-registry .timenet-registry
     uv run python examples/load_tsqa.py
 
-``TimeNet(registry).open(...)`` returns a reader, and its ``read()`` returns a ``TimeFDataset``.
-``describe()`` prints its identity, counts, per-spec columns, and a record preview. Signal values
-stay in storage until you ask for them. Pass a dataset ID as the first argument and a registry path
-as the second argument.
+Pass another dataset ID and registry path as the first and second arguments.
 """
 
 from pathlib import Path
 import sys
 
-from timenet.client import TimeNet
+from timenet import TimeNet
 
 
 def main() -> None:
-    """Open the dataset, print its describe() summary, and show one raw series slice."""
+    """Print a local dataset's summary and the first five values of its first signal."""
     arguments = sys.argv[1:]
     dataset_id = arguments[0] if arguments else "chengsenwang/tsqa"
     registry = Path(arguments[1]) if len(arguments) > 1 else Path(".timenet-registry")
-    with TimeNet(registry).open(dataset_id) as reader:
+    with TimeNet(sources=[registry]).open(dataset_id) as reader:
         dataset = reader.read()
         dataset.describe()
 
