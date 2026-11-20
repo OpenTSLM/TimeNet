@@ -221,16 +221,12 @@ def _needs_copy(
         dest: The registry to copy to.
 
     Returns:
-        ``True`` if ``dest`` lacks the release or its local copy has a missing or resized file. Also ``True`` if
-        ``dest`` does not serve the release to this caller. Then the write to ``dest`` gives the answer.
+        ``True`` if ``dest`` lacks the release or its local copy has a missing or resized file.
 
     Raises:
         TimeNetVersionConflictError: If ``dest`` holds the same version with other files or another card.
     """
-    try:
-        held = dest.find_manifest(reference)
-    except TimeNetAccessError:
-        held = None
+    held = dest.find_manifest(reference)
     if held is None:
         return True
     difference = held.difference_from(manifest)

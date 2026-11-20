@@ -22,7 +22,6 @@ from timenet.errors import (
     TimeNetAccessError,
     TimeNetBuildError,
     TimeNetMissingParentError,
-    TimeNetRegistryError,
     TimeNetVersionConflictError,
 )
 from timenet.format.constants import MANIFEST_FILE
@@ -553,16 +552,6 @@ def test_copy_release_copies_a_release_that_is_not_open_to_and_from_a_remote_reg
     copy_release(child_ref, source, dest)
     assert dest.get_manifest(*child) == source.get_manifest(*child)
     assert dest.get_manifest(*parent) == source.get_manifest(*parent)
-
-
-def test_copy_release_raises_the_write_refusal_if_dest_does_not_serve_the_release_to_the_caller(tmp_path):
-    source = LocalRegistry(tmp_path / "source")
-    _write_parent_and_child(source.root, credentialed=child_ref)
-    shutil.copytree(source.root, tmp_path / "dest")
-    transport, _ = build_service_fake(tmp_path / "dest", token="tok_rw", gate=True)
-    dest = RemoteRegistry("http://dest.local", token="tok_reader", transport=transport)
-    with pytest.raises(TimeNetRegistryError, match=r"/publish failed \(403\): write scope required$"):
-        copy_release(child_ref, source, dest)
 
 
 def _record_local_changes(root: Path, reference: DatasetRef) -> None:
