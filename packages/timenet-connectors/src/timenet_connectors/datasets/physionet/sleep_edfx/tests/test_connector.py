@@ -129,7 +129,7 @@ def _convert(
         studies=((study, release / study),),
         subject_tables=((study, release / table),),
     )
-    return SleepEdfxConnector().convert([source])
+    return SleepEdfxConnector().convert(source)
 
 
 def _streamed(dataset: TimeFDataset) -> list:

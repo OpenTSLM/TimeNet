@@ -1,45 +1,36 @@
 """A reusable base for connectors that read files from a pinned HuggingFace Hub dataset revision.
 
-Subclasses set ``HF_REPO``, ``SOURCE_REVISION``, and ``SOURCE_FILES``, ship a ``dataset.yaml`` card
-beside the connector, and implement ``convert()`` over the :class:`HubFileRef` list ``download()``
-returns. The base checks that list before the subclass's ``convert()`` runs.
+Subclasses pass ``hf_repo``, ``source_revision``, and ``source_files`` as class keywords, ship a
+``dataset.yaml`` card beside the connector, and implement ``convert()``. ``download()`` returns a mapping
+from each part in ``SOURCE_FILES`` to its local path. ``convert()`` receives that mapping. The base also
+fills ``source_url`` and ``source_revision`` in the dataset metadata from ``HF_REPO`` and ``SOURCE_REVISION``.
 :mod:`timenet_connectors.sources.huggingface_hub` describes how the files download. For the Hub's
 parquet conversion, pin the commit ``refs/convert/parquet`` points to.
 """
 
 from abc import ABC
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-import functools
+from collections.abc import Mapping
 from pathlib import Path
 import re
+from types import MappingProxyType
 from typing import Any, ClassVar
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetConnectorError, TimeNetDownloadError
+from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet.types import DatasetMetadata
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
 
 _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 
-@dataclass(frozen=True)
-class HubFileRef:
-    """A downloaded file (or a pattern's directory) and the part it belongs to."""
-
-    path: Path
-    part: str
-    """The connector's own name for this file, such as ``"hhar_v2"``: the key in ``SOURCE_FILES``, which
-    ``convert()`` branches on and builds ids from."""
-
-
-class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
+class BaseHuggingFaceConnector(BaseConnector[Mapping[str, Path]], ABC):
     """Base class for connectors that read files from a pinned Hub dataset revision.
 
-    Subclasses set :attr:`HF_REPO`, :attr:`SOURCE_REVISION`, and :attr:`SOURCE_FILES`, and implement
-    ``convert()`` over the returned :class:`HubFileRef` list. The base wraps each subclass's ``convert()``
-    to run :meth:`check_refs` first.
+    Subclasses pass ``hf_repo``, ``source_revision``, and ``source_files`` as class keywords, and
+    implement :meth:`convert`, which receives the local path of each part. The base stores the keywords
+    as :attr:`HF_REPO`, :attr:`SOURCE_REVISION`, and :attr:`SOURCE_FILES`. A subclass that passes no
+    keywords keeps the values of its parent.
     """
 
     HF_REPO: ClassVar[str]
@@ -49,80 +40,73 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
     """The repo-relative filename of each part, in download-order. A filename can end
     in a glob like ``data/*.parquet``; the part's path is then the directory of the matching files."""
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(
+        cls,
+        *,
+        hf_repo: str | None = None,
+        source_revision: str | None = None,
+        source_files: Mapping[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init_subclass__(**kwargs)
-        # Check the declaration when the class is defined
+        if hf_repo is not None:
+            cls.HF_REPO = hf_repo
+        if source_revision is not None:
+            cls.SOURCE_REVISION = source_revision
+        if source_files is not None:
+            cls.SOURCE_FILES = MappingProxyType(dict(source_files))
+        if not getattr(cls, "HF_REPO", None):
+            raise TimeFValidationError(f"{cls.__name__} must pass hf_repo")
         revision = getattr(cls, "SOURCE_REVISION", None)
         if not isinstance(revision, str) or not _COMMIT_SHA.fullmatch(revision):
             raise TimeFValidationError(
-                f"{cls.__name__}.SOURCE_REVISION must be a 40-character commit, got {revision!r}"
+                f"{cls.__name__} source_revision must be a 40-character commit, got {revision!r}"
             )
         if not getattr(cls, "SOURCE_FILES", None):
-            raise TimeFValidationError(f"{cls.__name__}.SOURCE_FILES must declare at least one file")
-        # Every subclass's convert() checks its refs first, so no connector has to call check_refs itself
-        convert = cls.__dict__.get("convert")
-        if convert is not None:
+            raise TimeFValidationError(f"{cls.__name__} source_files must declare at least one file")
 
-            @functools.wraps(convert)
-            def checked(self: BaseHuggingFaceConnector, raw_refs: list[HubFileRef]) -> TimeFDataset:
-                self.check_refs(raw_refs)
-                return convert(self, raw_refs)
+    def metadata(self) -> DatasetMetadata:
+        """Return the card, with ``source_url`` and ``source_revision`` from :attr:`HF_REPO` and :attr:`SOURCE_REVISION`.
 
-            cls.convert = checked
-
-    def check_refs(self, raw_refs: Sequence[HubFileRef]) -> None:
-        """Check that ``raw_refs`` is nonempty and names each part once, only parts :attr:`SOURCE_FILES` declares.
-
-        Args:
-            raw_refs: The references ``convert()`` received.
-
-        Raises:
-            TimeFValidationError: If ``raw_refs`` is empty, repeats a part, or names an undeclared part.
-        """
-        parts = [ref.part for ref in raw_refs]
-        if not parts or len(set(parts)) != len(parts):
-            raise TimeFValidationError(f"{type(self).__name__} requires nonempty, distinct part references")
-        unknown = sorted(set(parts) - self.SOURCE_FILES.keys())
-        if unknown:
-            raise TimeFValidationError(f"{type(self).__name__} has no source part {', '.join(unknown)}")
-
-    def ref_paths(self, raw_refs: Sequence[HubFileRef], *parts: str) -> dict[str, Path]:
-        """Map each part in ``raw_refs`` to its local path.
-
-        Args:
-            raw_refs: The references ``convert()`` received.
-            *parts: The parts the caller needs.
+        The card can omit both fields. If it sets one, the value must match the connector.
 
         Returns:
-            The path of each part: a file, or the directory of a pattern part.
+            The dataset's :class:`~timenet.types.DatasetMetadata`.
 
         Raises:
-            TimeNetConnectorError: If one of ``parts`` is not in ``raw_refs``.
+            TimeFValidationError: If the card sets ``source_url`` or ``source_revision`` to another value.
         """
-        paths = {ref.part: ref.path for ref in raw_refs}
-        missing = [part for part in parts if part not in paths]
-        if missing:
-            raise TimeNetConnectorError(f"{self.HF_REPO} refs lack {', '.join(missing)}")
-        return paths
+        card = super().metadata()
+        source = {
+            "source_url": f"https://huggingface.co/datasets/{self.HF_REPO}",
+            "source_revision": self.SOURCE_REVISION,
+        }
+        for field, value in source.items():
+            declared = getattr(card, field)
+            if declared is not None and declared != value:
+                raise TimeFValidationError(
+                    f"{type(self).__name__} card sets {field} to {declared!r}, but the connector reads {value!r}"
+                )
+        return card.model_copy(update=source)
 
-    async def download_async(self, cache_dir: Path) -> list[HubFileRef]:
+    async def download_async(self, cache_dir: Path) -> dict[str, Path]:
         """Download :attr:`SOURCE_FILES` at :attr:`SOURCE_REVISION` concurrently.
 
         Args:
             cache_dir: Directory where the connector caches Hub files.
 
         Returns:
-            One reference per part, in :attr:`SOURCE_FILES` order.
+            The local path of each part, in :attr:`SOURCE_FILES` order: a file, or the directory of a pattern part.
 
         Raises:
             ImportError: If ``huggingface_hub``, declared in the connector's requirements, is missing.
             TimeNetDownloadError: If a declared file is absent from the revision or cannot be downloaded.
         """  # ruff: ignore[docstring-extraneous-exception] - also raised by hub_snapshot
         root = await hub_snapshot(self.HF_REPO, self.SOURCE_REVISION, cache_dir, tuple(self.SOURCE_FILES.values()))
-        refs = []
+        files = {}
         for part, name in self.SOURCE_FILES.items():
             path = root / name if "*" not in name else root / Path(name).parent
             if not path.exists():
                 raise TimeNetDownloadError(f"{self.HF_REPO}@{self.SOURCE_REVISION} has no {name}")
-            refs.append(HubFileRef(path, part))
-        return refs
+            files[part] = path
+        return files

@@ -12,16 +12,16 @@ A Task describes one modeling problem. It holds ordered input Records and one re
 expected output.
 
 ```python
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.types import ClassificationTask, LabelSet
 
-CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
+CONDITION = LabelSet(["healthy", "faulty"])
 
 task = ClassificationTask(
     inputs=(record,),
-    targets=("faulty",),
+    targets="faulty",
     label_set=CONDITION,
 )
-dataset.add_task(task=task)
+dataset.add_task(task)
 ```
 
 The concrete class identifies the task type. `ClassificationTask` and `AnswerTask` are different
@@ -35,7 +35,7 @@ Every Task supports these fields:
 | --- | --- |
 | `id` | Read-only int64 Task identity. `add_task()` sets it. |
 | `inputs` | Ordered input Records. |
-| `targets` | Ordered inline values or stored objects. |
+| `targets` | Ordered inline values or stored objects. One bare value, such as `targets="healthy"`, is one target. |
 | `prompt` | Optional instruction or question. |
 | `input_modalities` | Optional override for the input kinds. `None` enables inference. |
 | `split` | Optional partition: `train`, `validation`, or `test`. `None` when the dataset does not partition its Tasks. |
@@ -46,6 +46,10 @@ Every Task supports these fields:
 | `from_tasks` | Parent Tasks from which this Task derives. |
 | `annotations` | Annotations that describe the Task itself. |
 | `metadata` | JSON-compatible Task details. |
+
+The collection fields (`inputs`, `input_annotations`, `target_annotations`, `from_tasks`, `annotations`)
+accept any iterable, such as a list, and store a tuple. A string, a mapping, or a single item raises
+`TimeFValidationError`.
 
 `targets` can contain strings, numbers, Booleans, Records, Signals, or Spans. `None` means that
 `target_annotations` supplies the answer. An empty tuple is an explicit empty answer.
@@ -81,17 +85,14 @@ A dataset that ships a partition marks each Task with its `split`. Records carry
 own: one Record may serve Tasks of several splits.
 
 ```python
-from timenet.types import ClassificationTask, Label, LabelSet, Split
+from timenet.types import ClassificationTask, LabelSet, Split
 
-ACTIVITY = LabelSet(
-    name="activity",
-    labels=(Label(name="walking"), Label(name="sitting")),
-)
+ACTIVITY = LabelSet(["walking", "sitting"])
 
 dataset.add_task(
-    task=ClassificationTask(
+    ClassificationTask(
         inputs=(record,),
-        targets=("walking",),
+        targets="walking",
         label_set=ACTIVITY,
         split=Split.TRAIN,
     )
@@ -128,8 +129,8 @@ can be combined with split selection.
 Register all referenced objects before you register the Task:
 
 ```python
-dataset.add_record(record=record)
-dataset.add_task(task=task)
+dataset.add_record(record)
+dataset.add_task(task)
 ```
 
 `add_task()` validates Record, Signal, Annotation, Span, and parent-Task references. It does not
@@ -168,7 +169,7 @@ task = ClassificationTask(
         8.0,
         time_series=(vibration,),
     ),
-    targets=("faulty",),
+    targets="faulty",
     label_set=CONDITION,
 )
 ```
@@ -208,11 +209,11 @@ def age_question(record: Record, age: int) -> AnswerTask:
     return AnswerTask(
         inputs=(record,),
         prompt="How old is the subject?",
-        targets=(str(age),),
+        targets=str(age),
     )
 
 
-dataset.add_task(task=age_question(record, 64))
+dataset.add_task(age_question(record, 64))
 ```
 
 ### Classification
@@ -220,26 +221,20 @@ dataset.add_task(task=age_question(record, 64))
 ```python
 from timenet.types import Label, LabelSet
 
-CONDITION = LabelSet(
-    name="condition",
-    labels=(Label(name="healthy"), Label(name="faulty", description="A bearing fault.")),
-)
-FINDINGS = LabelSet(
-    name="findings",
-    labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")),
-    multi_label=True,
-)
+CONDITION = LabelSet(["healthy", Label(name="faulty", description="A bearing fault.")])
+FINDINGS = LabelSet(["AF", "PVC", "LBBB"], multi_label=True)
 
-ClassificationTask(inputs=(record,), targets=("healthy",), label_set=CONDITION)
+ClassificationTask(inputs=(record,), targets="healthy", label_set=CONDITION)
 ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-A `LabelSet` defines the allowed labels for a classification target. The `multi_label` flag controls
-how many labels a target can contain.
+A `LabelSet` defines the allowed labels for a classification target. Like other owners, it can carry
+[annotations](annotations.md#label-set-annotations). The `multi_label` flag controls how many labels
+a target can contain.
 
 If `multi_label=False`, the default, a target must contain exactly one label. If `multi_label=True`,
 a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
-label applies. The order of labels does not matter.
+label applies.
 
 When the dataset adds or streams a task, it makes sure that the target follows the rules of its
 label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
@@ -248,9 +243,26 @@ must contain exactly one label.
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
 
-Tasks can share the same label set object. Each name identifies one label set within a dataset.
-If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
-error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
+A label set has no name. TimeF stores equal sets once. For this, two sets are equal if they have the
+same labels, label descriptions, `multi_label`, `ordered`, and annotations. The order of labels
+matters only for an ordered set. The order of annotations does not matter. `==` follows the same rule.
+
+Annotations are equal if all their fields are equal, the value included. So these two sets are two
+stored sets, each with its own id:
+
+```python
+LabelSet(["yes", "no"], annotations=[Annotation("name", value="afib_present")])
+LabelSet(["yes", "no"], annotations=[Annotation("name", value="signal_noisy")])
+```
+
+By default the order of labels does not matter. Use `ordered=True` when it has a meaning, for example
+for ordinal labels such as `low`, `medium` and `high`, or for answer options that a model sees in a
+fixed order. Then each order is its own set, and the stored set keeps it. An unordered set keeps the
+label order of the first equal set that the writer meets. Pass the labels as a list or a tuple. A
+label set rejects a Python set, because its order changes from one run to the next.
+
+The stored set gets one integer id, `label_set_id`. In one read, the reader gives tasks that use the
+same set a shared object.
 
 ### Answer and rationale
 
@@ -259,7 +271,7 @@ AnswerTask(
     inputs=(record,),
     prompt="Does this trace show a bearing fault?",
     rationale="The repeated impacts match a bearing fault.",
-    targets=("Yes",),
+    targets="Yes",
 )
 ```
 
@@ -270,7 +282,7 @@ A missing prompt makes the Task an unprompted caption or description.
 ```python
 ScalarPredictionTask(
     inputs=(record,),
-    targets=(62.0,),
+    targets=62.0,
     unit="bpm",
     target_name="mean_heart_rate",
 )
@@ -308,18 +320,18 @@ These Tasks can target stored Records or Signals directly:
 ```python
 ForecastingTask(
     inputs=(history,),
-    targets=(future,),
+    targets=future,
 )
 
 TSEditingTask(
     inputs=(raw_record,),
     prompt="Remove the baseline wander.",
-    targets=(clean_record,),
+    targets=clean_record,
 )
 
 TSGenerationTask(
     prompt="Generate 10 seconds of a 150 bpm ECG.",
-    targets=(synthetic_record,),
+    targets=synthetic_record,
 )
 ```
 
@@ -331,7 +343,7 @@ A generation Task can have no input Records.
 TSCorrespondenceTask(
     inputs=(query,),
     candidate_records=(record_a, record_b, record_c),
-    targets=(record_b,),
+    targets=record_b,
 )
 ```
 
@@ -344,16 +356,16 @@ An empty `candidate_records` tuple means that the candidate pool is dataset-wide
 ```python
 label = ClassificationTask(
     inputs=(record,),
-    targets=("faulty",),
+    targets="faulty",
     label_set=CONDITION,
 )
 answer = AnswerTask(
     inputs=(record,),
     prompt="Is this machine healthy?",
-    targets=("No",),
+    targets="No",
     from_tasks=(label,),
 )
-dataset.add_tasks(tasks=(label, answer))
+dataset.add_tasks((label, answer))
 ```
 
 TimeNet rejects missing parents, self-references, and derivation cycles.

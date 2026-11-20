@@ -13,6 +13,7 @@ from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint
+from timenet.types._fields import TupleField, ValueField, as_tuple
 from timenet.types.clock import check_int64, offset_us, unix_us
 from timenet.types.ids import EntityId, assigned_id
 
@@ -29,12 +30,14 @@ class Record(SupportsAnnotate):
     also state a ``unit``, and it travels with every window drawn later from the record.
     """
 
-    sources: tuple[Source, ...] = ()
-    """The root sources that belong to this recording, each with a distinct name."""
+    sources: TupleField[Source] = field(default=ValueField(as_tuple, ()))
+    """The root sources that belong to this recording, each with a distinct name. Give any iterable.
+    The record stores a tuple."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
-    annotations: tuple[Annotation, ...] = ()
-    """Annotations attached to the record."""
+    annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
+    """Annotations attached to the record. Give any iterable. The record stores a tuple. It attaches a new
+    occurrence of each annotation, as :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible recording metadata."""
     time_span: TimeInterval | None = None
@@ -59,6 +62,7 @@ class Record(SupportsAnnotate):
         self._check_times()
         for annotation in self.annotations:
             self._validate_annotation(annotation)
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
 
     def _check_times(self) -> None:
         """Check the time of each Signal and the ``time_span``, as construction does.

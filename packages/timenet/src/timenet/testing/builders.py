@@ -16,7 +16,6 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     EntityId,
-    Label,
     LabelSet,
     License,
     LocalizationMode,
@@ -31,9 +30,9 @@ from timenet.types import (
 )
 
 
-_RHYTHM_LABELS = LabelSet(name="rhythm", labels=(Label(name="normal"), Label(name="abnormal")))
+_RHYTHM_LABELS = LabelSet(["normal", "abnormal"])
 """The label set of the fixture's rhythm classification task."""
-_EVENT_LABELS = LabelSet(name="event", labels=(Label(name="onset"), Label(name="offset")))
+_EVENT_LABELS = LabelSet(["onset", "offset"])
 """The label set of the fixture's scoped event classification task."""
 
 

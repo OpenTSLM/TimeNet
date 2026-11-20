@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from timenet.config import settings
-from timenet.dataset.axis import IrregularAxis
+from timenet.dataset import IrregularAxis
 from timenet.engine import run_pipeline
 from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.format import control_writer
@@ -14,7 +14,6 @@ from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec, read_value
-from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector
 from timenet_connectors.datasets.bash_lab.sensorcaps.connector import DECLARED_SAMPLING_RATE_HZ
 
@@ -42,10 +41,7 @@ _PAMAP2_CHANNELS = (
     ("gyroscope", "z"),
     ("magnetometer", "x"),
 )
-# Literal pins, so moving to another repo or commit is a deliberate test edit.
 _DATASET_ANNOTATIONS = {
-    "source_repository": "BASH-Lab/SensorCaps",
-    "source_revision": "4242e07feaacb0ee3aff86182a62914fa7abacef",
     "declared_sampling_rate_hz": DECLARED_SAMPLING_RATE_HZ,
     "source_sampling_rate_hz": 20,
     "source_window_samples": 120,
@@ -101,13 +97,13 @@ def _fixture_inventory(monkeypatch):
 
 
 def _refs(tmp_path):
-    refs = []
+    refs = {}
     for partition in _PARTITIONS:
         path = tmp_path / f"{partition}.jsonl"
         path.write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in _rows(partition)), encoding="utf-8"
         )
-        refs.append(HubFileRef(path, partition))
+        refs[partition] = path
     return refs
 
 
@@ -118,7 +114,7 @@ def _annotations(owner):
 def _write_row(tmp_path, row):
     path = tmp_path / "row.jsonl"
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    return HubFileRef(path, "hhar_v2")
+    return {"hhar_v2": path}
 
 
 def _assert_records_and_tasks(records, tasks):
@@ -194,9 +190,9 @@ def test_conversion_preserves_source_semantics_and_reiterable_tasks(tmp_path):
 
 
 def test_signal_values_remain_available_after_source_removal(tmp_path):
-    refs = _refs(tmp_path)[:1]
+    refs = {"hhar_v2": _refs(tmp_path)["hhar_v2"]}
     dataset = SensorCapsConnector().convert(refs)
-    refs[0].path.unlink()
+    refs["hhar_v2"].unlink()
     first, second = dataset.records
     np.testing.assert_array_equal(first.signals[0].to_numpy(), _expected_values(0, 0, 0))
     np.testing.assert_array_equal(second.signals[3].to_numpy(), _expected_values(0, 1, 3))
@@ -206,7 +202,7 @@ def test_jsonl_reader_rejects_duplicate_keys(tmp_path):
     path = tmp_path / "duplicate.jsonl"
     path.write_text('{"messages":[],"messages":[]}\n', encoding="utf-8")
     with pytest.raises(TimeNetConnectorError, match="duplicate key") as error:
-        SensorCapsConnector().convert([HubFileRef(path, "hhar_v2")])
+        SensorCapsConnector().convert({"hhar_v2": path})
     assert str(path) in str(error.value)
     assert "line 1" in str(error.value)
 
@@ -236,6 +232,8 @@ def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, t
         records = list(reader.iter_records())
         _assert_records_and_tasks(records, list(reader.iter_tasks(inputs=records)))
         assert _annotations(restored) == _DATASET_ANNOTATIONS
+        assert restored.metadata.source_url == "https://huggingface.co/datasets/BASH-Lab/SensorCaps"
+        assert restored.metadata.source_revision == "4242e07feaacb0ee3aff86182a62914fa7abacef"
         reader.verify()
 
 
@@ -261,8 +259,8 @@ def test_invalid_sensor_data_has_source_context(tmp_path, sensor, pattern):
     row["messages"][1]["content"] = "\n".join(lines)
     ref = _write_row(tmp_path, row)
     with pytest.raises(TimeFValidationError, match=pattern) as error:
-        SensorCapsConnector().convert([ref])
-    assert str(ref.path) in str(error.value)
+        SensorCapsConnector().convert(ref)
+    assert str(ref["hhar_v2"]) in str(error.value)
     assert "hhar_v2, row 0" in str(error.value)
 
 
@@ -275,7 +273,7 @@ def test_integer_and_float_sensor_readings_are_accepted(monkeypatch, tmp_path):
         if heading in {"Accelerometer", "Gyroscope"}:
             lines[index] = f"{heading}: {json.dumps([[1, 2.5, -3]] * 60)}"
     row["messages"][1]["content"] = "\n".join(lines)
-    dataset = SensorCapsConnector().convert([_write_row(tmp_path, row)])
+    dataset = SensorCapsConnector().convert(_write_row(tmp_path, row))
     for signal, expected in zip(dataset.records[0].signals, [1, 2.5, -3] * 2, strict=True):
         np.testing.assert_array_equal(signal.to_numpy(), np.full(60, expected, dtype=np.float32))
 
@@ -283,7 +281,7 @@ def test_integer_and_float_sensor_readings_are_accepted(monkeypatch, tmp_path):
 def test_pinned_inventory_mismatch_fails(monkeypatch, tmp_path):
     monkeypatch.setitem(SensorCapsConnector.SOURCE_ROWS, "hhar_v2", 3)
     with pytest.raises(TimeFValidationError, match=r"hhar_v2\): expected 3 rows, found 2"):
-        SensorCapsConnector().convert(_refs(tmp_path)[:1])
+        SensorCapsConnector().convert({"hhar_v2": _refs(tmp_path)["hhar_v2"]})
 
 
 @pytest.mark.parametrize("n_readings", [1, 59, 61])
@@ -297,5 +295,5 @@ def test_unexpected_sample_count_rejects_timing_reconstruction(tmp_path, n_readi
     row["messages"][1]["content"] = "\n".join(lines)
     ref = _write_row(tmp_path, row)
     with pytest.raises(TimeFValidationError, match="expected 60 readings per sensor") as error:
-        SensorCapsConnector().convert([ref])
-    assert str(ref.path) in str(error.value)
+        SensorCapsConnector().convert(ref)
+    assert str(ref["hhar_v2"]) in str(error.value)

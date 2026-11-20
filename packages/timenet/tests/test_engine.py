@@ -54,7 +54,7 @@ def _write_demo_card() -> Path:
 _DEMO_CARD = _write_demo_card()
 
 
-class _DemoConnector(BaseConnector[str]):
+class _DemoConnector(BaseConnector[list[str]]):
     CARD = _DEMO_CARD
 
     def download(self, cache_dir: Path) -> list[str]:
@@ -235,7 +235,7 @@ def _store_credentialed_parent(root: Path) -> None:
     LocalRegistry(root).put_dataset(parent)
 
 
-class _ChildConnector(BaseConnector[str]):
+class _ChildConnector(BaseConnector[list[str]]):
     """Declares the demo dataset under the parent alias ``parent`` and imports one record with ``IMPORT``."""
 
     IMPORT: ClassVar[dict[str, Any] | None] = {}
@@ -248,7 +248,7 @@ class _ChildConnector(BaseConnector[str]):
     def download(self, cache_dir):
         return []
 
-    def compose(self, raw_refs, context):
+    def compose(self, raw_refs, /, context):
         dataset = TimeFDataset(metadata=self.metadata())
         if self.IMPORT is not None:
             dataset.import_from(
