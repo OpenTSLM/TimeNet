@@ -108,6 +108,26 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
         assert (version_dir / rel).exists()
 
 
+def test_the_manifest_schema_lists_the_annotation_keys_of_streamed_tasks(tmp_path):
+    dataset = make_dataset()
+    record = dataset.records[0]
+    streamed = TimeFDataset.from_parts(
+        metadata=dataset.metadata,
+        records=dataset.records,
+        tasks=(),
+        schema=dataset.derive_schema(),
+        last_ids=dataset.last_ids,
+    )
+    task = ClassificationTask(inputs=(record,), targets=("x",), label_set=LABELS)
+    task.annotate(Annotation(key="task_note", value="letters"))
+    streamed.set_task_stream([ClassificationTask], lambda: iter((task,)))
+
+    version_dir = _written(tmp_path, streamed)
+
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    assert "task_note" in [descriptor.key for descriptor in manifest.dataset_schema.annotations]
+
+
 def test_manifest_counts_match_the_control_database(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
