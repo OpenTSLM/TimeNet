@@ -5,17 +5,17 @@ import re
 from typing import Self
 
 from timenet.dataset import TimeFDataset
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.types import Annotation, ClassificationTask, Label, LabelSet
 from timenet_connectors.datasets.time_mqa.tsqa.release import PrintedSeries, ReleaseRow
 
 
 # The labels are the words of the released answers.
 ANOMALY_POINT = LabelSet(
-    name="anomaly_point",
-    labels=(
+    [
         Label(name="Normal Point", description="The series includes no anomaly."),
         Label(name="Anomaly Point", description="The series includes an anomaly."),
-    ),
+    ],
+    annotations=[Annotation("name", value="anomaly_point")],
 )
 _ANSWER = re.compile(r"Based on the given information, this time series includes (?P<label>.+)\.")
 
@@ -50,13 +50,13 @@ class AnomalyDetectionRow:
         Returns:
             The added task.
         """
-        record = dataset.add_record(record=self.series.create_record(self.row.record_metadata("series_1")))
+        record = dataset.add_record(self.series.create_record(self.row.record_metadata("series_1")))
         task = ClassificationTask(
-            inputs=(record,),
+            inputs=[record],
             prompt=self.row.question_with_series_placeholders((self.series,)),
-            targets=(self.label,),
+            targets=self.label,
             label_set=ANOMALY_POINT,
             metadata=self.row.task_metadata(),
         )
-        dataset.add_task(task=task)
+        dataset.add_task(task)
         return task

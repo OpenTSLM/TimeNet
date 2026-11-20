@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow.fs as pafs
 
-from timenet.config import settings
+from timenet.config import make_cache_folder, settings
 from timenet.errors import TimeFFormatError
 from timenet.format.checksums import file_checksum
 
@@ -41,7 +41,7 @@ def materialize_control(version: DatasetVersion) -> Path:
 
     digest = part.checksum.removeprefix("sha256:")
     cache_dir = settings().control_cache_dir
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    make_cache_folder(cache_dir)
     destination = cache_dir / f"{digest}.duckdb"
     if destination.exists() and destination.stat().st_size == part.size:
         if file_checksum(destination) == part.checksum:

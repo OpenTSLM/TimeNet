@@ -1,25 +1,26 @@
 from pathlib import Path
+import re
 
 from pydantic import ValidationError
 import pytest
 
-from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeFFormatError, TimeNetFileError, TimeNetRegistryError
+from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
     BaseRegistry,
-    DatasetVersion,
     LocalRegistry,
     RemoteRegistry,
     S3Registry,
-    WritableRegistry,
+    copy_release,
     local_registry_path,
     open_local_version,
     open_registry,
-    open_writable_registry,
 )
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, Domain, License
+from timenet.types import Annotation, AnswerTask, DatasetFilter, Domain
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -54,7 +55,7 @@ def test_open_registry_timenet_scheme_aliases_hosted_remote():
 def test_open_registry_timenet_scheme_rejects_a_path():
     # A path after timenet:// used to be dropped silently; now it is rejected, so a mistyped registry
     # URI fails loudly instead of hitting the default host.
-    with pytest.raises(ValueError, match="timenet:// takes no path"):
+    with pytest.raises(TimeNetRegistryError, match="timenet:// takes no path"):
         open_registry("timenet://chengsenwang/tsqa")
 
 
@@ -64,19 +65,20 @@ def test_open_registry_bare_timenet_scheme():
     assert registry._base_url == TIMENET_REGISTRY_URL
 
 
-def test_open_writable_registry_returns_writable(registry_root):
-    assert isinstance(open_writable_registry(registry_root), WritableRegistry)
-
-
 def test_open_registry_unknown_scheme_rejected():
     # must not fall through to a LocalRegistry rooted at the literal "gs://bucket" string
-    with pytest.raises(ValueError, match="unsupported registry scheme"):
+    with pytest.raises(TimeNetRegistryError, match="unsupported registry scheme"):
         open_registry("gs://bucket/registry")
 
 
 def test_open_registry_file_uri_with_host_rejected():
-    with pytest.raises(ValueError, match="absolute"):
+    with pytest.raises(TimeNetRegistryError, match="absolute"):
         open_registry("file://home/timo/registry")
+
+
+def test_open_registry_rejects_a_blank_value_instead_of_opening_the_current_directory():
+    with pytest.raises(TimeNetRegistryError, match=r"^--registry is blank; give a registry URL or a local path$"):
+        open_registry("  ", label="--registry")
 
 
 def test_open_registry_expands_user(monkeypatch, tmp_path):
@@ -111,7 +113,7 @@ def test_local_registry_path_expands_user(monkeypatch, tmp_path):
     "uri", ["timenet://", "timenet://hello/world", "http://reg.example", "https://reg.example", "s3://bucket/reg"]
 )
 def test_local_registry_path_rejects_remote(uri):
-    with pytest.raises(TimeNetRegistryError, match="remote"):
+    with pytest.raises(TimeNetRegistryError, match="is remote; the local registry needs a local directory"):
         local_registry_path(uri)
 
 
@@ -142,6 +144,34 @@ def test_get_manifest_rejects_mismatched_id(registry_root):
         registry.get_manifest("wrong/place")
 
 
+def test_get_manifest_names_the_path_of_a_cut_manifest(registry_root):
+    path = registry_root / "timenet/hello-world/1.0.0/manifest.json"
+    path.write_text(path.read_text()[:100])
+    with pytest.raises(TimeFFormatError, match=f"{re.escape(str(path))} is not a valid manifest: Invalid JSON"):
+        LocalRegistry(registry_root).get_manifest("timenet/hello-world", "1.0.0")
+
+
+def test_find_manifest_answers_none_for_an_absent_release_and_refuses_a_misplaced_one(registry_root):
+    registry = LocalRegistry(registry_root)
+    assert registry.find_manifest(DatasetRef.parse("timenet/hello-world@9.0.0")) is None
+    misplaced = registry_root / "timenet/hello-world/2.0.0"
+    misplaced.mkdir()
+    (misplaced / "manifest.json").write_bytes((registry_root / "timenet/hello-world/1.0.0/manifest.json").read_bytes())
+    with pytest.raises(TimeFFormatError, match="declares a different dataset ID or version"):
+        registry.find_manifest(DatasetRef.parse("timenet/hello-world@2.0.0"))
+
+
+def test_damage_names_the_missing_file_of_a_stored_release(registry_root):
+    registry = LocalRegistry(registry_root)
+    release = DatasetRef.parse("timenet/hello-world@1.0.0")
+    assert registry.damage(release) is None
+    part = registry.get_manifest(release.dataset_id, "1.0.0").files.control[0]
+    (registry_root / "timenet/hello-world/1.0.0" / part.path).unlink()
+    damage = registry.damage(release)
+    assert damage is not None
+    assert (damage.release, damage.path) == (release, part.path)
+
+
 def test_latest_version_ignores_staging_dirs(registry_root):
     # A crashed build can leave a `<version>.tmp-<uuid>` sibling (briefly holding a manifest.json).
     stale = registry_root / "demo/ecg" / "2.0.0.tmp-deadbeef"
@@ -151,120 +181,63 @@ def test_latest_version_ignores_staging_dirs(registry_root):
     assert manifest.metadata.dataset_version.major == 2
 
 
-# ---- open_version -----------------------------------------------------------------------------
-
-
-def test_open_version_returns_handle(registry_root):
-    version = LocalRegistry(registry_root).open_version("demo/ecg")
-    assert isinstance(version, DatasetVersion)
-    assert version.manifest.metadata.dataset_id == "demo/ecg"
-    assert version.root == str(registry_root / "demo/ecg" / "2.0.0")
-
-
-def test_open_version_resolves_latest_to_a_concrete_directory(registry_root):
-    # ``None`` means latest, but the handle roots at that resolved version, never the string "latest"
-    version = LocalRegistry(registry_root).open_version("demo/ecg", version=None)
-    assert version.root.endswith("/2.0.0")
-
-
-def test_open_version_filesystem_reads_a_file(registry_root):
-    version = LocalRegistry(registry_root).open_version("demo/ecg")
-    with version.filesystem.open_input_file(version.resolve_file_path("manifest.json")) as handle:
-        assert b"demo/ecg" in handle.read()
-
-
-def test_open_version_unknown_raises(registry_root):
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        LocalRegistry(registry_root).open_version("does/not-exist")
-
-
-def test_open_version_unknown_version_raises(registry_root):
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        LocalRegistry(registry_root).open_version("demo/ecg", version="9.9.9")
+def test_open_release_checks_the_size_of_each_file(registry_root):
+    (registry_root / "demo/ecg/2.0.0/control.duckdb").write_bytes(b"cut short")
+    with pytest.raises(TimeNetFileError, match=r"^demo/ecg@2\.0\.0: file 'control\.duckdb' has 9 bytes"):
+        LocalRegistry(registry_root).open_release(DatasetRef.parse("demo/ecg@2.0.0"))
 
 
 # ---- search -----------------------------------------------------------------------------------
 
 
 def test_search_no_filters_returns_all(registry_root):
-    assert len({m.dataset_id for m in LocalRegistry(registry_root).search()}) == 2
+    assert len({m.dataset_id for m in LocalRegistry(registry_root).search(DatasetFilter())}) == 2
 
 
 def test_search_by_domain(registry_root):
-    results = LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY)
+    results = LocalRegistry(registry_root).search(DatasetFilter(domain=(Domain.CARDIOLOGY,)))
     assert {m.dataset_id for m in results} == {"demo/ecg"}
-
-
-def test_search_by_license(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(license=License.MIT)} == {"demo/ecg"}
 
 
 def test_search_by_task_type_filter(registry_root):
     # only hello_world has a QA task
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=AnswerTask)} == {"timenet/hello-world"}
-
-
-def test_search_by_time_series_spec(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(time_series_spec="ecg_lead")} == {"demo/ecg"}
-
-
-def test_search_by_tag(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(tag="clinical")} == {"demo/ecg"}
-
-
-def test_search_by_dataset_id(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(dataset_id="timenet/hello-world")} == {
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(DatasetFilter(task=(AnswerTask,)))} == {
         "timenet/hello-world"
     }
 
 
-def test_search_by_query_substring(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(query="hello")} == {"timenet/hello-world"}
+class _Reversed(LocalRegistry):
+    """A local registry whose catalog lists the datasets in reverse order of their IDs."""
+
+    def list_datasets(self):
+        return super().list_datasets()[::-1]
 
 
-def test_search_accepts_scalar_or_list(registry_root):
-    both = LocalRegistry(registry_root).search(domain=[Domain.CARDIOLOGY, Domain.GENERAL])
-    assert {m.dataset_id for m in both} == {"timenet/hello-world", "demo/ecg"}
-
-
-def test_search_filters_are_anded(registry_root):
-    # cardiology AND MIT => ecg; cardiology AND CC-BY-4.0 => none
-    assert {
-        m.dataset_id for m in LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.MIT)
-    } == {"demo/ecg"}
-    assert LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.CC_BY_4_0) == []
-
-
-def test_search_limit(registry_root):
-    assert len(LocalRegistry(registry_root).search(limit=1)) == 1
+def test_search_returns_the_first_matches_by_dataset_id(registry_root):
+    assert [m.dataset_id for m in _Reversed(registry_root).search(DatasetFilter(limit=1))] == ["demo/ecg"]
 
 
 def test_search_limit_zero_returns_empty(registry_root):
     # the limit check must run before the append, else a zero limit still yields one row
-    assert LocalRegistry(registry_root).search(limit=0) == []
+    assert LocalRegistry(registry_root).search(DatasetFilter(limit=0)) == []
 
 
-def test_search_negative_limit_rejected(registry_root):
-    with pytest.raises(ValueError, match="non-negative"):
-        LocalRegistry(registry_root).search(limit=-1)
+# ---- put_dataset (write side) -----------------------------------------------------------------
 
 
-# ---- store (write side) -----------------------------------------------------------------------
-
-
-def test_store_derives_schema_if_absent(tmp_path):
+def test_put_dataset_derives_schema_if_absent(tmp_path):
     dataset = make_dataset()
     assert dataset.schema is None
-    LocalRegistry(tmp_path).store(dataset)
+    LocalRegistry(tmp_path).put_dataset(dataset)
     assert dataset.schema is not None
 
 
-def test_a_forced_store_replaces_the_committed_release(tmp_path):
+def test_a_forced_put_dataset_replaces_the_committed_release(tmp_path):
     registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
+    registry.put_dataset(make_dataset())
     replacement = make_dataset()
     replacement.records[0].annotate(Annotation(key="replaced", value=1))
-    registry.store(replacement, force=True)
+    registry.put_dataset(replacement, force=True)
 
     version_dir = tmp_path / "timenet/hello-world/1.0.0"
     with TimeFReader(open_local_version(version_dir)) as reader:
@@ -273,9 +246,9 @@ def test_a_forced_store_replaces_the_committed_release(tmp_path):
     assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
 
 
-def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch):
+def test_a_failed_forced_put_dataset_keeps_the_committed_release(tmp_path, monkeypatch):
     registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
+    registry.put_dataset(make_dataset())
     version_dir = tmp_path / "timenet/hello-world/1.0.0"
     before = (version_dir / "manifest.json").read_bytes()
 
@@ -284,12 +257,55 @@ def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch
 
     monkeypatch.setattr(TimeFWriter, "write", fail)
     with pytest.raises(RuntimeError, match="write failed"):
-        registry.store(make_dataset(), force=True)
+        registry.put_dataset(make_dataset(), force=True)
     assert (version_dir / "manifest.json").read_bytes() == before
     assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
 
 
+def _release_directory(root: Path, *, annotation: str | None = None) -> tuple[Path, Manifest]:
+    """Store timenet/hello-world 1.0.0 under ``root``; return its directory and manifest."""
+    dataset = make_dataset()
+    if annotation is not None:
+        dataset.records[0].annotate(Annotation(key=annotation, value=1))
+    source = LocalRegistry(root)
+    source.put_dataset(dataset)
+    return root / "timenet/hello-world/1.0.0", source.get_manifest("timenet/hello-world", "1.0.0")
+
+
+def test_put_release_replaces_a_committed_copy(tmp_path):
+    registry = LocalRegistry(tmp_path / "reg")
+    first, _ = _release_directory(tmp_path / "first")
+    registry.put_release(first)
+    directory, manifest = _release_directory(tmp_path / "second", annotation="replaced")
+    assert registry.put_release(directory) == DatasetRef.parse("timenet/hello-world@1.0.0")
+    # A fresh registry, so that no cached manifest of the first copy answers.
+    assert LocalRegistry(registry.root).get_manifest("timenet/hello-world", "1.0.0") == manifest
+    version_dir = registry.root / "timenet/hello-world/1.0.0"
+    assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]  # no .tmp-* or .old-* left
+
+
+@pytest.mark.parametrize("manifest_text", [None, "{not json"])
+def test_put_release_refuses_a_directory_without_a_readable_manifest(tmp_path, manifest_text):
+    directory, _ = _release_directory(tmp_path / "source")
+    if manifest_text is None:
+        (directory / "manifest.json").unlink()
+    else:
+        (directory / "manifest.json").write_text(manifest_text)
+    registry = LocalRegistry(tmp_path / "reg")
+    with pytest.raises(TimeFFormatError, match=re.escape(str(directory / "manifest.json"))):
+        registry.put_release(directory)
+    assert not registry.root.exists()
+
+
 # ---- s3 catalog -------------------------------------------------------------------------------
+
+
+def test_each_registry_names_its_location(tmp_path):
+    assert RemoteRegistry("https://registry.example.test").location == "https://registry.example.test"
+    assert open_registry("timenet://").location == TIMENET_REGISTRY_URL
+    assert S3Registry("s3://bucket/prefix").location == "s3://bucket/prefix"
+    assert S3Registry("s3://bucket").location == "s3://bucket"
+    assert LocalRegistry(tmp_path / "other" / ".." / "store").location == str((tmp_path / "store").resolve())
 
 
 def test_s3_registry_has_no_catalog():
@@ -298,4 +314,25 @@ def test_s3_registry_has_no_catalog():
     with pytest.raises(NotImplementedError):
         s3.list_datasets()
     with pytest.raises(NotImplementedError):
-        s3.search()
+        s3.search(DatasetFilter())
+
+
+def test_a_read_only_registry_refuses_put_dataset_and_a_copy_into_it(tmp_path):
+    origin = LocalRegistry(tmp_path / "origin")
+    release = origin.put_dataset(make_dataset())
+    registry = LocalRegistry(tmp_path / "read-only", read_only=True)
+    refused = rf"^local registry {re.escape(str(registry.root))} has read_only=True, so it refuses "
+
+    with pytest.raises(TimeNetRegistryError, match=refused + r"put_dataset\(\)\."):
+        registry.put_dataset(make_dataset())
+    with pytest.raises(TimeNetRegistryError, match=refused + r"a copy of timenet/hello-world@1\.0\.0\."):
+        copy_release(release, origin, registry)
+    assert not registry.root.exists()
+
+
+def test_a_read_only_registry_refuses_to_remove_a_release(tmp_path):
+    release = LocalRegistry(tmp_path).put_dataset(make_dataset())
+    registry = LocalRegistry(tmp_path, read_only=True)
+    with pytest.raises(TimeNetRegistryError, match=r"refuses a removal of timenet/hello-world@1\.0\.0\. "):
+        registry.remove_release(release)
+    assert registry.exists(release.dataset_id, str(release.version))

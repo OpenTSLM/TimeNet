@@ -6,55 +6,55 @@ SDK's whole knowledge of building to one protocol and one lookup, and lets a thi
 package plug in the same way the first-party one does.
 """
 
-from collections.abc import Mapping
-from importlib.metadata import entry_points
-from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
+from importlib.metadata import EntryPoint, entry_points
+from typing import TYPE_CHECKING, Literal, Protocol
 
-from timenet.types import DatasetMetadata
+from timenet.errors import TimeNetBuildError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.progress import ProgressCallback
+from timenet.types import DatasetMetadata, Version
 from timenet.types.references import DatasetRef
 
 
 if TYPE_CHECKING:
     from timenet.manifest import PayloadSource
-    from timenet.registry import BaseRegistry
+    from timenet.registry import LocalRegistry
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
 
 
+@dataclass(frozen=True)
+class BuildOptions:
+    """Build settings that do not change the files of the release.
+
+    Attributes:
+        keep_cache: Keep the raw download cache after the build.
+        progress: The callback for build progress events, or ``None``.
+        quiet: Suppress output from the backend and its child processes.
+        isolation: Use a separate environment (``"on"``), this process (``"off"``), or ``TIMENET_ISOLATION`` (``None``).
+    """
+
+    keep_cache: bool = False
+    progress: ProgressCallback | None = None
+    quiet: bool = False
+    isolation: Literal["on", "off"] | None = None
+
+
 class BuilderBackend(Protocol):
-    """Something that can build a dataset from its connector."""
+    """Define the interface for reading connector cards and building dataset releases."""
 
-    def knows(self, dataset_id: str) -> bool:
-        """Report whether this backend has a connector for the id.
+    def dataset_ids(self) -> Iterable[str]:
+        """List the datasets this backend can build.
 
-        Implementations must answer without importing the connector: this runs before any
-        connector environment exists.
-
-        Args:
-            dataset_id: The dataset id.
+        Implementations must answer without importing a connector.
 
         Returns:
-            Whether the backend can build it.
-        """
-        ...
-
-    def declared_version(self, dataset_id: str) -> str | None:
-        """Return the version the connector declares, without importing or building it.
-
-        A caller checks a version pin against this before the build runs, so a pin the connector
-        cannot satisfy fails fast instead of after a full build. Answer without importing the
-        connector, like :meth:`knows`.
-
-        Args:
-            dataset_id: The dataset id.
-
-        Returns:
-            The declared version string, or ``None`` if the backend has no connector for the id.
+            The dataset IDs.
 
         Raises:
-            TimeNetInvalidCardError: If the card of the connector cannot be read.
+            TimeNetInvalidCardError: If a connector card cannot be read.
         """
         ...
 
@@ -62,7 +62,7 @@ class BuilderBackend(Protocol):
         """Return the card the connector declares, without importing or building it.
 
         A build planner reads the card for a parent's exact version, its own parents, and its access
-        requirement before anything runs. Answer without importing the connector, like :meth:`knows`.
+        requirement before anything runs. Answer without importing the connector, like :meth:`dataset_ids`.
 
         Args:
             dataset_id: The dataset id.
@@ -75,85 +75,162 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(  # ruff: ignore[too-many-arguments]
+    def build(
         self,
-        dataset_id: str,
-        root: Path,
+        release: DatasetRef,
+        store: "LocalRegistry",
         *,
-        force: bool = False,
-        build_parents: bool = False,
-        fetch_from: "str | BaseRegistry | None" = None,
-        pinned_by: "Mapping[DatasetRef, PayloadSource] | None" = None,
-    ) -> Path:
-        """Build the dataset into a registry directory.
+        force: bool,
+        pinned_by: "Mapping[DatasetRef, PayloadSource]",
+        options: BuildOptions,
+    ) -> None:
+        """Build the requested dataset version into a local registry.
 
-        Missing parent releases are prepared before the build starts, or the build fails before
-        any download. Each one is reused, copied from ``fetch_from``, or built when
-        ``build_parents`` is set. A build with ``pinned_by`` publishes the release only if it
-        reproduces each pinned file.
+        The local registry must already contain all parents and their payload sources.
+        Publish only if all pinned files keep the same path, size, and checksum.
 
         Args:
-            dataset_id: The dataset id.
-            root: The output registry directory.
-            force: Rebuild even if the version is already built.
-            build_parents: Build missing parent releases from their installed connectors.
-            fetch_from: The registry, or its URI, to copy missing parent releases from.
-            pinned_by: The releases that already read files of this release, with their pins.
+            release: The exact dataset ID and version to build.
+            store: The local registry to build into.
+            force: Rebuild even if ``store`` already holds the release.
+            pinned_by: The releases that pin files in this release, with their file records.
+            options: Build settings, including ``options.progress`` to receive build events.
 
-        Returns:
-            The committed version directory.
+        Raises:
+            TimeNetDatasetNotFoundError: If this backend has no connector for the dataset ID.
+            TimeNetVersionUnavailableError: If the connector declares a different version.
+            TimeFFormatError: If the build omits or changes a pinned file.
+            TimeNetBuildError: If the build fails.
         """
         ...
 
 
-def find_builder(dataset_id: str) -> BuilderBackend | None:
-    """Return the first registered backend that claims this dataset id.
+@dataclass(frozen=True)
+class InstalledBuilder:
+    """A dataset's build backend and connector card.
 
-    Args:
-        dataset_id: The dataset id.
-
-    Returns:
-        The backend, or ``None`` when no installed package claims the id.
+    Attributes:
+        backend: The installed backend that builds the dataset.
+        card: The dataset's connector card.
+        package: ``"<distribution> <version>"`` of the package that registers the backend.
     """
+
+    backend: BuilderBackend
+    card: DatasetMetadata
+    package: str
+
+    @property
+    def release(self) -> DatasetRef:
+        """The release that the card declares."""
+        return DatasetRef(dataset_id=self.card.dataset_id, version=self.card.dataset_version)
+
+
+@dataclass(frozen=True)
+class ConnectorClaim:
+    """A dataset ID and the installed backend that owns it.
+
+    Attributes:
+        dataset_id: The dataset ID.
+        backend: The first backend that lists the ID.
+        entry: The entry point that registers the backend.
+    """
+
+    dataset_id: str
+    backend: BuilderBackend
+    entry: EntryPoint
+
+
+def claims() -> Iterator[ConnectorClaim]:
+    """Yield each dataset ID of the installed backends once, owned by the first backend that lists it.
+
+    The walk loads each backend only when it reaches its entry point.
+
+    Yields:
+        One claim per dataset ID, in the order of the entry points.
+    """
+    seen: set[str] = set()
     for entry in entry_points(group=ENTRY_POINT_GROUP):
         backend = entry.load()()
-        if backend.knows(dataset_id):
-            return backend
-    return None
+        for dataset_id in backend.dataset_ids():
+            if dataset_id not in seen:
+                seen.add(dataset_id)
+                yield ConnectorClaim(dataset_id, backend, entry)
+
+
+def has_backends() -> bool:
+    """Return whether any installed package registers a builder backend."""
+    return any(True for _ in entry_points(group=ENTRY_POINT_GROUP))
+
+
+def installed_builder(dataset_id: str) -> InstalledBuilder | None:
+    """Find the first registered backend that lists a dataset, and read its card.
+
+    Args:
+        dataset_id: The dataset ID.
+
+    Returns:
+        The installed builder, or ``None`` if no backend lists the dataset or the backend has no card for it.
+
+    Raises:
+        TimeNetInvalidCardError: If the dataset's card cannot be read.
+        TimeNetBuildError: If no installed distribution declares the entry point of the backend.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend and _package
+    claim = next((claim for claim in claims() if claim.dataset_id == dataset_id), None)
+    if claim is None:
+        return None
+    card = claim.backend.card(dataset_id)
+    return None if card is None else InstalledBuilder(claim.backend, card, _package(claim))
+
+
+def declared(dataset_id: str, version: Version | str | None = None) -> InstalledBuilder:
+    """Find a dataset's build backend and check its version.
+
+    Args:
+        dataset_id: The dataset ID.
+        version: The version to build, or ``None`` for the version that the card declares.
+
+    Returns:
+        The installed builder, whose ``release`` is the release to build.
+
+    Raises:
+        TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
+        TimeNetVersionUnavailableError: If the connector builds another version.
+        TimeNetInvalidCardError: If the dataset's card cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] - the card error is raised by the backend
+    found = installed_builder(dataset_id)
+    if found is None:
+        raise TimeNetDatasetNotFoundError(f"no installed connector builds {dataset_id!r}")
+    if version is not None:
+        wanted = DatasetRef(dataset_id=dataset_id, version=version)
+        if wanted.version != found.card.dataset_version:
+            raise TimeNetVersionUnavailableError(wanted, found.card.dataset_version)
+    return found
 
 
 def find_card(dataset_id: str) -> DatasetMetadata | None:
-    """Return the card of the installed connector that claims this dataset.
+    """Read a dataset's card from the first registered backend that lists it.
 
     Args:
-        dataset_id: The dataset id.
+        dataset_id: The dataset ID.
 
     Returns:
-        The card, or ``None`` when no installed package claims the dataset.
+        The card, or ``None`` if no backend lists the dataset or the backend has no card.
 
     Raises:
-        TimeNetInvalidCardError: If the card of the connector cannot be read.
+        TimeNetInvalidCardError: If the card cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
-    builder = find_builder(dataset_id)
-    return None if builder is None else builder.card(dataset_id)
+    found = installed_builder(dataset_id)
+    return None if found is None else found.card
 
 
-def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
-    """Return the backend that can build exactly this release.
-
-    A connector builds only the dataset version that its card declares. So a pinned release can only
-    be built by a connector whose card declares that exact version.
-
-    Args:
-        reference: The dataset ID and the version.
-
-    Returns:
-        The backend, or ``None`` if no installed backend claims the dataset or its card declares
-        another version.
+def _package(claim: ConnectorClaim) -> str:
+    """Return ``"<distribution> <version>"`` of the package whose entry point registers the backend of a claim.
 
     Raises:
-        TimeNetInvalidCardError: If the card of the connector cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
-    builder = find_builder(reference.dataset_id)
-    card = None if builder is None else builder.card(reference.dataset_id)
-    return builder if card is not None and card.dataset_version == reference.version else None
+        TimeNetBuildError: If no installed distribution declares the entry point.
+    """
+    dist = claim.entry.dist
+    if dist is None:
+        kind = type(claim.backend)
+        raise TimeNetBuildError(f"the entry point of {kind.__module__}.{kind.__qualname__} names no installed package")
+    return f"{dist.name} {dist.version}"

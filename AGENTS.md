@@ -60,7 +60,9 @@ workspace definition and the shared ruff/ty/pytest config; per-package
   workspace extras (`timenet[cli,torch]`). It does not install connector dependencies. Each
   connector declares its own in a `requirements.txt`, and `make test-connectors` runs that
   connector's tests and type-check in an environment built from it.
-- Build distributables with `make build` (`uv build --package <name>` per member).
+- Build distributables with `make build`. It runs the build through a proxy script, which records
+  the git commit inside each package for provenance, before running `uv build --package <name>`
+  per member.
 - For one-off scripts, use inline `uv` metadata and run with `uv run <script.py>`. Never `pip install`.
 - Keep `uv.lock` committed; the `uv-lock` pre-commit hook enforces freshness.
 
@@ -88,6 +90,20 @@ foundations go in lower branches and dependents above them, and the tooling (`gh
 run every `gh stack` command non-interactively (always pass branch names to `init`/`add`, `--auto` to
 `submit`, `--json` to `view`); make mid-stack changes on the branch that logically owns them and run
 `gh stack rebase --upstack` to propagate, rather than mixing concerns into a higher branch.
+
+## PR Labels
+When you open a PR, add each label below that applies, for example with
+`gh pr create --label area:core`. A PR that changes both packages gets both area labels. A PR with
+a breaking label also marks the change with `!` in its title (see Conventions).
+
+| Label | Add it when the PR |
+| --- | --- |
+| `area:core` | changes `packages/timenet`, `examples/` or `benchmarks/` |
+| `area:connectors` | changes `packages/timenet-connectors` |
+| `area:ci` | changes `.github/`, the `Makefile`, `.pre-commit-config.yaml` or the release tooling |
+| `documentation` | changes only files under `docs/`, top-level `.md` files or `.agents/skills/` |
+| `breaking:format` | changes the code to write files that older TimeNet versions cannot read |
+| `breaking:api` | breaks callers of the Python API or the CLI |
 
 ## Conventions
 - Dash-separated names for user-facing/CLI and distribution names (`timenet-connectors`);

@@ -12,8 +12,10 @@ A connector is the unit of dataset integration. Each dataset has one connector c
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
 knowledge of the registry, the engine, or other connectors. A child connector reads its parent
 releases only through the readers that the engine passes to it. The consumer SDK never imports
-connector code. On a local registry, `TimeNet.load` builds a missing dataset through the
-`timenet.builders` entry point. Pass `auto_build=False` to turn this off.
+connector code. If the [sources](client.md#choose-the-sources) of a client include
+`InstalledConnectors()`, `TimeNet.load` builds a missing dataset through the `timenet.builders`
+entry point. To turn this off, leave `InstalledConnectors()` out of the list, or set
+`TIMENET_AUTO_BUILD=false` for the default list.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -27,22 +29,25 @@ from pathlib import Path
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 
-class MyConnector(BaseConnector[MyRawRef]):
-    def download(self, cache_dir: Path) -> list[MyRawRef]: ...
-    def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset: ...
+class MyConnector(BaseConnector[MySource]):
+    def download(self, cache_dir: Path) -> MySource: ...
+    def convert(self, source: MySource) -> TimeFDataset: ...
 ```
 
 The two stages stay separate. This lets the engine drive
-`download -> convert -> derive_schema -> store`.
+`download -> convert -> derive_schema -> store_dataset`.
 
 | Method | Nature | Contract |
 | --- | --- | --- |
-| `download(cache_dir)` | I/O only | Fetch or find raw files and return lightweight references. The method is idempotent and does not parse data. |
-| `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
-| `compose(raw_refs, context)` | local work | Build a child dataset from the references and the opened parent releases. The default calls `convert(raw_refs)`. |
+| `download(cache_dir)` | I/O only | Fetch or find raw files and return a lightweight handle to them. The method is idempotent and does not parse data. |
+| `convert(raw)` | local work | Parse the download result into a `TimeFDataset`. Do not use the network. |
+| `compose(raw, context)` | local work | Build a child dataset from the download result and the opened parent releases. The default calls `convert(raw)`. |
 
-You must implement `convert`. Unless the dataset card declares parent releases, it is the only
-required method. If the card declares parent releases, you implement `compose` instead, as
+A connector must implement `download` or `download_async`. It must also implement `convert` or
+`compose`. If either pair has no implementation, Python raises `TypeError` during connector
+creation.
+
+If the card declares parents, you must implement `compose`, as
 [Compose a child dataset](#compose-a-child-dataset) describes. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
 define `async download_async(cache_dir)` to fetch artifacts at the same time. Implement only one of
@@ -58,9 +63,11 @@ writer after conversion.
   card. `metadata().dataset_id` must match the connector's built id.
 
 A connector takes no constructor arguments. Configuration comes from environment variables that
-`__init__` reads. `TRaw` is the reference type that the connector defines, for example a path, a small
-dataclass, or an S3 key. The connector is generic over `TRaw`:
-`class MyConnector(BaseConnector[MyRawRef])`.
+`__init__` reads. `TRaw` is the type of the value that `download` returns. The connector defines it.
+It can be any value, for example one small dataclass, a list of file references, or `None`. The
+connector is generic over `TRaw`: `class MyConnector(BaseConnector[MySource])`. The engine passes the
+value to `compose` unchanged. The base takes it as a positional argument, so a connector can name the
+parameter, for example `source` or `recordings`.
 
 If an assumption about your source data, downloads, or parents does not hold, raise
 `TimeNetConnectorError` from `timenet.errors`.
@@ -73,7 +80,12 @@ Each Signal has exactly one owning Source. Do not attach one Signal to several S
 TimeNet rejects that ambiguous ownership.
 
 Signals can share immutable `TimeAxis` and `TimeSeriesSpec` objects. Annotation content can also be
-reused. Each call to `annotate()` creates a separate occurrence for the selected owner.
+reused. Each call to `annotate()`, and each owner that you build with `annotations=[...]`, creates a
+separate occurrence for the owner.
+
+Attach annotations when you build the owner: pass `annotations=[...]` to the dataset, Record, Source,
+Signal, or Task. Use `annotate()` only for the cases that
+[Attach annotations](data-model/annotations.md#attach-annotations) lists.
 
 `Annotation` and the Task classes are final. To reuse an annotation, keep a constant or write a
 builder function, as [Reuse content](data-model/annotations.md#reuse-content) shows. To reuse a
@@ -93,12 +105,12 @@ Preserve official partitions when the source provides them by setting `split` on
 directly. No splitter is needed:
 
 ```python
-from timenet.types.splits import Split
+from timenet.types import Split
 
 record = make_record(sample)
-dataset.add_record(record=record)
+dataset.add_record(record)
 task = make_task(sample, record, split=Split.TRAIN)
-dataset.add_task(task=task)
+dataset.add_task(task)
 ```
 
 Translate source-specific partition names into `Split` values in the connector.
@@ -107,7 +119,7 @@ For a dataset without official partitions, explicitly choose a category to balan
 key that prevents related samples from crossing partitions:
 
 ```python
-from timenet.types.splits import Split
+from timenet.types import Split
 from timenet_connectors.splitting import StratifiedSplitter
 
 def get_category(sample):
@@ -170,9 +182,9 @@ When constructing TimeNet tasks, copy the partition name onto each task:
 for split_name, samples_in_split in splits.items():
     for sample in samples_in_split:
         record = make_record(sample)
-        dataset.add_record(record=record)
+        dataset.add_record(record)
         task = make_task(sample, record, split=split_name)
-        dataset.add_task(task=task)
+        dataset.add_task(task)
 ```
 
 Here `make_record` and `make_task` are the connector's own construction functions. A task refers to
@@ -224,13 +236,15 @@ a connector that you did not check.
 
 Credentials come from the environment. For the HuggingFace Hub, a token is read from `HF_TOKEN`
 automatically (needed only for gated or private sources). Downloaded source files cache under
-`<TIMENET_CACHE>` (see [client local state](client.md#local-state)).
+`<TIMENET_CACHE>/downloads/<dataset_id>`, by default in `~/.cache/timenet` (see
+[Settings](client.md#settings)).
 
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
 and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
 at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
-works), and run `timenet-build build <id>` yourself. An `open`, `load`, or `download` of a
-credentialed dataset from a hosted registry raises `TimeNetAccessError` instead of serving bytes.
+works), and run `timenet-build build <id>` yourself. If no other source of the client provides a
+credentialed dataset, an `open`, `load`, or `download` from a hosted registry raises
+`TimeNetAccessError` instead of serving bytes.
 The error names each `access_url` that the dataset needs, with the release that sets it. A child
 dataset can need the access pages of its ancestors.
 
@@ -262,7 +276,7 @@ helpers from `download_async`:
 ```python
 from timenet_connectors.download import Artifact, ensure_archive, download_files
 
-class MyConnector(BaseConnector[MyRawRef]):
+class MyConnector(BaseConnector[MySource]):
     async def download_async(self, cache_dir):
         await download_files(
             [
@@ -273,7 +287,7 @@ class MyConnector(BaseConnector[MyRawRef]):
             headers={"Authorization": "Bearer …"},
         )
         await ensure_archive("https://host/records.zip", cache_dir)
-        return [...]  # lightweight references into cache_dir
+        return MySource(...)  # a lightweight handle to the files in cache_dir
 ```
 
 An ambient sink reports progress, through `timenet_connectors.download.progress`. The download helpers
@@ -285,6 +299,10 @@ falls back to throttled text lines. The `--quiet` flag silences all output.
 
 PhysioNet connectors extend `BasePhysioNetConnector` for WFDB record I/O. They use `ensure_archive` to
 pull their database archive.
+
+Hugging Face Hub connectors extend `BaseHuggingFaceConnector`. The base downloads the files in
+`SOURCE_FILES`. Its `download` returns a mapping from each part name to its local path. The connector
+implements `convert(self, files)` and reads a file as `files["train"]`.
 
 ## Example connectors
 
@@ -306,14 +324,14 @@ timenet-build build chengsenwang/tsqa               # live, from the Hub
 timenet-build build chengsenwang/tsqa --keep-cache  # keep the raw sources
 ```
 
-A successful build removes the dataset's raw download cache, at `<TIMENET_CACHE>/<dataset_id>`. Only
-`convert` reads the sources, and they are often several times the size of the dataset they produce.
-To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet_connectors.build()`. This helps
-while you write a connector for a large source, because each rebuild downloads the source again.
+A successful build removes the raw downloads of the dataset, at
+`<TIMENET_CACHE>/downloads/<dataset_id>`. To keep them, pass `--keep-cache`, or `keep_cache=True` to
+`timenet.build()`. This helps while you write a connector for a large source, because each rebuild
+downloads the source again.
 
-Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
-references and does not touch the network. A test can therefore pass small local inputs or synthetic
-references directly to `convert()` and skip `download`.
+Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes the
+download result and does not touch the network. A test can therefore pass a small local input or a
+synthetic handle directly to `convert()` and skip `download`.
 
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per
@@ -330,11 +348,11 @@ parents:
   ptbxl: physionet/ptb-xl@1.0.0
 ```
 
-The connector of a child overrides `compose(raw_refs, context)`. The default `compose` calls
-`convert(raw_refs)`. If the card declares parents and the connector does not override `compose`,
+The connector of a child overrides `compose(raw, context)`. The default `compose` calls
+`convert(raw)`. If the card declares parents and the connector does not override `compose`,
 the build raises before it opens a parent or downloads anything.
 
-Before the connector runs, the build prepares each parent release in the output registry, as
+Before the connector runs, the build prepares each parent release in the local registry, as
 [Prepare parent releases](build.md#prepare-parent-releases) describes. The engine then opens each
 parent as a `TimeFReader` and passes the readers in a `BuildContext`, by parent alias. The connector
 copies objects into the child with `dataset.import_from()`:
@@ -345,7 +363,7 @@ from timenet.dataset import TimeFDataset
 from timenet.types.reference_keys import ParentAlias
 
 
-def compose(self, raw_refs, context: BuildContext) -> TimeFDataset:
+def compose(self, source, context: BuildContext) -> TimeFDataset:
     dataset = TimeFDataset(metadata=self.metadata())
     ptbxl = context.parents[ParentAlias("ptbxl")]
     # Find parent Records by a key of the source in their metadata.
@@ -393,4 +411,35 @@ that split keeps them. A child with a split of its own removes them and adds its
 
 ---
 
-See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+See the [API reference for `timenet.connectors`](api/timenet.connectors.md) for the full symbol listing.
+
+## Reading source rows
+
+For CSV, JSON arrays, JSON Lines, and Parquet, declare the source fields in a connector-owned
+`DataRow` and read each downloaded file during `convert`. This example is from a Hub connector. Its
+`files` maps each part name to its local path:
+
+```python
+from pydantic import Field
+from timenet_connectors.sources.readers import DataRow, ParquetDataReader
+
+class SourceRow(DataRow):
+    question: str = Field(alias="Question")
+    count: int = Field(alias="Count")
+
+for path in files.values():
+    for row in ParquetDataReader(path, SourceRow).iter_rows():
+        # Convert row.question and row.count into TimeNet objects.
+        ...
+```
+
+The row schema controls strictness for decoded JSON and Parquet values; for example, set
+`model_config = ConfigDict(strict=True)` to reject coercion. CSV cells are strings and are parsed as
+such. The schema forbids unexpected
+fields by default; configure it explicitly when the source contains fields the connector does not
+use. JSON object keys and Parquet column names must be distinct.
+
+CSV and JSON Lines stream rows; Parquet reads batches. JSON arrays are loaded into memory. Close an
+iterator explicitly if leaving it early, for example with `contextlib.closing`. `CsvDataReader` can
+check an exact ordered header via `expected_columns=`, and `ParquetDataReader` can read selected
+columns with `selected_columns=`.

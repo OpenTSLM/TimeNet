@@ -2,20 +2,26 @@
 
 Owns how the SDK talks to the hosted registry. It prefixes ``/api/v1`` and attaches the bearer token
 and a ``timenet/<version>`` User-Agent to API calls. It resolves presigned download URLs without
-leaking the token to object storage. It maps HTTP status codes onto TimeNet errors. A sync
-:class:`httpx.Client` serves the control plane. :meth:`new_async_client` hands out an
+leaking the token to object storage. It maps HTTP status codes and network failures onto TimeNet
+errors. A sync :class:`httpx.Client` serves the control plane. :meth:`new_async_client` hands out an
 :class:`httpx.AsyncClient` sharing the same configuration for the parallel downloader.
 """
 
-from collections.abc import Callable, Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Generator, Mapping
+from contextlib import contextmanager
 import importlib.metadata
+import logging
+import math
 import time
 from typing import Any, BinaryIO, cast
 
 import httpx
 
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError, TimeNetUnreachableError
 
+
+_LOG = logging.getLogger(__name__)
 
 API_PREFIX = "/api/v1"
 _STREAM_CHUNK_BYTES = 1 << 20
@@ -36,16 +42,46 @@ def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
         attempt: The zero-based retry attempt, used for the backoff when no header is present.
 
     Returns:
-        The delay in seconds, clamped to at most :data:`_MAX_RETRY_WAIT_SECONDS`.
+        The delay in seconds. A ``Retry-After`` is returned as sent, so a retry never comes early.
     """
-    header = response.headers.get("retry-after")
     delay = _DEFAULT_BACKOFF_SECONDS * 2**attempt
-    if header is not None:
-        try:
-            delay = float(header)  # the service sends an integer number of seconds
-        except ValueError:
-            delay = _DEFAULT_BACKOFF_SECONDS * 2**attempt  # an HTTP-date form: fall back to backoff
-    return min(delay, _MAX_RETRY_WAIT_SECONDS)
+    try:
+        # The service sends an integer number of seconds. An HTTP date, or a negative or
+        # non-finite value, falls back to the backoff.
+        header = float(response.headers.get("retry-after", "nan"))
+    except ValueError:
+        header = math.nan
+    if math.isfinite(header) and header >= 0:
+        delay = header
+    return delay
+
+
+def _retry_delay(response: httpx.Response, attempt: int, waited: float) -> float | None:
+    """Return how long to wait before retrying a response, or ``None`` to stop.
+
+    Logs a warning for each retry so a caller sees why a download pauses.
+
+    Args:
+        response: The response to the last attempt.
+        attempt: The zero-based retry attempt.
+        waited: The seconds already spent waiting on earlier retries.
+
+    Returns:
+        The delay in seconds, or ``None`` if the response is not a 429 or the delay does not fit the
+        remaining wait budget. Then the caller surfaces the 429 at once, with the server's Retry-After.
+    """
+    if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
+        return None
+    delay = _retry_after_seconds(response, attempt)
+    if waited + delay > _MAX_RETRY_WAIT_SECONDS:
+        return None
+    _LOG.warning(
+        "registry rate-limited (429) on %s, retrying in %gs (retry %d)",
+        response.request.url.path,
+        delay,
+        attempt + 1,
+    )
+    return delay
 
 
 def _send_with_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
@@ -61,14 +97,48 @@ def _send_with_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
     waited = 0.0
     for attempt in range(_MAX_RETRIES):
         response = send()
-        if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
-            return response
-        delay = _retry_after_seconds(response, attempt)
-        if waited + delay > _MAX_RETRY_WAIT_SECONDS:
+        delay = _retry_delay(response, attempt, waited)
+        if delay is None:
             return response
         time.sleep(delay)
         waited += delay
     return send()
+
+
+async def _send_with_retry_async(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+    """Issue an async request, retrying while the service answers 429, honoring Retry-After.
+
+    Args:
+        send: Issues the request and returns the response; called again for each retry.
+
+    Returns:
+        The first non-429 response, or the last 429 once the retry budget is spent.
+    """
+    waited = 0.0
+    for attempt in range(_MAX_RETRIES):
+        response = await send()
+        delay = _retry_delay(response, attempt, waited)
+        if delay is None:
+            return response
+        await asyncio.sleep(delay)
+        waited += delay
+    return await send()
+
+
+@contextmanager
+def _reaching(where: str) -> Generator[None]:
+    """Name ``where`` in the error of a request that fails on the network.
+
+    Args:
+        where: The registry or storage location to name in the error.
+
+    Raises:
+        TimeNetUnreachableError: If a request fails to reach ``where``.
+    """
+    try:
+        yield
+    except httpx.TransportError as error:
+        raise TimeNetUnreachableError(f"cannot reach {where}: {error}") from error
 
 
 def timenet_user_agent() -> str:
@@ -139,7 +209,7 @@ def _redirect_target(response: httpx.Response, path: str) -> str:
 
 
 class RegistryHttpClient:
-    """A thin httpx wrapper for the registry API and its presigned object URLs."""
+    """An HTTP client for the registry API and signed file URLs."""
 
     @property
     def token(self) -> str | None:
@@ -200,7 +270,7 @@ class RegistryHttpClient:
         return headers
 
     def get_text(self, path: str) -> str:
-        """GET an API path and return the raw text body (used for ``manifest.json``).
+        """Fetch the text body from a registry API path.
 
         Args:
             path: A path under ``/api/v1``.
@@ -208,7 +278,8 @@ class RegistryHttpClient:
         Returns:
             The response text.
         """
-        response = _send_with_retry(lambda: self._client.get(f"{API_PREFIX}{path}", headers=self.api_headers()))
+        with _reaching(self._base_url):
+            response = _send_with_retry(lambda: self._client.get(f"{API_PREFIX}{path}", headers=self.api_headers()))
         _raise_for_status(response)
         return response.text
 
@@ -217,20 +288,21 @@ class RegistryHttpClient:
 
         Args:
             path: A path under ``/api/v1``.
-            content: Raw request body bytes (e.g. the manifest), mutually exclusive with ``json``.
+            content: The request bytes, mutually exclusive with ``json``.
             json: A JSON-serializable body.
 
         Returns:
             The raw response (already status-checked).
         """
-        response = _send_with_retry(
-            lambda: self._client.post(f"{API_PREFIX}{path}", content=content, json=json, headers=self.api_headers())
-        )
+        with _reaching(self._base_url):
+            response = _send_with_retry(
+                lambda: self._client.post(f"{API_PREFIX}{path}", content=content, json=json, headers=self.api_headers())
+            )
         _raise_for_status(response)
         return response
 
     def resolve_presigned(self, dataset_id: str, version: str, relpath: str) -> str:
-        """Resolve a file's presigned URL via the download redirect, without following it.
+        """Get a signed download URL for a dataset file.
 
         Args:
             dataset_id: The ``org/name`` id.
@@ -244,7 +316,10 @@ class RegistryHttpClient:
             TimeNetRegistryError: If the download endpoint does not redirect.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _redirect_target
         path = _download_path(dataset_id, version, relpath)
-        response = _send_with_retry(lambda: self._client.get(path, headers=self.api_headers(), follow_redirects=False))
+        with _reaching(self._base_url):
+            response = _send_with_retry(
+                lambda: self._client.get(path, headers=self.api_headers(), follow_redirects=False)
+            )
         return _redirect_target(response, path)
 
     def stream_to(self, url: str, sink: BinaryIO) -> None:
@@ -254,7 +329,7 @@ class RegistryHttpClient:
             url: The presigned URL.
             sink: A writable binary file object.
         """
-        with self._client.stream("GET", url) as response:
+        with _reaching(f"the storage of {self._base_url}"), self._client.stream("GET", url) as response:
             if response.is_error:
                 response.read()  # a streaming response has no body until read; _raise_for_status needs it
                 _raise_for_status(response)
@@ -269,7 +344,8 @@ class RegistryHttpClient:
             content: The request body.
             headers: Headers the presign requires (e.g. the checksum binding).
         """
-        response = self._client.put(url, content=content, headers=dict(headers))
+        with _reaching(f"the storage of {self._base_url}"):
+            response = self._client.put(url, content=content, headers=dict(headers))
         _raise_for_status(response)
 
     def new_async_client(self) -> httpx.AsyncClient:

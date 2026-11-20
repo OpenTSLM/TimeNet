@@ -47,15 +47,15 @@ class ImputationRow:
         Returns:
             The added task.
         """
-        with_gaps = dataset.add_record(record=self.with_gaps.create_record(self.row.record_metadata("with_gaps")))
-        complete = dataset.add_record(record=self.complete.create_record(self.row.record_metadata("complete")))
+        with_gaps = dataset.add_record(self.with_gaps.create_record(self.row.record_metadata("with_gaps")))
+        complete = dataset.add_record(self.complete.create_record(self.row.record_metadata("complete")))
         task = TSEditingTask(
-            inputs=(with_gaps,),
-            targets=(complete,),
+            inputs=[with_gaps],
+            targets=[complete],
             prompt=self.row.question_with_series_placeholders((self.with_gaps,)),
             metadata=self.row.task_metadata(),
         )
-        dataset.add_task(task=task)
+        dataset.add_task(task)
         return task
 
 

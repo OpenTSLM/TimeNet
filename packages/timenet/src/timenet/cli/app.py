@@ -1,35 +1,52 @@
 """The consumer command-line interface, the command-line mirror of the :class:`~timenet.client.TimeNet` SDK."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Generator, Iterable, Sequence
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
-import sys
 from typing import TypeVar
+import warnings
 
 from rich.console import Console
-from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn, TimeRemainingColumn, TransferSpeedColumn
 from rich.table import Table
 import typer
 
-from timenet.cache import CachedDataset, cached_datasets, clear_cache, human_bytes, raw_cache_size
+from timenet._hints import CliWording, Facts, Operation, explain, use_wording
+from timenet.cache import (
+    cache_size,
+    clear_cache,
+    clear_releases,
+    human_bytes,
+    releases_to_clear,
+    stored_releases_by_kind,
+)
+from timenet.cli.hints import local_registry_from_flag, registry_flag, sources_from_flags
+from timenet.cli.options import AUTO_BUILD, LOCAL_REGISTRY, REMOTE_REGISTRY
 from timenet.cli.runner import run_cli
-from timenet.cli.ui import console as ui
+from timenet.cli.ui import console as ui, progress_renderer
 from timenet.client import TimeNet
+from timenet.config import settings
+from timenet.errors import CatalogWarning, ConnectorCardWarning, TimeNetNotBuiltError
+from timenet.producer import _publish_from
+from timenet.progress import ProgressCallback, ProgressEvent, StepStarted
+from timenet.registry import LocalRegistry
+from timenet.registry.origin import OriginKind
 from timenet.types import DatasetMetadata, Domain, License, TaskType
 from timenet.types.access import access_requirements, effective_access
+from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.references import split_ref
 from timenet.types.tasks import TASKS
 
 
-app = typer.Typer(help="Browse a TimeNet registry and fetch datasets.", no_args_is_help=True)
+app = typer.Typer(help="Find, read, download and publish TimeNet datasets.", no_args_is_help=True)
 console = Console()
-
-_registry_option = typer.Option(None, "--registry", "-r", help="Registry URL or path (else $TIMENET_REGISTRY).")
 
 T = TypeVar("T")
 
 
 @app.callback()
 def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress status output.")) -> None:
-    """Browse a TimeNet registry and fetch datasets."""
+    """Find, read, download and publish TimeNet datasets."""
     ui.quiet = quiet
 
 
@@ -53,6 +70,22 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
     except (ValueError, KeyError) as exc:
         raise typer.BadParameter(f"invalid {flag} value ({exc}); choose from: {', '.join(choices)}") from exc
     return parsed or None
+
+
+def _client(local_registry: str | None, remote_registry: str | None, auto_build: bool | None) -> TimeNet:
+    """Create a client from CLI options.
+
+    A ``None`` flag uses the matching ``TIMENET_*`` environment variable or its default.
+
+    Args:
+        local_registry: The local registry path.
+        remote_registry: The remote registry URL or path.
+        auto_build: Whether to build missing datasets with installed connectors.
+
+    Returns:
+        The client.
+    """
+    return TimeNet(sources=sources_from_flags(local_registry_from_flag(local_registry), remote_registry, auto_build))
 
 
 def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
@@ -80,19 +113,41 @@ def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
     return table
 
 
+@contextmanager
+def _warning_lines() -> Generator[None]:
+    """Show each CatalogWarning and ConnectorCardWarning of the block as a warning line, without a file and a line."""
+    caught: list[warnings.WarningMessage] = []
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", CatalogWarning)
+            warnings.simplefilter("always", ConnectorCardWarning)
+            yield
+    finally:
+        for item in caught:
+            if issubclass(item.category, (CatalogWarning, ConnectorCardWarning)):
+                ui.warn(str(item.message))
+            else:
+                # Any other warning gets its usual output.
+                warnings.warn_explicit(item.message, item.category, item.filename, item.lineno)
+
+
 @app.command("list")
-def list_datasets(registry: str | None = _registry_option) -> None:
-    """List every dataset in the registry."""
-    rows = TimeNet(registry).list()
+def list_datasets(
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
+) -> None:
+    """List each dataset at its highest version across all sources."""
+    with use_wording(CliWording(local_registry, remote_registry)), _warning_lines():
+        rows = _client(local_registry, remote_registry, auto_build).list()
     if not rows:
-        typer.echo("No datasets in the registry.")
+        typer.echo("No datasets in the sources.")
         return
     console.print(_metadata_table(rows, "Datasets"))
 
 
 @app.command()
 def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
-    registry: str | None = _registry_option,
     query: list[str] = typer.Option([], "--query", "-q", help="Free-text terms."),
     domain: list[str] = typer.Option([], "--domain", help="Domain(s)."),
     task: list[str] = typer.Option([], "--task", help="Task type(s)."),
@@ -101,18 +156,25 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     dataset_id: list[str] = typer.Option([], "--id", help="Dataset id(s)."),
     tag: list[str] = typer.Option([], "--tag", help="Tag(s)."),
     limit: int = typer.Option(100, "--limit", min=0, help="Maximum results."),
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Search datasets by filter. Repeat a flag to pass several values."""
-    results = TimeNet(registry).search(
-        query=query or None,
-        domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
-        task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
-        license=_enum_list(license, License, "--license", [lic.value for lic in License]),
-        time_series_spec=spec or None,
-        dataset_id=dataset_id or None,
-        tag=tag or None,
-        limit=limit,
-    )
+    """Search datasets across all sources with filters.
+
+    Repeat a filter flag to pass several values.
+    """
+    with use_wording(CliWording(local_registry, remote_registry)), _warning_lines():
+        results = _client(local_registry, remote_registry, auto_build).search(
+            query=query or None,
+            domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
+            task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
+            license=_enum_list(license, License, "--license", [lic.value for lic in License]),
+            time_series_spec=spec or None,
+            dataset_id=dataset_id or None,
+            tag=tag or None,
+            limit=limit,
+        )
     if not results:
         typer.echo("No datasets match.")
         return
@@ -120,28 +182,29 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
 
 
 @app.command()
-def info(dataset_id: str, version: str | None = None, registry: str | None = _registry_option) -> None:
-    """Print a dataset's manifest summary: metadata, schema, and counts."""
-    manifest = TimeNet(registry).get(dataset_id, version)
+def info(
+    dataset_id: str,
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
+) -> None:
+    """Print a dataset's metadata, schema, and counts.
+
+    For an unbuilt release, show its metadata card and build command instead.
+    """
+    client = _client(local_registry, remote_registry, auto_build)
+    wording = CliWording(local_registry, remote_registry)
+    with use_wording(wording):
+        try:
+            manifest = client.get_manifest(dataset_id)
+        except TimeNetNotBuiltError as error:
+            console.print(_card_table(error.card, lineage=None))
+            # A plain line, so that a long path does not wrap.
+            build = wording.build_command(split_ref(dataset_id)[0])
+            typer.echo(f"The schema and the counts appear after a build: `{build}`.")
+            return
     counts = manifest.counts
-    table = Table(title=manifest.dataset_id, title_justify="left", title_style="bold", show_header=False)
-    table.add_column("Field", style="cyan")
-    table.add_column("Value")
-    table.add_row("version", str(manifest.metadata.dataset_version))
-    table.add_row("name", manifest.metadata.name)
-    table.add_row("license", str(manifest.metadata.license))
-    if manifest.metadata.license_url:
-        table.add_row("license_url", manifest.metadata.license_url)
-    # The strictest level of the card and its lineage applies, also when the card itself says open.
-    table.add_row("access", str(effective_access(manifest.metadata, manifest.lineage)))
-    # Each card whose access is not open, the dataset or an ancestor, names its own page.
-    requirements = access_requirements(manifest.metadata, manifest.lineage)
-    if requirements:
-        pages = (f"{item.release} ({item.access}): {item.access_url}" for item in requirements)
-        table.add_row("access_urls", "\n".join(pages))
-    if manifest.metadata.citation:
-        table.add_row("citation", manifest.metadata.citation)
-    table.add_row("domains", ", ".join(str(domain) for domain in manifest.metadata.domains) or "-")
+    table = _card_table(manifest.metadata, manifest.lineage)
     table.add_row("specs", ", ".join(spec.spec_type for spec in manifest.dataset_schema.time_series_specs) or "-")
     table.add_row("tasks", ", ".join(str(task.task_type) for task in manifest.dataset_schema.tasks) or "-")
     table.add_section()
@@ -161,107 +224,280 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
         console.print(tasks)
 
 
+def _card_table(card: DatasetMetadata, lineage: Sequence[ParentDatasetCard] | None) -> Table:
+    """Create a table of dataset metadata and access requirements.
+
+    Args:
+        card: The dataset card or manifest metadata.
+        lineage: Ancestor cards, or None for an unbuilt release.
+
+    Returns:
+        A table without a header.
+    """
+    table = Table(title=card.dataset_id, title_justify="left", title_style="bold", show_header=False)
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    table.add_row("version", str(card.dataset_version))
+    table.add_row("name", card.name)
+    table.add_row("license", str(card.license))
+    if card.license_url:
+        table.add_row("license_url", card.license_url)
+    # The strictest level of the card and its lineage applies, also when the card itself says open.
+    access = str(effective_access(card, lineage or ()))
+    if lineage is None and card.parents:
+        # Only a build reads the parent cards, so the level above is the level of this card alone.
+        parents = "its parent" if len(card.parents) == 1 else f"its {len(card.parents)} parents"
+        access += f" (this card only: the access of {parents} is known after a build)"
+    table.add_row("access", access)
+    # Each card whose access is not open, the dataset or an ancestor, names its own page.
+    requirements = access_requirements(card, lineage or ())
+    if requirements:
+        pages = (f"{item.release} ({item.access}): {item.access_url}" for item in requirements)
+        table.add_row("access_urls", "\n".join(pages))
+    if card.citation:
+        table.add_row("citation", card.citation)
+    table.add_row("domains", ", ".join(str(domain) for domain in card.domains) or "-")
+    return table
+
+
 @app.command()
 def download(
     dataset_id: str,
-    version: str | None = None,
-    registry: str | None = _registry_option,
-    storage: str | None = typer.Option(None, "--storage", help="Local storage dir (else $TIMENET_STORAGE)."),
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
+    force: bool = typer.Option(
+        False, "--force", help="Copy the release again, even if the local registry holds a complete copy."
+    ),
 ) -> None:
-    """Fetch a complete TimeF version to local storage. Prints its directory to stdout."""
-    client = TimeNet(registry, storage_path=storage)
-    manifest = client.get(dataset_id, version)
-    files = list(manifest.files.all_files())
-    total = sum(part.size for part in files)
-    ui.status("⬇️", f"Downloading '{dataset_id}' ({len(files)} files, {human_bytes(total)})…")
-    target = _download(client, dataset_id, version, total)
-    ui.success(f"Downloaded '{dataset_id}' ({target.name})")
+    """Copy a release and its data files into the local registry.
+
+    The command prints the release directory to stdout.
+    """
+    started: list[StepStarted] = []
+    local = local_registry_from_flag(local_registry)
+    client = TimeNet(sources=sources_from_flags(local, remote_registry, auto_build))
+    with use_wording(CliWording(local_registry, remote_registry)), progress_renderer() as show:
+        target = client.download(dataset_id, force=force, progress=partial(_keep_steps, started, show))
+    if not started:
+        # The local registry already held the release and its payload sources.
+        ui.success(f"Nothing to do: '{split_ref(dataset_id)[0]}' {target.name} is already in {local}")
     typer.echo(str(target))
 
 
-def _download(client: TimeNet, dataset_id: str, version: str | None, total: int) -> Path:
-    """Download a version, rendering a live progress bar on stderr when the terminal supports it.
+def _keep_steps(started: list[StepStarted], show: ProgressCallback | None, event: ProgressEvent) -> None:
+    """Keep each step event in ``started``, and pass every event on to ``show``.
 
     Args:
-        client: The client to download through.
-        dataset_id: The dataset id.
-        version: The version string, or ``None`` for the latest.
-        total: The total byte size of the version's files, for the bar's scale.
-
-    Returns:
-        The local version directory.
+        started: Receives the step events.
+        show: The callback that shows the events, or ``None`` for a quiet console.
+        event: The progress event.
     """
-    if ui.quiet or not sys.stderr.isatty():
-        return client.download(dataset_id, version)
-    progress = Progress(
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(bar_width=None),
-        "[progress.percentage]{task.percentage:>3.0f}%",
-        "•",
-        DownloadColumn(),
-        "•",
-        TransferSpeedColumn(),
-        "•",
-        TimeRemainingColumn(),
-        console=ui.rich,
-    )
-    with progress:
-        task = progress.add_task("downloading", total=total)
-        return client.download(dataset_id, version, progress_cb=lambda n: progress.advance(task, n))
+    if isinstance(event, StepStarted):
+        started.append(event)
+    if show is not None:
+        show(event)
 
 
-cache_app = typer.Typer(help="Inspect and clear the local cache.", no_args_is_help=True)
-app.add_typer(cache_app, name="cache")
+@app.command()
+def publish(
+    dataset_id: str,
+    dest: str = typer.Option(..., "--dest", metavar="URL|PATH", help="The registry to copy to: a URL or a local path."),
+    source: str | None = typer.Option(
+        None,
+        "--source",
+        metavar="URL|PATH",
+        help="The registry to copy from: a URL or a local path (default: the local registry).",
+    ),
+    local_registry: str | None = LOCAL_REGISTRY,
+) -> None:
+    """Copy a release and its payload sources to another registry.
+
+    Read from `--source` or the local registry, and print the release to stdout.
+    Skip identical releases and fail if the destination has different files for the same version.
+    """
+    local = local_registry_from_flag(local_registry)
+    target = registry_flag(dest, "--dest")
+    origin = local if source is None else registry_flag(source, "--source")
+    with use_wording(CliWording(local_registry)), progress_renderer() as progress:
+        # Only the local registry gets the hints that copy or build a release into it.
+        hinted = local if source is None else None
+        release = _publish_from(dataset_id, dest=target, origin=origin, local_registry=hinted, progress=progress)
+    ui.success(f"Published {release} to {dest}")
+    typer.echo(str(release))
+
+
+local_app = typer.Typer(help="Inspect and clear the local files of TimeNet.", no_args_is_help=True)
+app.add_typer(local_app, name="local")
+cache_app = typer.Typer(
+    help="The cache in $TIMENET_CACHE: raw source files of connectors and control databases of remote registries.",
+    no_args_is_help=True,
+)
+local_app.add_typer(cache_app, name="cache")
+downloads_app = typer.Typer(help="The releases in the local registry that came from a registry.", no_args_is_help=True)
+local_app.add_typer(downloads_app, name="downloads")
+builds_app = typer.Typer(
+    help="The releases in the local registry that a connector built. A release without a record counts as a build.",
+    no_args_is_help=True,
+)
+local_app.add_typer(builds_app, name="builds")
+
+_YES = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt.")
+# The words of each kind in the output: the noun, and the title of its list.
+_KIND_WORDS = {OriginKind.DOWNLOAD: ("download", "Downloads"), OriginKind.BUILD: ("build", "Builds")}
+
+
+@local_app.command("info")
+def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Show paths and sizes for the cache, downloads, and builds."""
+    local, cache_dir = local_registry_from_flag(local_registry), settings().cache_dir
+    with _local_hints(local, local_registry, Operation.READ):
+        by_kind = stored_releases_by_kind(local)
+    # Plain lines, so that a long path does not wrap.
+    typer.echo(_cache_line(cache_dir))
+    for kind, of_kind in by_kind.items():
+        title = _KIND_WORDS[kind][1]
+        size = human_bytes(sum(item.size() for item in of_kind))
+        typer.echo(f"{title} in {local.root}: {_count(len(of_kind), 'release')}, {size}")
+
+
+@local_app.command("clear")
+def local_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Delete the cache, every download and every build."""
+    local, cache_dir = local_registry_from_flag(local_registry), settings().cache_dir
+    with _local_hints(local, local_registry, Operation.CLEAR):
+        if not yes:
+            builds = _count(len(stored_releases_by_kind(local)[OriginKind.BUILD]), "build")
+            typer.confirm(
+                f"Delete the cache in {cache_dir} and every release in {local.root}, {builds} included?", abort=True
+            )
+        # The cache clear checks the folders before it deletes anything, so it runs first.
+        cache = clear_cache(cache_dir, local_registry=local)
+        releases = clear_releases(local, kinds=tuple(OriginKind))
+    _warn_unmarked(cache.kept)
+    _freed(releases.freed + cache.freed, len(releases.removed) + len(cache.removed))
 
 
 @cache_app.command("info")
 def cache_info() -> None:
-    """Show the datasets in the local cache with their sizes."""
-    datasets = cached_datasets()
-    if datasets:
-        console.print(_cache_table(datasets))
-    else:
-        console.print("No cached datasets.")
-    raw = raw_cache_size()
-    if raw:
-        console.print(f"Raw download cache: {human_bytes(raw)}")
-
-
-def _cache_table(datasets: list[CachedDataset]) -> Table:
-    """Build a table of cached dataset versions with a total-size footer.
-
-    Args:
-        datasets: The cached dataset versions to render.
-
-    Returns:
-        A populated :class:`rich.table.Table`.
-    """
-    table = Table(title="TimeNet cache", title_justify="left", title_style="bold")
-    table.add_column("Location")
-    table.add_column("Dataset", style="cyan")
-    table.add_column("Version")
-    table.add_column("Size", justify="right")
-    for dataset in datasets:
-        table.add_row(dataset.location, dataset.dataset_id, dataset.version, human_bytes(dataset.size_bytes))
-    table.add_section()
-    total = sum(dataset.size_bytes for dataset in datasets)
-    table.add_row("total", "", "", human_bytes(total), style="bold")
-    return table
+    """Show the path and size of the cache."""
+    typer.echo(_cache_line(settings().cache_dir))
 
 
 @cache_app.command("clear")
-def cache_clear(
-    all_: bool = typer.Option(False, "--all", help="Also remove the local registry (built datasets)."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
-) -> None:
-    """Delete cached data. Clears downloads by default. The ``--all`` flag also removes built datasets."""
+def cache_clear(yes: bool = _YES) -> None:
+    """Clear cached source files and control databases."""
+    cache_dir = settings().cache_dir
     if not yes:
-        what = "downloaded datasets and the raw cache"
-        if all_:
-            what += " and the local registry (built datasets)"
-        typer.confirm(f"Remove {what}?", abort=True)
-    freed, removed = clear_cache(include_registry=all_)
-    typer.echo(f"Freed {human_bytes(freed)} from {len(removed)} location(s).")
+        typer.confirm(f"Delete the raw source files and control databases in {cache_dir}?", abort=True)
+    cleared = clear_cache(cache_dir, local_registry=local_registry_from_flag(None))
+    _warn_unmarked(cleared.kept)
+    _freed(cleared.freed, len(cleared.removed))
+
+
+@downloads_app.command("info")
+def downloads_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Show each download in the local registry with its registry and size."""
+    _show_releases(OriginKind.DOWNLOAD, local_registry)
+
+
+@downloads_app.command("clear")
+def downloads_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Delete the downloads in the local registry, except those that a remaining release needs."""
+    _clear_releases(OriginKind.DOWNLOAD, yes, local_registry)
+
+
+@builds_app.command("info")
+def builds_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Show each build in the local registry with its connector package and size."""
+    _show_releases(OriginKind.BUILD, local_registry)
+
+
+@builds_app.command("clear")
+def builds_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Delete the builds in the local registry, except those that a remaining release needs."""
+    _clear_releases(OriginKind.BUILD, yes, local_registry)
+
+
+def _show_releases(kind: OriginKind, local_registry: str | None) -> None:
+    """Show releases of one kind in a table, or a message if none exist."""
+    local = local_registry_from_flag(local_registry)
+    with _local_hints(local, local_registry, Operation.READ):
+        releases = stored_releases_by_kind(local)[kind]
+    noun, title = _KIND_WORDS[kind]
+    if not releases:
+        typer.echo(f"No {noun}s in {local.root}.")
+        return
+    table = Table(title=f"{title} in {local.root}", title_justify="left", title_style="bold")
+    table.add_column("Dataset", style="cyan")
+    table.add_column("Version")
+    table.add_column("Source", overflow="fold")
+    table.add_column("Size", justify="right")
+    sizes = [item.size() for item in releases]  # each release folder is measured once
+    for item, size in zip(releases, sizes, strict=True):
+        # A build without a record has no source.
+        source = "-" if item.origin is None else item.origin.source
+        table.add_row(item.release.dataset_id, str(item.release.version), source, human_bytes(size))
+    table.add_section()
+    table.add_row("total", "", "", human_bytes(sum(sizes)), style="bold")
+    console.print(table)
+
+
+def _clear_releases(kind: OriginKind, yes: bool, local_registry: str | None) -> None:
+    """Delete the releases of one kind after a prompt that counts them, and name each release that stays."""
+    local = local_registry_from_flag(local_registry)
+    with _local_hints(local, local_registry, Operation.CLEAR):
+        if not yes:
+            releases = releases_to_clear(local, kinds=[kind]).releases
+            typer.confirm(f"Delete {_count(len(releases), _KIND_WORDS[kind][0])} from {local.root}?", abort=True)
+        cleared = clear_releases(local, kinds=[kind])
+    for item in cleared.kept:
+        ui.warn(f"Kept {item.release}: {item.needed_by} needs it.")
+    _freed(cleared.freed, len(cleared.removed))
+
+
+@contextmanager
+def _local_hints(local: LocalRegistry, local_registry: str | None, request: Operation) -> Generator[None]:
+    """Give a TimeNet error of the block the CLI hint of a command that works on the local registry alone.
+
+    Args:
+        local: The local registry.
+        local_registry: The value of ``--local-registry``, or ``None``.
+        request: What the command does.
+
+    Yields:
+        Nothing.
+    """
+    with use_wording(CliWording(local_registry)), explain(Facts([local], local, request=request)):
+        yield
+
+
+def _cache_line(cache_dir: Path) -> str:
+    """Return the path and the size of the cache."""
+    return f"Cache {cache_dir}: {human_bytes(cache_size(cache_dir))}"
+
+
+def _warn_unmarked(folders: list[Path]) -> None:
+    """Warn about cache folders kept because they lack TimeNet's marker."""
+    for folder in folders:
+        ui.warn(
+            f"Kept {folder}: it has no CACHEDIR.TAG from TimeNet, so TimeNet did not create it. Delete it "
+            "yourself if you do not need it."
+        )
+
+
+def _freed(freed: int, locations: int) -> None:
+    """Print the bytes that a clear freed, and from how many locations."""
+    typer.echo(f"Freed {human_bytes(freed)} from {locations} location(s).")
+
+
+def _count(number: int, noun: str) -> str:
+    """Format a count with a noun, adding ``s`` unless the count is 1.
+
+    Returns:
+        The count and noun, such as ``"1 build"`` or ``"2 builds"``.
+    """
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
 
 
 def main() -> None:

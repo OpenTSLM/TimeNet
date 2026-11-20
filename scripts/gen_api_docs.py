@@ -40,6 +40,7 @@ PACKAGE_ROOTS = {
 EXCLUDE = {
     "timenet.cli",  # console-script plumbing (Typer app), not a code API
     "timenet.cache",  # cache-inspection helper
+    "timenet.coordinator",  # internal planner, not a user API
     "timenet.torch",  # optional torch adapter (covered in the guide)
     "timenet.schemas",  # packaged JSON-Schema data, not code
     "timenet.testing",  # test-support helpers shipped in src
@@ -57,17 +58,15 @@ _RST_ROLE = re.compile(r":[a-z:]+:`~?([^`]+)`")
 
 @dataclass(frozen=True)
 class ApiModule:
-    """One module to document.
+    """A module's API page settings.
 
     Attributes:
-        dotted: Importable dotted path, e.g. ``timenet.registry``.
-        slug: Output filename stem under ``docs/api/`` (the last path component).
-        summary: Cleaned first line of the module docstring, or ``""``.
-        show_submodules: Render submodules recursively (packages without ``__all__``).
+        dotted: The import path, such as ``timenet.registry``. It is also the page name under ``docs/api/``.
+        summary: The cleaned first line of the module docstring, or ``""``.
+        show_submodules: Whether to include submodules recursively. True for a package without ``__all__``.
     """
 
     dotted: str
-    slug: str
     summary: str
     show_submodules: bool
 
@@ -152,9 +151,9 @@ def _discover(package: str, root: Path) -> list[ApiModule]:
             # A package that builds a public API via __all__ is documented at the
             # package level; one that doesn't keeps its surface in submodules, so
             # render them recursively instead of an empty page.
-            modules.append(ApiModule(dotted, name, _module_summary(init_file), not _has_dunder_all(init_file)))
+            modules.append(ApiModule(dotted, _module_summary(init_file), not _has_dunder_all(init_file)))
         else:
-            modules.append(ApiModule(dotted, name, _module_summary(child), False))
+            modules.append(ApiModule(dotted, _module_summary(child), False))
     return modules
 
 
@@ -168,7 +167,7 @@ def _write_stub(mod: ApiModule) -> None:
     lines = ["---", f'description: "{_yaml_escape(desc)}"', "---", "", f"::: {mod.dotted}"]
     if mod.show_submodules:
         lines += ["    options:", "      show_submodules: true"]
-    (OUTPUT_DIR / f"{mod.slug}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (OUTPUT_DIR / f"{mod.dotted}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _yaml_escape(text: str) -> str:
@@ -206,7 +205,7 @@ def _write_index(by_package: dict[str, list[ApiModule]]) -> None:
     for package, mods in by_package.items():
         parts.append(f"## `{package}`\n")
         for mod in mods:
-            bullet = f"- [`{mod.dotted}`]({mod.slug}.md)"
+            bullet = f"- [`{mod.dotted}`]({mod.dotted}.md)"
             if mod.summary:
                 bullet += f" — {mod.summary}"
             parts.append(bullet)
@@ -225,7 +224,7 @@ def _nav_line(by_package: dict[str, list[ApiModule]]) -> str:
     """
     items = ['{ "Overview" = "api/index.md" }']
     for mods in by_package.values():
-        items += [f'{{ "{mod.dotted}" = "api/{mod.slug}.md" }}' for mod in mods]
+        items += [f'{{ "{mod.dotted}" = "api/{mod.dotted}.md" }}' for mod in mods]
     return '{ "API Reference" = [' + ", ".join(items) + "] },"
 
 
@@ -256,25 +255,19 @@ def _rewrite_nav(nav_line: str) -> None:
 
 
 def main() -> None:
-    """Generate the API pages and landing page, and rewrite the nav region.
+    """Generate the API reference pages and landing page, and rewrite the nav region of ``zensical.toml``.
 
-    Raises:
-        SystemExit: On a slug collision or a missing nav marker region.
+    It also deletes each page in ``docs/api/`` that no current module maps to.
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     by_package = {pkg: _discover(pkg, root) for pkg, root in PACKAGE_ROOTS.items()}
     all_mods = [mod for mods in by_package.values() for mod in mods]
-
-    # "index" is reserved for the landing page written by _write_index below.
-    slugs: dict[str, str] = {"index": "(API index landing page)"}
-    for mod in all_mods:
-        if mod.slug in slugs:
-            raise SystemExit(f"slug collision: {mod.dotted} and {slugs[mod.slug]} both map to {mod.slug}.md")
-        slugs[mod.slug] = mod.dotted
+    # Each page takes the full dotted path of its module, so two pages never share a name.
+    pages = {mod.dotted for mod in all_mods}
 
     # Drop stale stubs left by a previous run with a different module set.
     for stale in OUTPUT_DIR.glob("*.md"):
-        if stale.name != "index.md" and stale.stem not in slugs:
+        if stale.name != "index.md" and stale.stem not in pages:
             stale.unlink()
 
     for mod in all_mods:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Container, Hashable, Iterable, Iterator
+from collections.abc import Container, Hashable, Iterable, Iterator, Mapping
 from itertools import count, islice
 import json
 from pathlib import Path
@@ -39,7 +39,8 @@ from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
     ArrayHandle,
-    LabelSetRegistry,
+    ClassificationTask,
+    LabelSet,
     ObjectKind,
     Task,
     TSCorrespondenceTask,
@@ -207,6 +208,64 @@ class _HierarchyBatches:
         self.signals.flush()
 
 
+class _LabelSetRows:
+    """The ``label_sets`` rows of one write, one row for each distinct label set.
+
+    Equal sets (see :meth:`LabelSet._content_key`) get one id, in the order that tasks first use them.
+    The row keeps the labels and the annotations of the first set. Each set object is checked once per write.
+    """
+
+    def __init__(self, ids: Iterator[int]) -> None:
+        """Start with no label sets.
+
+        Args:
+            ids: The storage ids for new label sets.
+        """
+        self._new_ids = ids
+        self._sets: dict[Hashable, tuple[int, dict[str, object], tuple[Annotation, ...]]] = {}
+        self._by_object: dict[int, tuple[LabelSet, int]] = {}
+
+    def register(self, label_set: LabelSet) -> int:
+        """Add a label set.
+
+        Returns:
+            The stored id of the set.
+
+        Raises:
+            TimeFValidationError: If the set is not valid. A set can change after a task gets it.
+        """  # ruff: ignore[docstring-extraneous-exception] - _validate raises it
+        known = self._by_object.get(id(label_set))
+        if known is not None:
+            return known[1]
+        label_set._validate()
+        key = label_set._content_key()
+        stored = self._sets.get(key)
+        if stored is None:
+            label_set_id = next(self._new_ids)
+            row: dict[str, object] = {
+                "label_set_id": label_set_id,
+                "labels": [label.model_dump() for label in label_set.labels],
+                "multi_label": label_set.multi_label,
+                "ordered": label_set.ordered,
+            }
+            stored = self._sets[key] = (label_set_id, row, label_set.annotations)
+        self._by_object[id(label_set)] = (label_set, stored[0])
+        return stored[0]
+
+    def write(
+        self, connection: duckdb.DuckDBPyConnection, annotations: list[tuple[ObjectKind, int | None, Annotation]]
+    ) -> None:
+        """Insert the rows and queue the annotations of each set.
+
+        Args:
+            connection: The open write transaction.
+            annotations: The annotation triples that the writer collects. This method adds to them.
+        """
+        insert_rows(connection, TABLES["label_sets"], [row for _, row, _ in self._sets.values()])
+        for label_set_id, _, occurrences in self._sets.values():
+            annotations.extend((ObjectKind.LABEL_SET, label_set_id, annotation) for annotation in occurrences)
+
+
 class DuckDBControlWriter:
     """Serialize the relational part of one immutable TimeF version."""
 
@@ -225,6 +284,7 @@ class DuckDBControlWriter:
         if self.path.exists():
             raise FileExistsError(f"control database already exists at {self.path}")
         self._storage_ids: defaultdict[str, Iterator[int]] = defaultdict(lambda: count(1))
+        self._null_counts: Mapping[int, int] = {}
 
     def write_hierarchy(
         self,
@@ -232,6 +292,7 @@ class DuckDBControlWriter:
         placements: dict[tuple[int, int], ChunkPlacement] | None = None,
         *,
         tasks: Iterable[Task] | None = None,
+        null_counts: Mapping[int, int] | None = None,
     ) -> dict[str, int]:
         """Write records, sources, signals, axes, and their annotations atomically.
 
@@ -239,6 +300,8 @@ class DuckDBControlWriter:
             dataset: The complete in-memory hierarchy.
             placements: Values-plane chunks keyed by ``(signal_id, chunk_index)``.
             tasks: A previously validated task stream, or ``None`` to use the dataset's tasks.
+            null_counts: The number of missing timesteps for each signal id.
+                Signals absent from this mapping use their own ``null_count``.
 
         Returns:
             Counts keyed by concrete task type.
@@ -249,6 +312,7 @@ class DuckDBControlWriter:
                 match its axis offsets or value chunks.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._null_counts = {} if null_counts is None else null_counts
         try:
             with connect_control(self.path) as connection:
                 create_control_schema(connection)
@@ -488,14 +552,13 @@ class DuckDBControlWriter:
             TimeFValidationError: If a task refers to a Record or Signal outside the dataset.
                 Also if the dataset registered a different Record or Signal object under that id.
                 Also if two tasks share an id, or a task derives from itself or a task outside the dataset.
-                Also if two tasks use different label sets with the same name.
         """
         # Weak: if no other task names a streamed task, Python can free it after the writer writes it.
         written: WeakValueDictionary[int, Task] = WeakValueDictionary()
         dependencies: list[tuple[int, int, Task]] = []
         annotation_refs: list[_AnnotationRef] = []
         task_counts: dict[str, int] = {}
-        label_sets = LabelSetRegistry()
+        label_sets = _LabelSetRows(self._storage_ids["label_set"])
         index = _TaskValidationIndex(dataset)
         for batch in _task_batches(tasks_source):
             task_rows: list[dict[str, object]] = []
@@ -506,7 +569,6 @@ class DuckDBControlWriter:
                 TimeFDataset._check_signal_refs(task, index)
                 # A task can change after add_task, so check its labels and its label set again.
                 task.check_targets()
-                task.register_label_set(label_sets)
                 task_id = task.id
                 written[task_id] = task
                 task_type = str(task.task_type)
@@ -521,6 +583,9 @@ class DuckDBControlWriter:
                         **self._scope_columns(task, signal_ids),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
+                        "label_set_id": (
+                            label_sets.register(task.label_set) if isinstance(task, ClassificationTask) else None
+                        ),
                         "rationale": self._pack(ObjectKind.TASK, task_id, PackedField.RATIONALE, task.rationale),
                         "metadata": _json(task.metadata),
                     }
@@ -556,8 +621,8 @@ class DuckDBControlWriter:
             insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
-        # Tasks refer to a label set by its name, so the sets can follow the tasks that use them.
-        insert_rows(connection, TABLES["label_sets"], [label_set.model_dump() for label_set in label_sets])
+        # Tasks refer to a label set by its id, so the sets can follow the tasks that use them.
+        label_sets.write(connection, annotations)
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()
@@ -746,8 +811,10 @@ class DuckDBControlWriter:
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
                 "dimension_names": list(spec.dimension_names),
-                "nullable": spec.nullable,
+                "missing_reason": None if spec.missing is None else spec.missing.reason.value,
+                "missing_description": None if spec.missing is None else spec.missing.description,
                 "n_values": signal.n_values,
+                "null_count": self._null_counts.get(signal.id, signal.null_count),
                 "metadata": _json(signal.metadata),
                 "modality": spec.modality.value,
             }

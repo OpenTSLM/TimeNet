@@ -1,3 +1,6 @@
+import importlib.metadata
+import json
+import sys
 from typing import Any, TypeVar, cast
 
 from hypothesis import given, strategies as st
@@ -6,7 +9,20 @@ import pint
 from pydantic import BaseModel, ValidationError
 import pytest
 
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
+from timenet.errors import FormatVersionSubject, TimeFFormatVersionError, TimeNetManifestError
+from timenet.manifest import (
+    TIMEF_FORMAT_VERSION,
+    BuildEnvironment,
+    FilePart,
+    GitSource,
+    Manifest,
+    ManifestCounts,
+    ManifestFiles,
+    PayloadSource,
+    manifest as manifest_module,
+    parse_manifest,
+)
+from timenet.manifest.manifest import installed_packages
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -18,6 +34,8 @@ from timenet.types import (
     Domain,
     InputModality,
     License,
+    MissingReason,
+    MissingValues,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -29,6 +47,11 @@ from timenet.values_backends import ValuesBackend
 
 
 _CONTROL = (FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=5),)
+_BUILD_ENV = BuildEnvironment(
+    python="3.13.1",
+    packages={"timenet": "0.1.0"},
+    git={"timenet": GitSource(sha="a" * 40, contains_local_changes=False)},
+)
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -87,7 +110,8 @@ def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
             ),
         ),
         values_backend=cast("ValuesBackend", values_backend),
-        timef_format_version=1,
+        build_env=_BUILD_ENV,
+        timef_format_version=TIMEF_FORMAT_VERSION,
     )
 
 
@@ -100,7 +124,7 @@ def test_files_all_parts_concatenates_in_order():
 
 
 def test_format_version():
-    assert _manifest().timef_format_version == 1
+    assert _manifest().timef_format_version == TIMEF_FORMAT_VERSION
 
 
 def test_unknown_spec_unit_is_null_in_manifest():
@@ -145,50 +169,42 @@ def test_manifest_rejects_unknown_domain():
         Manifest.model_validate(payload)
 
 
-def test_nullable_schema_roundtrips_at_format_version_1():
-    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
-    # that supports nullability, including the parallel validity arrays in Zarr.
+def test_missing_values_round_trip_at_the_current_format_version():
+    # Schemas with missing values keep the current format version. Reading such artifacts still requires
+    # an SDK that supports missing values, including the parallel validity arrays in Zarr.
     base = _replace(
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     )
-    spec = _replace(base.dataset_schema.time_series_specs[0], nullable=True)
+    missing = MissingValues(reason=MissingReason.SENSOR_GAP, description="The sensor lost contact.")
+    spec = _replace(base.dataset_schema.time_series_specs[0], missing=missing)
     manifest = Manifest(
         dataset_id=base.dataset_id,
         metadata=base.metadata,
         files=base.files,
         dataset_schema=_replace(base.dataset_schema, time_series_specs=(spec,)),
-        timef_format_version=1,
+        build_env=_BUILD_ENV,
+        timef_format_version=TIMEF_FORMAT_VERSION,
     )
-    assert manifest.timef_format_version == 1
-    assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
+    assert manifest.timef_format_version == TIMEF_FORMAT_VERSION
+    stored = manifest.to_dict()["schema"]["time_series_specs"][0]
+    assert stored["missing"] == {"reason": "sensor_gap", "description": "The sensor lost contact."}
+    assert "nullable" not in stored
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
 
 
-def test_missing_nullable_defaults_to_false():
+def test_a_spec_without_missing_allows_no_missing_timestep():
     data = _replace(
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     ).to_dict()
-    data["schema"]["time_series_specs"][0].pop("nullable", None)
+    data["schema"]["time_series_specs"][0].pop("missing")
     restored = Manifest.model_validate(data)
-    assert restored.timef_format_version == 1
+    assert restored.timef_format_version == TIMEF_FORMAT_VERSION
+    assert restored.dataset_schema.time_series_specs[0].missing is None
     assert restored.dataset_schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
-
-
-@pytest.mark.parametrize("nullable", [1, None, "true"])
-def test_manifest_rejects_nonboolean_nullable(nullable):
-    data = _replace(
-        _manifest(),
-        files=ManifestFiles(control=_CONTROL),
-    ).to_dict()
-    data["schema"]["time_series_specs"][0]["nullable"] = nullable
-    with pytest.raises(ValidationError, match="nullable"):
-        Manifest.model_validate(data)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(data, MANIFEST_SCHEMA)
 
 
 @pytest.mark.parametrize("version", [None, True, 1.0])
@@ -263,7 +279,7 @@ def test_model_validate_json_exposes_pydantic_json_error():
 
 def test_to_dict_shape():
     d = _manifest().to_dict()
-    assert d["timef_format_version"] == 1
+    assert d["timef_format_version"] == TIMEF_FORMAT_VERSION
     assert d["dataset_id"] == "demo/ecg"
     assert d["metadata"]["dataset_version"] == "1.2.0"
     assert d["metadata"]["license"] == "CC-BY-4.0"
@@ -300,12 +316,69 @@ def test_unsupported_format_version_rejected():
         Manifest.model_validate(d)
 
 
+@pytest.mark.parametrize(
+    "change",
+    [{}, {"new_block": {}}, {"values_backend": "lance"}, {"metadata": {"new_card_field": "x"}}],
+    ids=["version only", "new field", "new enum value", "new nested field"],
+)
+def test_a_manifest_version_error_names_both_versions(change):
+    data = _manifest().to_dict()
+    for key, value in change.items():
+        data[key] = data[key] | value if isinstance(data.get(key), dict) else value
+    data["timef_format_version"] = 3
+
+    with pytest.raises(TimeFFormatVersionError) as caught:
+        parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
+
+    # A newer format almost always adds fields too, and the version must win over them.
+    assert (
+        str(caught.value)
+        == "the manifest of org/a@1.0.0 uses TimeF format version 3, but the newest that this timenet reads is 2."
+    )
+    assert (caught.value.subject, caught.value.found, caught.value.newest_readable) == (
+        FormatVersionSubject.TIMEF_FORMAT,
+        3,
+        2,
+    )
+
+
+@pytest.mark.parametrize("change", ["version only", "fields differ"])
+def test_a_manifest_of_an_older_format_names_the_oldest_version_that_is_read(change):
+    data = _manifest().to_dict()
+    if change == "fields differ":
+        # An older format can lack fields that are required now, and have fields that are gone.
+        del data["build_env"]
+        data["old_block"] = {}
+    data["timef_format_version"] = 1
+
+    with pytest.raises(TimeFFormatVersionError) as caught:
+        parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
+
+    # An older format usually lacks fields too, and the version must win over them.
+    assert str(caught.value) == (
+        "the manifest of org/a@1.0.0 uses TimeF format version 1, but the oldest that this timenet reads is 2."
+    )
+
+
+@pytest.mark.parametrize("version", [0, "3", True])
+def test_an_invalid_manifest_version_reports_as_not_valid(version):
+    data = _manifest().to_dict()
+    data["timef_format_version"] = version
+
+    with pytest.raises(TimeNetManifestError) as caught:
+        parse_manifest(json.dumps(data), "the manifest of org/a@1.0.0")
+
+    assert not isinstance(caught.value, TimeFFormatVersionError)
+    assert caught.value.detail.startswith("timef_format_version: ")
+
+
 def test_direct_construction_validates_format_version():
     with pytest.raises(ValidationError):
         Manifest(
             dataset_id="x",
             metadata=_manifest().metadata,
             files=_manifest().files,
+            build_env=_BUILD_ENV,
             timef_format_version=99,
         )
 
@@ -316,11 +389,12 @@ def test_dataset_id_must_match_metadata():
             dataset_id="other/dataset",
             metadata=_manifest().metadata,
             files=_manifest().files,
-            timef_format_version=1,
+            build_env=_BUILD_ENV,
+            timef_format_version=TIMEF_FORMAT_VERSION,
         )
 
 
-@pytest.mark.parametrize("missing", ["timef_format_version", "dataset_id", "metadata", "files"])
+@pytest.mark.parametrize("missing", ["timef_format_version", "dataset_id", "metadata", "files", "build_env"])
 def test_model_validate_requires_core_blocks(missing):
     d = _manifest().to_dict()
     del d[missing]
@@ -464,7 +538,8 @@ def test_codec_roundtrip_property(version, records, task_counts):
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
         files=ManifestFiles(control=_CONTROL),
-        timef_format_version=1,
+        build_env=_BUILD_ENV,
+        timef_format_version=TIMEF_FORMAT_VERSION,
     )
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
 
@@ -490,19 +565,52 @@ def test_bad_dict_block_names_itself(block):
         Manifest.model_validate(d)
 
 
-def test_build_env_defaults_to_empty():
-    assert _manifest().build_env == {}
+def test_build_env_captures_the_running_python_and_the_installed_packages():
+    build_env = BuildEnvironment.capture(git=_BUILD_ENV.git)
+    assert build_env.python == ".".join(str(part) for part in sys.version_info[:3])
+    assert build_env.packages["timenet"]
+    assert list(build_env.packages) == sorted(build_env.packages)
+    assert build_env.git == _BUILD_ENV.git
+
+
+# installed_packages is the function imported above. The autouse fixture in packages/conftest.py
+# replaces only the module attribute, so these tests run the real code.
+def test_installed_packages_lists_each_named_distribution_sorted_by_name(monkeypatch):
+    class _Dist:
+        def __init__(self, name, version):
+            self.metadata = {"Name": name, "Version": version}
+
+    dists = [_Dist("zarr", "3.0.0"), _Dist(None, "9.9.9"), _Dist("attrs", "25.1.0")]
+    monkeypatch.setattr(manifest_module, "distributions", lambda: dists)
+    assert list(installed_packages().items()) == [("attrs", "25.1.0"), ("zarr", "3.0.0")]
+
+
+def test_installed_packages_reports_the_installed_timenet_version():
+    assert installed_packages()["timenet"] == importlib.metadata.version("timenet")
 
 
 def test_build_env_round_trips():
-    m = _replace(_manifest(), build_env={"python": "3.11.9", "packages": {"timenet": "0.1.0"}})
+    git = {"timenet": {"sha": "a" * 40, "contains_local_changes": False}}
+    m = _replace(_manifest(), build_env={"python": "3.11.9", "packages": {"timenet": "0.1.0"}, "git": git})
     assert Manifest.model_validate(m.to_dict()).build_env == m.build_env
 
 
 @pytest.mark.parametrize(
     "change",
     [
-        {"build_env": {"python": 313}},
+        {"build_env": {**_BUILD_ENV.model_dump(), "python": 313}},
+        {
+            "build_env": {
+                **_BUILD_ENV.model_dump(),
+                "git": {"timenet": {"sha": "4818e37f", "contains_local_changes": False}},
+            }
+        },
+        {
+            "build_env": {
+                **_BUILD_ENV.model_dump(),
+                "git": {"timenet": {"sha": "a" * 40, "contains_local_changes": "no"}},
+            }
+        },
         {"value_encoding": {"ecg_lead": "zip"}},
     ],
 )
@@ -512,17 +620,16 @@ def test_direct_manifest_rejects_invalid_provenance_blocks(change):
 
 
 def test_to_dict_copies_build_env():
-    build_env = {"python": "3.11.9", "packages": {"timenet": "0.1.0"}}
-    d = _replace(_manifest(), build_env=build_env).to_dict()
-    d["build_env"]["python"] = "2.7.0"
-    assert build_env["python"] == "3.11.9"
+    manifest = _manifest()
+    manifest.to_dict()["build_env"]["packages"]["timenet"] = "2.7.0"
+    assert manifest.build_env.packages["timenet"] == "0.1.0"
 
 
 @pytest.mark.parametrize("method", ["to_dict", "to_json"])
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda manifest: manifest.build_env.update(python=313),
+        lambda manifest: manifest.build_env.packages.update(timenet=313),
         lambda manifest: manifest.counts.tasks.update(classification=-1),
     ],
 )

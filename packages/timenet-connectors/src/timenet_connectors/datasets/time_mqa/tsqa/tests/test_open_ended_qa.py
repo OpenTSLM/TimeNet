@@ -46,7 +46,7 @@ _ROWS = [
 
 
 def test_each_question_becomes_an_answer_task_with_a_record_per_printed_series(write_part):
-    tasks = TimeMqaConnector().convert([write_part(ReleasePart.OPEN_ENDED_QA, _ROWS)]).tasks_of(AnswerTask)
+    tasks = TimeMqaConnector().convert(write_part(ReleasePart.OPEN_ENDED_QA, _ROWS)).tasks_of(AnswerTask)
 
     anomaly, choices, no_series = tasks
     (record,) = anomaly.inputs

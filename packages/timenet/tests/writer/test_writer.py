@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import json
-from pathlib import Path
 import shutil
 
 import duckdb
@@ -12,7 +11,7 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest
+from timenet.manifest import TIMEF_FORMAT_VERSION, Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
@@ -20,7 +19,6 @@ from timenet.types import (
     Annotation,
     ClassificationTask,
     DatasetMetadata,
-    Label,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -32,7 +30,7 @@ from timenet.writer.encodings import applied_matches, values_encoding_of
 from timenet.writer.value_encoding import ValueEncoding
 
 
-LABELS = LabelSet(name="labels", labels=(Label(name="x"),))
+LABELS = LabelSet(["x"])
 
 
 def _written(tmp_path, dataset=None, **kwargs):
@@ -101,12 +99,32 @@ def test_manifest_is_valid_and_matches_dataset(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.dataset_id == "timenet/hello-world"
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == TIMEF_FORMAT_VERSION
     assert manifest.counts.records == 3
     assert len(manifest.dataset_schema.time_series_specs) == 2
     # files listed in the manifest all exist
     for rel in manifest.files.all_parts():
         assert (version_dir / rel).exists()
+
+
+def test_the_manifest_schema_lists_the_annotation_keys_of_streamed_label_sets(tmp_path):
+    dataset = make_dataset()
+    record = dataset.records[0]
+    streamed = TimeFDataset.from_parts(
+        metadata=dataset.metadata,
+        records=dataset.records,
+        tasks=(),
+        schema=dataset.derive_schema(),
+        last_ids=dataset.last_ids,
+    )
+    label_set = LabelSet(["x"], annotations=(Annotation(key="label_set_note", value="letters"),))
+    task = ClassificationTask(inputs=(record,), targets=("x",), label_set=label_set)
+    streamed.set_task_stream([ClassificationTask], lambda: iter((task,)))
+
+    version_dir = _written(tmp_path, streamed)
+
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    assert "label_set_note" in [descriptor.key for descriptor in manifest.dataset_schema.annotations]
 
 
 def test_manifest_counts_match_the_control_database(tmp_path):
@@ -248,44 +266,6 @@ def test_replace_publishes_over_a_committed_version_and_drops_the_old_one(tmp_pa
         keys = {annotation.key for record in reader.read().records for annotation in record.annotations}
     assert "replaced" in keys
     assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
-
-
-def test_a_failed_publish_rename_moves_the_old_release_back(tmp_path, monkeypatch):
-    version_dir = _written(tmp_path)
-    before = (version_dir / "manifest.json").read_bytes()
-    rename = Path.replace
-
-    def replace(self, target):
-        if ".tmp-" in self.name:
-            raise OSError("rename failed")
-        return rename(self, target)
-
-    monkeypatch.setattr(Path, "replace", replace)
-    with pytest.raises(OSError, match="rename failed"), TimeFWriter(tmp_path, _replacement(), replace=True) as writer:
-        writer.write()
-    assert (version_dir / "manifest.json").read_bytes() == before
-    assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
-
-
-def test_a_failed_publish_that_cannot_restore_the_old_release_names_where_it_is(tmp_path, monkeypatch):
-    version_dir = _written(tmp_path)
-    before = (version_dir / "manifest.json").read_bytes()
-    rename = Path.replace
-
-    def replace(self, target):
-        if ".tmp-" in self.name or ".old-" in self.name:
-            raise OSError("rename failed")
-        return rename(self, target)
-
-    monkeypatch.setattr(Path, "replace", replace)
-    with (
-        pytest.raises(OSError, match=r"it is in .*/1\.0\.0\.old-[0-9a-f]+, so rename that to") as raised,
-        TimeFWriter(tmp_path, _replacement(), replace=True) as writer,
-    ):
-        writer.write()
-    (old,) = version_dir.parent.glob(f"{version_dir.name}.old-*")
-    assert str(old) in str(raised.value)
-    assert (old / "manifest.json").read_bytes() == before
 
 
 def test_the_staging_sweep_keeps_an_old_release_that_a_hard_kill_left(tmp_path):

@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# The charts that ARFBench released for its 750 questions. The metric series and the details of the
+# questions are in `datadog/arfbench`; see the comment in its card.
+#
+# A chart is one record with the PNG as an RGBA image signal. There is one chart per metric and one
+# per metric pair that a question cites. The charts are tensors, so the dataset uses the Zarr
+# values backend.
+#
+# Each question becomes one test task over its charts. For a metric pair, the combined chart comes
+# first, then the chart of each metric. A task carries the row of the question as `question_index`
+# in its metadata, the same as the series task in `datadog/arfbench`, so a consumer can pair them.
+yaml_schema_version: 1
+dataset_id: datadog/arfbench-charts
+dataset_version: 1.0.0
+name: ARFBench charts
+description: >-
+  The released charts of ARFBench: 750 multiple-choice questions about anomalies in 142 metrics
+  from 63 Datadog incidents, asked over the charts. The series are in datadog/arfbench.
+license: Apache-2.0
+source_url: https://huggingface.co/datasets/Datadog/ARFBench
+citation: >-
+  Xie, S., Cohen, B., Goswami, M., Shen, J., Khwaja, E., Liu, C., Asker, D., Abou-Amal, O., and
+  Talwalkar, A. (2026). ARFBench: Benchmarking Time Series Question Answering Ability for Software
+  Incident Response. arXiv:2604.21199. https://arxiv.org/abs/2604.21199
+access: open
+domains:
+  - observability
+tags:
+  - observability
+  - anomaly-detection
+  - qa
+  - multiple-choice
+  - datadog
+  - huggingface

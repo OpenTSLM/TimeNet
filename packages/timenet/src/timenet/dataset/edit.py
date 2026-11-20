@@ -13,7 +13,7 @@ from copy import copy, deepcopy
 from dataclasses import replace
 from pathlib import Path
 
-from timenet.dataset.composition import _copy_annotation, _fits
+from timenet.dataset.composition import _fits
 from timenet.dataset.dataset import TimeFDataset
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
@@ -24,6 +24,7 @@ from timenet.reader import TimeFReader
 from timenet.registry._paths import release_dir, split_release_dir
 from timenet.registry.dependencies import open_local_version
 from timenet.types import Annotation, DatasetSchema, EntityId, Task, TimeInterval, TimeSpan, Version
+from timenet.types.annotations import _copy_annotation
 from timenet.types.object_kind import ObjectKind
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
@@ -242,7 +243,7 @@ def _reachability(
 def _copied(annotations: tuple[Annotation, ...], copies: dict[int, Annotation]) -> tuple[Annotation, ...]:
     """Return a copy of each annotation, and keep each copy in ``copies``.
 
-    The copies have their own value and metadata (see ``composition._copy_annotation``). An
+    The copies have their own value and metadata (see ``annotations._copy_annotation``). An
     annotation that ``copies`` already holds keeps that copy, so an annotation object that two owners
     share gets one copy.
 
@@ -482,9 +483,9 @@ def _rebuild_tasks(
             inputs=tuple(record for record in task.inputs if record.id in records_by_id),
             input_annotations=tuple(copies[id(annotation)] for annotation in input_annotations),
             target_annotations=tuple(copies[id(annotation)] for annotation in task.target_annotations),
-            annotations=_copied(task.annotations, copies),
             from_tasks=(),
         )
+        kept.annotations = _copied(task.annotations, copies)
         copy = kept.with_references(records_by_id, signals_by_id)
         copy._id = task.id
         rebuilt[task.id] = copy
@@ -509,7 +510,7 @@ def edit_version(
 
     The derived version reuses the base's payload files, so it is written into the base's registry
     as ``<root>/<id>/<dataset_version>/``, where readers find the base. To derive a version in
-    another registry, copy the base there first, for example with ``download_version``, then edit
+    another registry, copy the base there first, for example with ``copy_release()``, then edit
     the copy.
 
     The derived version keeps the base's parent cards, lineage, and import map, without the

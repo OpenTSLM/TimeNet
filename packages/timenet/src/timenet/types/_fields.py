@@ -1,11 +1,33 @@
 """Descriptor fields that normalize constructor inputs and later assignments."""
 
-from collections.abc import Callable
-from typing import Generic, TypeVar
+from collections.abc import Callable, Iterable, Mapping
+from typing import Generic, TypeAlias, TypeVar
+
+from pydantic import BaseModel
+
+from timenet.errors import TimeFValidationError
 
 
 _Input = TypeVar("_Input")
 _Output = TypeVar("_Output")
+_Item = TypeVar("_Item")
+
+
+def as_tuple(value: Iterable[_Item]) -> tuple[_Item, ...]:
+    """Convert the input of a collection field to a tuple.
+
+    Returns:
+        The items in the order given.
+
+    Raises:
+        TimeFValidationError: If ``value`` is a string, a mapping, a pydantic model, or not iterable.
+            A pydantic model can be iterated, but it is one item, not a collection.
+    """
+    if isinstance(value, (str, Mapping, BaseModel)) or not isinstance(value, Iterable):
+        raise TimeFValidationError(
+            f"a collection field takes an iterable of items such as a list or a tuple, got {type(value).__name__}"
+        )
+    return tuple(value)
 
 
 class ValueField(Generic[_Input, _Output]):
@@ -26,3 +48,6 @@ class ValueField(Generic[_Input, _Output]):
     def __set__(self, instance: object, value: _Input) -> None:
         # dataclasses.field(default=descriptor) passes the descriptor for an omitted argument.
         instance.__dict__[self._slot] = self._default if value is self else self._convert(value)
+
+
+TupleField: TypeAlias = ValueField[Iterable[_Item], tuple[_Item, ...]]

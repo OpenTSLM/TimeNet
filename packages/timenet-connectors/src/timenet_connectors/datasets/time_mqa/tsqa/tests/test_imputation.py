@@ -34,7 +34,7 @@ _ROWS = [_row(_COMPLETE, _GAPS)]
 
 
 def _convert(write_part, rows=_ROWS):
-    return TimeMqaConnector().convert([write_part(ReleasePart.FORECASTING_IMPUTATION_2, rows)])
+    return TimeMqaConnector().convert(write_part(ReleasePart.FORECASTING_IMPUTATION_2, rows))
 
 
 def test_a_row_becomes_an_editing_task_from_the_record_with_gaps_to_the_complete_record(write_part):

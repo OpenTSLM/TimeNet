@@ -39,8 +39,8 @@ Manifest(
     counts=counts,              # ManifestCounts (default: empty)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    build_env={},               # {"python", "packages"} (default: empty)
-    timef_format_version=1,     # required; validated against the supported set {1}
+    build_env=build_env,        # BuildEnvironment (required)
+    timef_format_version=2,     # required; the supported set is {2} as of TimeNet 0.12
 )
 ```
 
@@ -53,19 +53,54 @@ of each spec type. No code reads this field. Parquet records the applied encodin
 each file, so the reader does not need it. The field lets a builder see which encoding a build
 selected. The field is empty for a backend that has no such choice.
 
-`build_env` records the environment that produced the version. It gives the interpreter version and
-every installed package with its version. `timenet.provenance.build_env` collects this data. Like
-`value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
+`build_env` records the environment that produced the version. It gives the interpreter version,
+every installed package with its version, and the git commit of the TimeNet code.
+`BuildEnvironment.capture` collects this data. Like `value_encoding`, `build_env` is provenance
+only. No code reads it to interpret the data.
+
+`build_env.git` records the git commit of each installed TimeNet package, keyed by package
+name. A package that is not installed has no entry:
+
+```json
+"git": {
+  "timenet": {"sha": "4818e37f...", "contains_local_changes": false},
+  "timenet-connectors": {"sha": "4818e37f...", "contains_local_changes": false}
+}
+```
+
+Each package records the commit of the code that runs:
+
+- An editable install, such as a workspace checkout, asks git. `contains_local_changes` is
+  `true` if the package directory has uncommitted changes, untracked files included. A change
+  elsewhere in the repository does not set it.
+- A git install (`pip install git+https://...`) records the commit that pip installed, with
+  `contains_local_changes` set to `false`.
+- Any other install, such as a wheel or `pip install ./packages/timenet`, reads the
+  `_build_info.json` file in the package. `scripts/build_dists.py` writes that file while it
+  builds the wheel, and records the state of the checkout at that time. `make build` and the
+  publish workflow run the script.
+
+If the commit of an installed package is unknown, the build fails and names the reason. For
+example, git is not on `PATH`, git fails in the checkout, or a plain `uv build` produced the wheel,
+so the package has no `_build_info.json`.
+
+A remote registry accepts only a release whose packages all record `contains_local_changes` as
+`false`. See [Clean code provenance for remote registries](build.md#clean-code-provenance-for-remote-registries).
 
 The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
 separate format version.
 
-A spec records its `nullable` flag. Parquet stores nullability in Arrow validity bitmaps. Zarr stores
-it in validity arrays next to the values.
+A spec records its `missing` record: why timesteps can be missing. The control database records
+how many timesteps each signal misses. Parquet stores the missing timesteps in Arrow validity bitmaps. Zarr stores them in
+validity arrays next to the values.
 
 Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's
-`ValidationError`.
+`ValidationError`. `TIMEF_FORMAT_VERSION` in `timenet.manifest` is the version that this TimeNet
+writes, and the newest that it reads. It versions every file of a release except `control.duckdb`,
+which has its own schema version. `OLDEST_READABLE_TIMEF_FORMAT_VERSION` is the oldest version
+that this TimeNet reads. TimeNet 0.12 reads only version 2. Version 1 names layouts used during
+early development, and no TimeNet reads them.
 
 ### Codec
 
@@ -74,9 +109,13 @@ Direct construction and parsing with an unsupported `timef_format_version` raise
 | `to_dict()` / `to_json()` | Canonical serialization (all keys present, explicit nulls). |
 | `model_validate(data)` / `model_validate_json(text)` | Parse, tolerating missing optional blocks. |
 
-`model_validate` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema`
-and `counts` default to empty. Unknown fields are rejected. A malformed block raises Pydantic's
-`ValidationError` with its native field locations and error details.
+`model_validate` requires `timef_format_version`, `dataset_id`, `metadata`, `files`, and
+`build_env`. `schema` and `counts` default to empty. Unknown fields are rejected. A malformed block
+raises Pydantic's `ValidationError` with its native field locations and error details.
+
+Registries read a stored manifest with `read_manifest(path)` or `parse_manifest(text, where)` from
+`timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`. A manifest of an
+older or a newer unsupported TimeF format raises `TimeFFormatVersionError` instead.
 
 ### Serialization notes
 
@@ -125,8 +164,11 @@ packed text and time-offset files that this release stores itself.
 A build needs the parent releases. A read needs only the payload sources. `TimeNet.open()`,
 `TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the payload sources
 before the first read. A read never opens the catalog of a parent. `download()` copies the release
-and its payload sources. See [Payload sources](registry.md#payload-sources).
+and its payload sources into the local registry. See [Payload sources](registry.md#payload-sources).
+
+`required_releases(with_parents=False)` lists the releases of the payload sources, which a read
+needs. `required_releases(with_parents=True)` also lists the parents, which a build needs.
 
 ---
 
-See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
+See the [API reference for `timenet.manifest`](api/timenet.manifest.md) for the full symbol listing.
