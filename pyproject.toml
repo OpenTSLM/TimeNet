@@ -20,6 +20,8 @@ dev = [
     "edfio>=0.4.14",
     "wfdb>=4.1",
     "xlrd>=2.0",
+    "holidays==0.108",
+    "openpyxl>=3.1.5",
 ]
 docs = [
     "zensical",

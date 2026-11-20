@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the scooby-team/swiss-grid-anomaly-cot connector: the single source for this
+# dataset's metadata.
+#
+# Each ISO week of 2020-2025 becomes one Record with seven hourly Swissgrid signals and two hourly
+# weather signals, and three tasks: the cause of the largest anomaly (classification), the
+# anomalous days (temporal localization) and the net import or export (answer). The connector
+# recomputes every label from the sources; see README.md for the rules and the limitations.
+yaml_schema_version: 1
+dataset_id: scooby-team/swiss-grid-anomaly-cot
+dataset_version: 1.0.0
+name: Swiss Grid Anomaly-CoT
+description: >-
+  312 weekly windows (ISO weeks) of the Swiss electricity system, 2020-2025, each with three tasks
+  and a chain-of-thought rationale: 208 train weeks (2020-2023), 52 validation (2024) and 52 test
+  (2025). Each record holds nine hourly signals: end-user consumption, total consumption,
+  production, and the net import from Austria, Germany, France and Italy, all in MW and summed by
+  the connector from Swissgrid's quarter-hourly energies; plus air temperature and global
+  radiation, each a population-weighted mean of 12 SwissMetNet stations. A week has 168 hours, 167
+  or 169 around a clock change. Swissgrid writes Swiss civil time and changed its labels in 2025
+  from the end to the start of each quarter hour; the connector checks every label and stores UTC.
+
+  No label comes from a model. A linear baseline fitted on the ordinary days of 2020-2023 predicts
+  daily end-user consumption from the weekday, the month, heating and cooling degree days and the
+  solar radiation (MAPE 2.3 % on ordinary days of the 2025 test year). A day is anomalous when its
+  robust z-score is at least 3 in absolute value. Ordered rules then give it a cause: the COVID-19
+  lockdown of spring 2020, the Christmas period (22 December - 6 January), a public holiday of at
+  least 20 % of the population, a bridge day, or the core summer holiday weeks (14 July - 15
+  August). Holidays come from the holidays package (0.108) per canton, weighted by the 2023 BFS
+  population. In 2020-2025 no day lies above expectation at that threshold, so the cold_snap,
+  heatwave and unexplained labels do not occur; each rationale states the weather effect instead.
+
+  Tasks per week: the cause of the largest anomaly or "none" (classification, 9 labels), the
+  anomalous days (exhaustive temporal localization, possibly none), and whether Switzerland was a
+  net importer or exporter and through which borders (answer). The prompts give the week's dates
+  and the series but no holiday: rules that read only the holiday calendar already reach a cause
+  accuracy of 0.98 and a day F1 of 0.81 on 2025, so a calendar in the prompt would let a model
+  answer without the series. The holidays stay in each record as annotations. Fixed templates write
+  each rationale from the computed facts; a check rejects any number in the text that is not in the
+  facts, which each record keeps as a JSON annotation.
+
+  Licensing: Swissgrid states no license for the Energy Statistic Switzerland files, so this card
+  says NONE and their terms of use are unknown. The weather data is MeteoSwiss Open Government Data
+  under CC BY 4.0 (source: MeteoSwiss). The data is downloaded from the publishers at build time and
+  is not redistributed by TimeNet.
+license: NONE
+source_url: https://www.swissgrid.ch/en/home/customers/topics/energy-data-ch.html
+citation: >-
+  Swissgrid AG, Energy Statistic Switzerland (EnergieUebersichtCH), 2020-2025.
+  MeteoSwiss, SwissMetNet automatic weather stations, Open Government Data, CC BY 4.0,
+  https://data.geo.admin.ch/api/stac/v1/collections/ch.meteoschweiz.ogd-smn.
+  Swiss Federal Statistical Office, STATPOP 2023.
+domains:
+  - energy
+  - environment
+tags:
+  - electricity
+  - load
+  - switzerland
+  - anomaly-explanation
+  - cross-border-exchange
+  - weather
+  - cot
+  - rule-based-supervision
