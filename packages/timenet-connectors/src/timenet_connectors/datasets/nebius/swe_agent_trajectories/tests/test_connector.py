@@ -11,7 +11,6 @@ from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.types import AnswerTask, ClassificationTask
 from timenet.types.text import read_value
-from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.nebius.swe_agent_trajectories import SWEAgentTrajectoriesConnector, source
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     ActionKind,
@@ -24,7 +23,7 @@ from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     read_runs,
     split_message,
 )
-from timenet_connectors.datasets.nebius.swe_agent_trajectories.tasks import checkpoints, status
+from timenet_connectors.datasets.nebius.swe_agent_trajectories.tasks import ENDING_LABELS, checkpoints, status
 
 
 # A synthetic release shaped like the Hub parquet: one shard of runs over twelve repositories, so the
@@ -107,7 +106,7 @@ def one_shard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 @pytest.fixture
 def dataset(one_shard):
-    return SWEAgentTrajectoriesConnector().convert([HubFileRef(one_shard(_rows()), "train")])
+    return SWEAgentTrajectoriesConnector().convert({"train": one_shard(_rows())})
 
 
 def _target(task) -> str:
@@ -221,9 +220,7 @@ def test_each_checkpoint_gives_three_tasks_with_the_issue_and_thoughts_as_input(
         assert task.input_annotations[0].metadata["instance_id"] == task.metadata["instance_id"]
         assert task.metadata == task.inputs[0].metadata
     endings = {
-        read_value(t.targets[0])
-        for t in tasks
-        if isinstance(t, ClassificationTask) and t.label_set.name == "run_ending"
+        read_value(t.targets[0]) for t in tasks if isinstance(t, ClassificationTask) and t.label_set == ENDING_LABELS
     }
     assert endings == {"submitted", "context_limit"}
 

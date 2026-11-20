@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 import functools
-from typing import ClassVar
+from pathlib import Path
 
 import pyarrow as pa
 
@@ -21,7 +21,7 @@ from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Task, TimeSeriesSpec, ureg
 from timenet.types.splits import Split
 from timenet.types.text import LazyTextList
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     ActionKind,
     ObservationKind,
@@ -91,27 +91,29 @@ def _values(run: Run, name: str, steps: int) -> pa.Array:
     return pa.array(values)
 
 
-class SWEAgentTrajectoriesConnector(BaseHuggingFaceConnector):
+class SWEAgentTrajectoriesConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="nebius/SWE-agent-trajectories",
+    source_revision="68195a1450865274106246d0d0296a1d6807b88e",
+    source_files={"train": "data/train-*.parquet"},
+):
     """Connector for nebius/SWE-agent-trajectories on the Hugging Face Hub."""
 
-    HF_REPO = "nebius/SWE-agent-trajectories"
-    SOURCE_REVISION = "68195a1450865274106246d0d0296a1d6807b88e"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "data/train-*.parquet"}
-
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+    def convert(self, files: Mapping[str, Path]) -> TimeFDataset:
         """Read every run, then build one Record per checkpoint and stream three tasks per Record.
 
         Every shard is read once, which checks every row before anything is written. Each run keeps
         only the signals of its first 30 steps and its thoughts, compressed, so the loaders and the
         task stream need no second read.
 
+        Args:
+            files: The directory of the parquet shards, as the ``train`` part.
+
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        runs = list(read_runs(self.ref_paths(raw_refs, "train")["train"]))
+        runs = list(read_runs(files["train"]))
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (("source_repository", self.HF_REPO), ("source_revision", self.SOURCE_REVISION)):
-            dataset.annotate(Annotation(key=key, value=value))
         split_of = split_runs(runs)
         # One issue annotation per instance and text, made when a task first needs it.
         issues: dict[tuple[str, str], Annotation] = {}
@@ -121,13 +123,13 @@ class SWEAgentTrajectoriesConnector(BaseHuggingFaceConnector):
                 if (run.instance_id, run.issue) not in issues:
                     issues[run.instance_id, run.issue] = dataset.annotate(
                         Annotation(
-                            key=ISSUE,
+                            ISSUE,
                             value=run.issue,
                             description="The GitHub issue a run tries to resolve, as the agent read it.",
                             metadata={"instance_id": run.instance_id},
                         )
                     )
-                records.append((checkpoint, dataset.add_record(record=self._make_record(checkpoint))))
+                records.append((checkpoint, dataset.add_record(self._make_record(checkpoint))))
         dataset.set_task_stream(
             [ClassificationTask, AnswerTask], functools.partial(_tasks, records, issues, split_of.__getitem__)
         )
@@ -141,7 +143,7 @@ class SWEAgentTrajectoriesConnector(BaseHuggingFaceConnector):
             The Record. It holds nothing about the run after the checkpoint.
         """
         run, steps = checkpoint.run, checkpoint.steps
-        signals = tuple(
+        signals = [
             Signal.from_loader(
                 spec=spec,
                 time_axis=AXIS,
@@ -150,9 +152,9 @@ class SWEAgentTrajectoriesConnector(BaseHuggingFaceConnector):
                 n_values=steps,
             )
             for name, spec in SPECS.items()
-        )
-        record = Record(
-            sources=(Source(name=SOURCE_NAME, signals=signals),),
+        ]
+        return Record(
+            sources=[Source(name=SOURCE_NAME, signals=signals)],
             metadata={
                 "run_id": run.run_id,
                 "instance_id": run.instance_id,
@@ -160,15 +162,14 @@ class SWEAgentTrajectoriesConnector(BaseHuggingFaceConnector):
                 "model_name": run.model_name,
                 "checkpoint_steps": steps,
             },
+            annotations=[
+                Annotation(
+                    THOUGHTS,
+                    value=LazyTextList(functools.partial(run.steps.thought_texts, steps), length=steps),
+                    description="The agent's thought at each step, in step order: its message without the command.",
+                )
+            ],
         )
-        record.annotate(
-            Annotation(
-                key=THOUGHTS,
-                value=LazyTextList(functools.partial(run.steps.thought_texts, steps), length=steps),
-                description="The agent's thought at each step, in step order: its message without the command.",
-            )
-        )
-        return record
 
 
 def _tasks(
@@ -183,15 +184,15 @@ def _tasks(
     """
     for checkpoint, record in records:
         run = checkpoint.run
-        context = (issues[run.instance_id, run.issue], *(a for a in record.annotations if a.key == THOUGHTS))
-        inputs, split, metadata = (record,), split_of(run.run_id), record.metadata
+        context = [issues[run.instance_id, run.issue], *(a for a in record.annotations if a.key == THOUGHTS)]
+        inputs, split, metadata = [record], split_of(run.run_id), record.metadata
         yield ClassificationTask(
             inputs=inputs,
             split=split,
             input_annotations=context,
             metadata=metadata,
             prompt=RESOLVE_PROMPT,
-            targets=(RESOLVED if run.resolved else UNRESOLVED,),
+            targets=RESOLVED if run.resolved else UNRESOLVED,
             label_set=OUTCOME_LABELS,
         )
         yield ClassificationTask(
@@ -200,7 +201,7 @@ def _tasks(
             input_annotations=context,
             metadata=metadata,
             prompt=ENDING_PROMPT,
-            targets=(str(run.ending),),
+            targets=str(run.ending),
             label_set=ENDING_LABELS,
         )
         yield AnswerTask(
@@ -209,7 +210,7 @@ def _tasks(
             input_annotations=context,
             metadata=metadata,
             prompt=STATUS_PROMPT,
-            targets=(status(checkpoint),),
+            targets=status(checkpoint),
         )
 
 

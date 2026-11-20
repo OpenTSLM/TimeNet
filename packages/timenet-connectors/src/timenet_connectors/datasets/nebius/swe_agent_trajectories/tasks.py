@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
-from timenet.types import Label, LabelSet
+from timenet.types import Annotation, Label, LabelSet
 from timenet.types.splits import Split
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     EXIT_STATUSES,
@@ -30,15 +30,14 @@ CHECKPOINTS = (5, 10, 20, 30)
 RESOLVED = "resolved"
 UNRESOLVED = "unresolved"
 OUTCOME_LABELS = LabelSet(
-    name="run_outcome",
-    labels=(
+    [
         Label(name=RESOLVED, description="The run's final patch passed the tests of the issue's pull request."),
         Label(name=UNRESOLVED, description="The run did not resolve the issue."),
-    ),
+    ],
+    annotations=[Annotation("name", value="run_outcome")],
 )
 ENDING_LABELS = LabelSet(
-    name="run_ending",
-    labels=(
+    [
         Label(name=Ending.SUBMITTED, description="The agent submitted its changes."),
         Label(
             name=Ending.CONTEXT_LIMIT,
@@ -51,7 +50,8 @@ ENDING_LABELS = LabelSet(
             description="SWE-agent stopped the run after repeated malformed agent messages.",
         ),
         Label(name=Ending.COST_LIMIT, description="The run reached its cost limit."),
-    ),
+    ],
+    annotations=[Annotation("name", value="run_ending")],
 )
 
 _CONTEXT = (
