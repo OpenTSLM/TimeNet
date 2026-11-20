@@ -139,9 +139,11 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   append to it.
 - Use `owner.annotate(annotation)` only in these cases. The owner exists already, for example a
   Record that you import from a parent. A task refers to the annotation in `input_annotations` or
-  `target_annotations`, so you need the occurrence that the call returns. You attach one
-  `Annotation` object to several owners. `record.add_annotations([...])` does the same for a
-  batch and returns a tuple.
+  `target_annotations`, so you need the occurrence that the call returns.
+  `record.add_annotations([...])` does the same for a batch and returns a tuple. A constructor
+  attaches a new occurrence of each annotation, so one `Annotation` object can go to several
+  owners. A task can also refer to an occurrence that it takes from the owner, for example
+  `record.annotations[0]`.
 - There is one annotation class, and its `span` gives its shape. No span means the whole record.
   `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
 - For text that the connector reads from a source file, use `LazyText(function)` as the

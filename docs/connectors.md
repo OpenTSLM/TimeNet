@@ -80,7 +80,8 @@ Each Signal has exactly one owning Source. Do not attach one Signal to several S
 TimeNet rejects that ambiguous ownership.
 
 Signals can share immutable `TimeAxis` and `TimeSeriesSpec` objects. Annotation content can also be
-reused. Each call to `annotate()` creates a separate occurrence for the selected owner.
+reused. Each call to `annotate()`, and each owner that you build with `annotations=[...]`, creates a
+separate occurrence for the owner.
 
 Attach annotations when you build the owner: pass `annotations=[...]` to the dataset, Record, Source,
 Signal, or Task. Use `annotate()` only for the cases that
