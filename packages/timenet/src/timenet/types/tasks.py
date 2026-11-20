@@ -185,7 +185,8 @@ class Task(SupportsAnnotate):
     from_tasks: TupleField["Task"] = field(default=ValueField(as_tuple, ()), compare=False)
     """Tasks from which this task was derived."""
     annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
-    """Annotations describing this task itself."""
+    """Annotations describing this task itself. The task attaches a new occurrence of each annotation, as
+    :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
     _id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
@@ -223,6 +224,7 @@ class Task(SupportsAnnotate):
         for target in self.targets or ():
             if not _is_target_item(target):
                 raise TimeFValidationError(f"{type(self).__name__} target has unsupported type {type(target).__name__}")
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
 
     @property
     def id(self) -> EntityId:
@@ -333,7 +335,9 @@ class Task(SupportsAnnotate):
             TimeFValidationError: If a Record or Signal that the task references has no ID, or if
                 ``records`` or ``signals`` has no object for its ID.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by _by_id and assigned_id)
-        return replace(self, **self._references_by_id(records, signals))
+        copy = replace(self, **self._references_by_id(records, signals))
+        copy.annotations = self.annotations
+        return copy
 
     def _references_by_id(
         self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]

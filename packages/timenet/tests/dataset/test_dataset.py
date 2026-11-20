@@ -55,6 +55,25 @@ def _dataset():
     return TimeFDataset(metadata=_metadata())
 
 
+def test_the_constructor_attaches_annotations_in_order_as_annotate_does():
+    site = Annotation("site", value="lab")
+    dataset = TimeFDataset(metadata=_metadata(), annotations=[site, Annotation("revision", value=3)])
+    assert [(one.key, one.value) for one in dataset.annotations] == [("site", "lab"), ("revision", 3)]
+    assert dataset.annotations[0] is not site
+    assert _dataset().annotations == ()
+
+
+@pytest.mark.parametrize("annotations", ["ab", {"a": 1}, Annotation("site", value="lab")])
+def test_the_constructor_rejects_annotations_that_are_not_an_iterable_of_items(annotations):
+    with pytest.raises(TimeFValidationError, match="takes an iterable"):
+        TimeFDataset(metadata=_metadata(), annotations=annotations)
+
+
+def test_the_constructor_rejects_an_annotation_with_a_time_span():
+    with pytest.raises(TimeFValidationError, match="cannot have a time span"):
+        TimeFDataset(metadata=_metadata(), annotations=[Annotation("mark", span=TimePoint.seconds(1.0))])
+
+
 def test_add_record_registers_and_returns(make_series):
     ds = _dataset()
     record = Record(sources=(Source(name="Source", signals=(make_series(),)),))

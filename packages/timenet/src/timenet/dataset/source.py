@@ -55,7 +55,8 @@ class Source(SupportsAnnotate):
     signals: TupleField[Signal] = field(default=ValueField(as_tuple, ()))
     """Signals produced directly by this source."""
     annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
-    """Annotations attached to this source."""
+    """Annotations attached to this source. The source attaches a new occurrence of each annotation, as
+    :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible source metadata."""
 
@@ -72,13 +73,15 @@ class Source(SupportsAnnotate):
         self.metadata = validate_json_mapping(self.metadata)
 
         for annotation in self.annotations:
-            if annotation.span is not None:
-                check_span_within_window(
-                    f"annotation {annotation.key!r}",
-                    annotation.span,
-                    tuple(self.walk_signals()),
-                    f"source {self.name!r}",
-                )
+            self._validate_annotation(annotation)
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
+
+    def _validate_annotation(self, annotation: Annotation) -> None:
+        """Validate an annotation without changing this source."""
+        if annotation.span is not None:
+            check_span_within_window(
+                f"annotation {annotation.key!r}", annotation.span, tuple(self.walk_signals()), f"source {self.name!r}"
+            )
 
     def walk_sources(self) -> Iterator["Source"]:
         """Yield this source and all descendants in deterministic depth-first order.

@@ -12,6 +12,7 @@ An `Annotation` stores reusable content. An annotation occurrence attaches that 
 Task, Record, Source, Signal, or label set.
 
 ```python
+from timenet.dataset import Record, TimeFDataset
 from timenet.types import Annotation
 
 condition = Annotation(
@@ -19,13 +20,42 @@ condition = Annotation(
     value="healthy",
     description="Condition assigned by the source dataset.",
 )
-occurrence = record.annotate(condition)
+record = Record(sources=(source,), annotations=[condition])
 ```
 
 `key` can be positional: `Annotation("condition", value="healthy")`. All other fields are keyword-only.
 
+## Attach annotations
+
+Pass `annotations=[...]` when you build the owner. A dataset, a Task, a Record, a Source, and a
+Signal all take this argument. It is a list, or any other iterable, of `Annotation` objects:
+
+```python
+dataset = TimeFDataset(
+    metadata=metadata,
+    annotations=[
+        Annotation("declared_sampling_rate_hz", value=20),
+        Annotation("collection_site", value="clinic-a"),
+    ],
+)
+```
+
+The dataset attaches each annotation in order, as `dataset.annotate()` does. A dataset annotation
+cannot have a `span`. Every owner attaches a new occurrence of each annotation that you pass, as
+`annotate()` does. So you can pass one `Annotation` object to several owners.
+
+Use `annotate()` in these cases:
+
+- The owner exists already, for example a Record that you import from a parent dataset.
+- A Task refers to the annotation. Keep the occurrence that `annotate()` returns.
+
+```python
+occurrence = record.annotate(condition)
+```
+
 `annotate()` returns the attached occurrence. A Task must refer to this occurrence, not the unattached
-content object.
+content object. For an annotation that you passed to the constructor, take the occurrence from the
+owner, for example `record.annotations[0]`.
 
 ## Content and occurrence fields
 
@@ -71,8 +101,13 @@ row are stored as one row again, but stored text and the same text in memory bec
 An Annotation without a `span` describes its complete owner:
 
 ```python
-record.annotate(Annotation("age", value=54, unit="years"))
-record.annotate(Annotation("condition", value="healthy"))
+record = Record(
+    sources=(source,),
+    annotations=[
+        Annotation("age", value=54, unit="years"),
+        Annotation("condition", value="healthy"),
+    ],
+)
 ```
 
 Use `metadata` for untyped implementation details. Use an Annotation when consumers need a named,

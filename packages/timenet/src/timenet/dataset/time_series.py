@@ -256,7 +256,8 @@ class Signal(SupportsAnnotate):
     The writer counts missing timesteps and rejects a supplied count that differs from the values.
     """
     annotations: tuple[Annotation, ...] = ()
-    """Annotations attached directly to this signal."""
+    """Annotations attached directly to this signal. The constructors attach a new occurrence of each
+    annotation, as :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible signal metadata."""
     _id: EntityId | None = field(default=None, init=False, repr=False)
@@ -349,6 +350,7 @@ class Signal(SupportsAnnotate):
         set_field(self, "annotations", as_tuple(annotations))
         set_field(self, "metadata", {} if metadata is None else metadata)
         self.__post_init__()
+        set_field(self, "annotations", tuple(annotation._new_occurrence() for annotation in self.annotations))
 
     def annotate(self, annotation: Annotation) -> Annotation:
         """Attach one annotation and return it.

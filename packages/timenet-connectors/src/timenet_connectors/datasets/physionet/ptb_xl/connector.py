@@ -166,10 +166,13 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                     )
                     for position, name in enumerate(header.sig_name)
                 ]
-                record = dataset.add_record(
-                    Record(metadata={"ecg_id": identity}, sources=[Source("PTB-XL ECG", signals=signals)])
+                dataset.add_record(
+                    Record(
+                        metadata={"ecg_id": identity},
+                        sources=[Source("PTB-XL ECG", signals=signals)],
+                        annotations=annotations,
+                    )
                 )
-                record.add_annotations(annotations)
             except (KeyError, ValueError, SyntaxError, OSError, TimeNetConnectorError) as exc:
                 raise TimeNetConnectorError(
                     f"invalid PTB-XL row {line} (ecg_id {row.get('ecg_id')}) in {source.database_csv}: {exc}"

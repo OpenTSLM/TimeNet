@@ -115,7 +115,8 @@ Names do not have to be unique. If two Signals below one Source have the same na
 
 ## Annotate a Source
 
-`source.annotate(annotation)` attaches one occurrence and returns it. A static annotation
+Pass `annotations=[...]` to the constructor to attach annotations when you build the Source.
+`source.annotate(annotation)` attaches one occurrence to a Source that exists and returns it. A static annotation
 describes the whole device, for example its firmware version. A timed annotation covers an
 interval, for example a time when an electrode lost contact with the skin:
 
