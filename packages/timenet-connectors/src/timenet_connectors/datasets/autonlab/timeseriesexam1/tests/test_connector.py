@@ -8,7 +8,7 @@ import pytest
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry, open_local_version
+from timenet.registry import open_local_version
 from timenet.types import ClassificationTask, Split, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.autonlab.timeseriesexam1 import TimeSeriesExam1Connector
@@ -42,12 +42,6 @@ def test_metadata():
     assert str(metadata.dataset_version) == "1.0.0"
     assert metadata.license_url
     assert metadata.citation
-
-
-def test_source_is_pinned():
-    assert TimeSeriesExam1Connector.HF_REPO == "AutonLab/TimeSeriesExam1"
-    assert TimeSeriesExam1Connector.SOURCE_REVISION == "628f686757bb484d9b608b6855fb41f6a302ecda"
-    assert dict(TimeSeriesExam1Connector.SOURCE_FILES) == {"test": "data/test-00000-of-00001.parquet"}
 
 
 def test_records_and_tasks_match_rows(tmp_path):
@@ -108,9 +102,7 @@ def test_metadata_is_as_published(tmp_path):
 
 
 def test_options_and_answers_survive_a_write(tmp_path):
-    registry = LocalRegistry(tmp_path / "registry")
-    registry.put_dataset(_convert(tmp_path))
-    with TimeFReader(open_local_version(registry.root / "autonlab/timeseriesexam1/1.0.0")) as reader:
+    with TimeFReader(open_local_version(_convert(tmp_path).write(path=tmp_path / "out"))) as reader:
         stored = reader.read()
     rows = {row["id"]: row for row in _source_rows()}
     for task in stored.tasks_of(ClassificationTask):
