@@ -69,13 +69,15 @@ class NotServed:
 
     Attributes:
         version: The exact version that the source lists.
-        access: The access level of the card that the source lists.
-        requirements: The card that is not open access, with its access level and access page.
+        access: The access level of the release, or ``None`` if the source does not say.
+        requirements: The cards that are not open access, with their access level and access page.
+        reason: The reason that the source gives, or ``None``.
     """
 
     version: Version
-    access: Access
-    requirements: tuple[AccessRequirement, ...]
+    access: Access | None
+    requirements: tuple[AccessRequirement, ...] = ()
+    reason: str | None = None
 
     def access_error(self, dataset_id: str) -> TimeNetAccessError:
         """Create an error with the release's access requirements.
@@ -87,7 +89,7 @@ class NotServed:
             An error with the release, its access level, and its access pages.
         """
         release = DatasetRef(dataset_id=dataset_id, version=self.version)
-        return TimeNetAccessError(release, self.access, self.requirements)
+        return TimeNetAccessError(release, self.access, self.requirements, self.reason)
 
 
 ReleaseLookup: TypeAlias = Found | NotFound | NotServed

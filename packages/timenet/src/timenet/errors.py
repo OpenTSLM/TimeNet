@@ -157,21 +157,31 @@ class TimeNetVersionConflictError(TimeNetError):
 
 
 class TimeNetAccessError(TimeNetError):
-    """A dataset needs credentialed or restricted access, and a registry does not serve it to this caller.
+    """A registry does not serve a dataset release to this caller.
 
     Attributes:
         dataset: The release.
-        access: The access level of the card that the registry lists for the dataset.
-        requirements: That card with its access level and its ``access_url``, if it has an ``access_url``.
+        access: The access level of the release, or ``None`` if the registry does not say.
+        requirements: The cards that are not open access, with their ``access_url``.
+        reason: The reason that the registry gives, or ``None``.
     """
 
-    def __init__(self, dataset: "DatasetRef", access: "Access", requirements: "tuple[AccessRequirement, ...]") -> None:
-        super().__init__(dataset, access, requirements)
+    def __init__(
+        self,
+        dataset: "DatasetRef",
+        access: "Access | None",
+        requirements: "tuple[AccessRequirement, ...]" = (),
+        reason: str | None = None,
+    ) -> None:
+        super().__init__(dataset, access, requirements, reason)
         self.dataset = dataset
         self.access = access
         self.requirements = requirements
+        self.reason = reason
 
     def _message(self) -> str:
+        if self.access is None:
+            return f"{self.dataset} is not served to this caller: {self.reason}"
         message = f"{self.dataset} is {self.access.value}."
         if self.requirements:
             pages = [f"{item.access_url} for {item.release}" for item in self.requirements]

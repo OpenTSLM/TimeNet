@@ -165,7 +165,7 @@ class BaseRegistry(ABC):
         except TimeNetDatasetNotFoundError:
             return NotFound()
         except TimeNetAccessError as error:
-            return NotServed(error.dataset.version, error.access, error.requirements)
+            return NotServed(error.dataset.version, error.access, error.requirements, error.reason)
         return FoundInRegistry(manifest.metadata.dataset_version, self, manifest)
 
     def download_release(

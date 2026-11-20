@@ -37,7 +37,6 @@ from timenet.registry.origin import OriginKind
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal, install_backends, make_dataset
 from timenet.types import Access, Annotation, AnswerTask, DatasetMetadata, Domain, License, Version
-from timenet.types.access import AccessRequirement
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
@@ -540,12 +539,11 @@ def test_a_payload_source_that_the_service_refuses_comes_from_the_local_registry
     remote = RemoteRegistry("http://api.local", transport=transport)
     store = LocalRegistry(tmp_path / "store")
     client = TimeNet(sources=[store, remote])
-    requirement = AccessRequirement(reference, Access.CREDENTIALED, "https://a.example")
 
     for read in (client.open, client.download):
         with pytest.raises(TimeNetAccessError) as caught:
             read("test/child")
-        assert caught.value.requirements == (requirement,)
+        assert caught.value.dataset == reference
     assert not store.exists("test/child", "1.0.0")
 
     # The user builds or copies test/a into the local registry. Then the service provides only test/child.
@@ -1202,7 +1200,9 @@ def test_the_hint_for_a_refused_release_names_the_sources_that_a_local_build_nee
         client.open("org/gated")
 
     assert str(caught.value) == (
-        "org/gated@1.0.0 is restricted. Get access at https://b.example for org/gated@1.0.0. "
+        "org/gated@1.0.0 is not served to this caller: registry request to "
+        "http://api.local/api/v1/datasets/org/gated/1.0.0/manifest failed (403): dataset is gated; a token grant is "
+        "required. Set TIMENET_TOKEN or pass token= to RemoteRegistry. "
         # A client without a store cannot build, so the hint names the store too.
         "Add LocalRegistry(<path>) and InstalledConnectors() to the sources to build it locally."
     )

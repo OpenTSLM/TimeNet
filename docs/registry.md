@@ -153,7 +153,7 @@ A source gives one of these answers:
 | `FoundInRegistry(version, registry)` | The registry serves the release. |
 | `FoundInConnector(builder)` | An installed connector builds the release. `version` is the version that its card declares. |
 | `NotFound()` | The source does not know the release. |
-| `NotServed(version, access, requirements)` | The source lists the release, but does not serve its files to this caller. `access` is the access level of the card that the source lists, and `requirements` names that card with its access page. `access_error(dataset_id)` returns the `TimeNetAccessError` that names the page. |
+| `NotServed(version, access, requirements, reason)` | The source lists the release, but does not serve its files to this caller. `access` is the access level of the release and `requirements` names the cards with their access pages, or `None` and `()` if the source does not say. `reason` is the reason that the source gives, or `None`. `access_error(dataset_id)` returns the matching `TimeNetAccessError`. |
 
 The type `Found` covers `FoundInRegistry` and `FoundInConnector`. `FoundInRegistry` also carries
 the `manifest` that the source read, or `None`, so that you do not need to fetch it again.
@@ -162,10 +162,8 @@ A registry does not check the access level of a release. A `LocalRegistry` and a
 serve every release that they hold, so they never answer `NotServed`. For an `S3Registry`, the
 owner of the bucket decides through the bucket permissions who can read and write releases. A
 `RemoteRegistry` asks its service. The service decides which releases a caller can read, and a
-refusal becomes `NotServed` with the access level and the access page of the card. The service
-lists only the card of the latest version. So the access level and the access page come from that
-card. If that card is open, `resolve()` raises `TimeNetRegistryError` with the reason that the
-service gives.
+refusal becomes `NotServed` with the reason that the service gives. The service does not send the
+access level or the access page, so `access` is `None`.
 
 `InstalledConnectors()` answers `Found` only for the version that the card of a connector declares,
 because a connector builds only that version. For any other request, it answers `NotFound`.

@@ -13,7 +13,7 @@ import httpx
 import pyarrow.fs as pafs
 
 from timenet.config import settings
-from timenet.errors import TimeNetAccessError, TimeNetError, TimeNetRegistryError
+from timenet.errors import TimeNetAccessError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
@@ -27,8 +27,7 @@ from timenet.registry.remote.models import (
     UploadGrantModel,
 )
 from timenet.registry.version import DatasetVersion
-from timenet.types import Access, DatasetMetadata
-from timenet.types.access import AccessRequirement
+from timenet.types import DatasetMetadata
 from timenet.types.references import DatasetRef, is_latest
 
 
@@ -91,33 +90,14 @@ class RemoteRegistry(LazyReadRegistry):
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
             TimeFFormatError: If the served manifest is not valid.
             TimeNetAccessError: If the service does not serve the release to this caller.
-            TimeNetRegistryError: If the service refuses a release whose listed card is open.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the HTTP client and parse_manifest
         resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
         try:
             text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
         except RegistryForbiddenError as refusal:
-            raise self._refusal_error(DatasetRef.parse(f"{dataset_id}@{resolved}"), refusal) from None
+            release = DatasetRef.parse(f"{dataset_id}@{resolved}")
+            raise TimeNetAccessError(release, None, reason=str(refusal)) from None
         return parse_manifest(text, f"the manifest of {dataset_id}@{resolved} in {self}")
-
-    def _refusal_error(self, release: DatasetRef, refusal: RegistryForbiddenError) -> TimeNetError:
-        """Return the error for a release that the service refused, from the card that the service lists.
-
-        The service lists the card of the latest version only, so the error uses its access level and page.
-
-        Args:
-            release: The refused release.
-            refusal: The refusal of the service.
-
-        Returns:
-            A ``TimeNetAccessError``, or ``refusal`` if the listed card is open and so has no access level or page
-            to name.
-        """
-        detail = self._detail(release.dataset_id)
-        if detail.access is Access.OPEN:
-            return refusal
-        requirements = (AccessRequirement(release, detail.access, detail.access_url),) if detail.access_url else ()
-        return TimeNetAccessError(release, detail.access, requirements)
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -244,17 +224,6 @@ class RemoteRegistry(LazyReadRegistry):
         content = (version_dir / relpath).read_bytes()
         self._http.put(grant.url, content=content, headers=grant.headers)
 
-    def _detail(self, dataset_id: str) -> DatasetDetailModel:
-        """Fetch a dataset's detail, which lists the card of its latest version.
-
-        Args:
-            dataset_id: The ``org/name`` id.
-
-        Returns:
-            The parsed detail.
-        """
-        return DatasetDetailModel.model_validate_json(self._http.get_text(f"/datasets/{dataset_id}"))
-
     def _resolve_latest(self, dataset_id: str) -> str:
         """Resolve a dataset's latest version string via the detail endpoint.
 
@@ -264,4 +233,5 @@ class RemoteRegistry(LazyReadRegistry):
         Returns:
             The latest committed version string.
         """
-        return str(self._detail(dataset_id).version)
+        detail = DatasetDetailModel.model_validate_json(self._http.get_text(f"/datasets/{dataset_id}"))
+        return str(detail.version)

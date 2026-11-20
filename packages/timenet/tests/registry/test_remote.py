@@ -27,7 +27,6 @@ from timenet.registry import LocalRegistry, RemoteRegistry, copy_release, open_l
 from timenet.sources import FoundInRegistry, NotServed
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetFilter, DatasetSchema, Domain, License, Version
-from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
@@ -617,7 +616,9 @@ def test_a_read_or_a_download_raises_the_access_error_if_the_service_refuses_the
     with pytest.raises(TimeNetAccessError) as caught:
         getattr(client, entry_point)(dataset_id)
 
-    assert caught.value.requirements == (AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua"),)
+    assert caught.value.dataset == release
+    assert caught.value.access is None
+    assert "dataset is gated; a token grant is required. Set TIMENET_TOKEN" in str(caught.value)
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     assert not (tmp_path / "local").exists()
 
@@ -626,11 +627,13 @@ def test_a_remote_registry_answers_not_served_for_a_release_that_the_service_ref
     dataset_id, release = _gated_release(tmp_path / "origin", "own")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent, gate=True)
     remote = RemoteRegistry("http://api.local", transport=transport)
-    requirement = AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua")
 
     answer = remote.resolve(dataset_id, None)
 
-    assert answer == NotServed(Version(1, 0, 0), Access.CREDENTIALED, (requirement,))
+    assert isinstance(answer, NotServed)
+    assert (answer.version, answer.access, answer.requirements) == (release.version, None, ())
+    assert answer.reason is not None
+    assert "dataset is gated; a token grant is required. Set TIMENET_TOKEN" in answer.reason
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     # A local registry serves every release that it holds.
     local = LocalRegistry(tmp_path / "origin")
@@ -650,7 +653,7 @@ def test_a_remote_registry_serves_a_release_that_is_not_open_if_the_service_serv
     assert local.damage(DatasetRef.parse(f"{dataset_id}@1.0.0")) is None
 
 
-def test_a_gated_release_with_an_open_card_raises_the_refusal_of_the_service(version_dir, tmp_path):
+def test_a_gated_release_with_an_open_card_is_not_served(version_dir, tmp_path):
     directory, manifest = version_dir
     served, _ = build_fake(directory)
 
@@ -661,11 +664,11 @@ def test_a_gated_release_with_an_open_card_raises_the_refusal_of_the_service(ver
 
     remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
 
-    # The card is open, so it has no access level or page to show.
-    with pytest.raises(
-        TimeNetRegistryError, match=r"\(403\): dataset is gated; a token grant is required\. Set TIMENET_TOKEN"
-    ):
-        remote.resolve(manifest.dataset_id, None)
+    answer = remote.resolve(manifest.dataset_id, None)
+
+    assert isinstance(answer, NotServed)
+    assert answer.reason is not None
+    assert "dataset is gated; a token grant is required. Set TIMENET_TOKEN" in answer.reason
 
 
 def test_put_release_raises_the_refusal_of_the_service(version_dir, tmp_path):

@@ -203,7 +203,7 @@ def build_publish_fake(*, token: str = "tok_rw"):  # ruff: ignore[hardcoded-pass
             relpath = request.url.path.removeprefix("/upload/")
             state["store"][relpath] = request.content
             return httpx.Response(200)
-        if request.headers.get("authorization") != f"Bearer {token}":
+        if request.method != "GET" and request.headers.get("authorization") != f"Bearer {token}":
             return httpx.Response(403, json={"detail": "write scope required"})
         if path.endswith("/publish"):
             state["manifest"] = json.loads(request.content)
