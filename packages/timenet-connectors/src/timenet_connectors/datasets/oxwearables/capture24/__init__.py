@@ -1,4 +1,4 @@
-"""CAPTURE-24: wrist acceleration recorded during daily life from 151 participants, labeled with activity classes."""
+"""CAPTURE-24 wrist acceleration and activity labels from 151 participants."""
 
 from timenet_connectors.datasets.oxwearables.capture24.connector import (
     CONNECTOR as CONNECTOR,
