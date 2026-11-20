@@ -59,6 +59,7 @@ def test_entity_id_columns_are_bigint_and_dataset_id_stays_varchar(tmp_path):
         "signal_id",
         "content_id",
         "occurrence_id",
+        "label_set_id",
         "task_id",
     }
 
@@ -67,22 +68,22 @@ def test_a_newer_control_schema_names_the_file_and_both_versions(tmp_path):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '3'")
+        connection.execute("UPDATE control_metadata SET value = '4'")
 
         with pytest.raises(TimeFFormatVersionError) as caught:
             check_control_schema(connection)
 
-    assert str(caught.value) == f"{path} uses control schema version 3, but the newest that this timenet reads is 2."
+    assert str(caught.value) == f"{path} uses control schema version 4, but the newest that this timenet reads is 3."
     assert caught.value.subject is FormatVersionSubject.CONTROL_SCHEMA
 
 
 def test_a_newer_in_memory_control_schema_names_no_file():
     with duckdb.connect() as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '3'")
+        connection.execute("UPDATE control_metadata SET value = '4'")
 
         with pytest.raises(
-            TimeFFormatVersionError, match=r"^an in-memory control database uses control schema version 3, but"
+            TimeFFormatVersionError, match=r"^an in-memory control database uses control schema version 4, but"
         ):
             check_control_schema(connection)
 
@@ -91,12 +92,12 @@ def test_an_older_control_schema_names_the_oldest_version_that_is_read(tmp_path)
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '1'")
+        connection.execute("UPDATE control_metadata SET value = '2'")
 
         with pytest.raises(TimeFFormatVersionError) as caught:
             check_control_schema(connection)
 
-    assert str(caught.value) == f"{path} uses control schema version 1, but the oldest that this timenet reads is 2."
+    assert str(caught.value) == f"{path} uses control schema version 2, but the oldest that this timenet reads is 3."
     assert caught.value.path == path
 
 

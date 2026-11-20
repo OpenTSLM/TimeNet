@@ -7,7 +7,6 @@ this file only asserts the shared read/write contract.
 """
 
 from typing import NamedTuple
-import uuid
 
 from _demo_child import _child_of_the_demo
 from _fake_registry import build_service_fake
@@ -25,7 +24,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Domain,
-    Label,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -35,13 +33,7 @@ from timenet.types import (
 from timenet.types.references import DatasetRef
 
 
-RHYTHM = LabelSet(
-    name="rhythm",
-    labels=(
-        Label(name="afib"),
-        Label(name="normal"),
-    ),
-)
+RHYTHM = LabelSet(["afib", "normal"])
 
 
 def _second_dataset() -> TimeFDataset:
@@ -75,37 +67,13 @@ class Backend(NamedTuple):
     supports_listing: bool
 
 
-def _s3_registry(request, tmp_path, monkeypatch) -> S3Registry:
-    boto3 = pytest.importorskip("boto3")
-    pytest.importorskip("moto")
-    from moto.server import ThreadedMotoServer  # ruff: ignore[import-outside-top-level]
-
-    server = ThreadedMotoServer(port=0)
-    try:
-        server.start()
-    except Exception as exc:
-        pytest.skip(f"cannot start a local S3 endpoint: {exc}")
-    request.addfinalizer(server.stop)
-    host, port = server.get_host_and_port()
-    endpoint = f"http://{host}:{port}"
-    for key, value in {
-        "AWS_ENDPOINT_URL": endpoint,
-        "AWS_ENDPOINT_URL_S3": endpoint,
-        "AWS_ACCESS_KEY_ID": "testing",
-        "AWS_SECRET_ACCESS_KEY": "testing",
-        "AWS_SESSION_TOKEN": "testing",
-        "AWS_DEFAULT_REGION": "us-east-1",
-    }.items():
-        monkeypatch.setenv(key, value)
-    # A unique bucket per fixture: moto's ThreadedMotoServer shares one process-global backend across
-    # server instances, so a fixed name would leak these datasets into test_s3.py's own tn-test bucket.
-    bucket = f"tn-conformance-{uuid.uuid4().hex[:12]}"
-    boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket=bucket)
+def _s3_registry(request) -> S3Registry:
+    bucket = request.getfixturevalue("s3_bucket")
     return S3Registry(f"s3://{bucket}/registry")
 
 
 @pytest.fixture(params=["local", "s3", "remote"])
-def backend(request, tmp_path, monkeypatch) -> Backend:
+def backend(request, tmp_path) -> Backend:
     """A writable registry of the requested kind, seeded via ``put_dataset``.
 
     Holds timenet/hello-world at 1.0.0 and 1.1.0 (so latest-resolution has a real choice) plus a
@@ -122,7 +90,7 @@ def backend(request, tmp_path, monkeypatch) -> Backend:
         registry = RemoteRegistry("http://svc.local", token="tok_rw", transport=transport)
         supports_listing = True
     else:
-        registry = _s3_registry(request, tmp_path, monkeypatch)
+        registry = _s3_registry(request)
         supports_listing = False
     newer = make_dataset()
     newer._metadata = newer.metadata.model_copy(update={"dataset_version": Version(1, 1, 0)})

@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
 from timenet.errors import TimeFValidationError
-from timenet.types.splits import Split
+from timenet.types import Split
 from timenet_connectors.splitting.base import DatasetSplits, Splitter, T
 
 

@@ -3,7 +3,7 @@
 from collections import deque
 from collections.abc import Container, Hashable, Iterable, Iterator, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
 from timenet.dataset.record import Record
@@ -18,6 +18,7 @@ from timenet.types import (
     TimePoint,
     TSCorrespondenceTask,
 )
+from timenet.types.annotations import _copy_annotation
 from timenet.types.clock import TimeOrigin
 from timenet.types.ids import EntityId, check_id
 from timenet.types.load_plan import LoadPlan
@@ -163,23 +164,6 @@ def _fits(annotation: Annotation, signals: tuple[Signal, ...], owner: str, time_
     return True
 
 
-def _copy_annotation(original: Annotation) -> Annotation:
-    """Copy an annotation occurrence as a value, with the handle of a stored value.
-
-    The copy has deep copies of the value, the metadata, and the occurrence metadata. So a change to
-    one of them in the copy leaves the original as it is. Imports and edits copy annotations this way.
-
-    Returns:
-        The copy.
-    """
-    return replace(
-        original,
-        value=deepcopy(original.value),
-        metadata=deepcopy(original.metadata),
-        occurrence_metadata=deepcopy(original.occurrence_metadata),
-    )
-
-
 def _hierarchy(record: Record) -> list[tuple[Record | Source, dict[str, tuple]]]:
     """Return the fields that an import changes when it adds to the copy of a Record.
 
@@ -278,7 +262,8 @@ class _Importer:
             The copy, with copies of its annotations. The child gives the copy an ID when it indexes
             the copy.
         """
-        return Signal.from_loader(
+        annotations = tuple(self.copy_annotation(annotation) for annotation in original.annotations)
+        copy = Signal.from_loader(
             spec=original.spec,
             time_axis=original.time_axis,
             name=original.name,
@@ -286,9 +271,11 @@ class _Importer:
             n_values=original.n_values,
             null_count=original.null_count,
             time_offsets_loader=original._time_offsets,
-            annotations=tuple(self.copy_annotation(annotation) for annotation in original.annotations),
+            annotations=annotations,
             metadata=deepcopy(original.metadata),
         )
+        _set_annotations(copy, annotations)
+        return copy
 
     def copy_annotation(self, original: Annotation) -> Annotation:
         """Copy a parent annotation occurrence as a value (see :func:`_copy_annotation`).

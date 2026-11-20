@@ -75,11 +75,23 @@ class BuildEnvironment(TimeFModel):
     @classmethod
     def capture(cls, git: GitSourceMap) -> Self:
         """Describe this interpreter, with ``git`` from ``TimeNetSnapshot.to_source_map()``."""
-        # Under an isolated build the packages are exactly the base, the connector's requirements,
-        # and their transitives. Under --no-isolation they are the whole ambient environment, which
-        # is noisier but still the truth about what produced the dataset.
-        packages = {dist.metadata["Name"]: dist.version for dist in distributions() if dist.metadata["Name"]}
-        return cls(python=platform.python_version(), packages=dict(sorted(packages.items())), git=git)
+        return cls(python=platform.python_version(), packages=installed_packages(), git=git)
+
+
+def installed_packages() -> dict[PackageName, str]:
+    """Return each installed distribution's name and version, sorted by name.
+
+    Under an isolated build the packages are exactly the base, the connector's requirements, and
+    their transitives. Under --no-isolation they are the whole ambient environment, which is noisier
+    but still the truth about what produced the dataset.
+    """
+    packages: dict[PackageName, str] = {}
+    for dist in distributions():
+        # Each access to dist.metadata parses the METADATA file again, so read it once.
+        metadata = dist.metadata
+        if name := metadata["Name"]:
+            packages[name] = metadata["Version"]
+    return dict(sorted(packages.items()))
 
 
 class Manifest(TimeFModel):

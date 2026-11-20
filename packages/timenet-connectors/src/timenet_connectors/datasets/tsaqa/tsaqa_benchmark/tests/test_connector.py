@@ -15,7 +15,6 @@ from timenet.json import JsonValue
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.types import AnswerTask, ClassificationTask, Split
-from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import connector
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.connector import (
     SourceIssue,
@@ -50,8 +49,8 @@ class _FixtureConnector(TSAQAConnector):
     CARD = Path(__file__).parents[1] / "dataset.yaml"
 
 
-def _refs(directory: Path = _FIXTURES) -> list[HubFileRef]:
-    return [HubFileRef(directory / f"{split}.parquet", split) for split in _SPLITS]
+def _refs(directory: Path = _FIXTURES) -> dict[str, Path]:
+    return {split: directory / f"{split}.parquet" for split in _SPLITS}
 
 
 def _published() -> dict[tuple[str, int], dict[str, Any]]:
@@ -109,7 +108,8 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert task.metadata["question_type"] == row["question_type"]
     assert task.metadata["source_issues"] == _EXPECTED_ISSUES.get(_row_of(task), [])
     if isinstance(task, ClassificationTask):
-        assert (task.label_set.name, task.label_set.names) == ("true_or_false", ("T", "F"))
+        assert task.label_set.names == ("T", "F")
+        assert [(a.key, a.value) for a in task.label_set.annotations] == [("name", "true_or_false")]
 
 
 def test_every_task_holds_its_published_row():
@@ -129,10 +129,9 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     published = _published()
     with TimeFReader(open_local_version(registry.root / "tsaqa/tsaqa-benchmark/1.0.0")) as reader:
         restored = reader.read()
-        assert {a.key: a.value for a in restored.annotations if a.key not in {"task", "question_type"}} == {
-            "source_repository": "TSAQA/TSAQA-Benchmark",
-            "source_revision": "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
-        }
+        assert all(a.key in {"task", "question_type"} for a in restored.annotations)
+        assert restored.metadata.source_url == "https://huggingface.co/datasets/TSAQA/TSAQA-Benchmark"
+        assert restored.metadata.source_revision == "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd"
         labels = [(a.key, a.value) for a in restored.annotations if a.key in {"task", "question_type"}]
         expected = {("task", row["task"]) for row in published.values()}
         expected |= {("question_type", row["question_type"]) for row in published.values()}
@@ -285,16 +284,6 @@ def test_declares_the_pinned_release():
     }
 
 
-def test_a_file_that_names_no_split_fails():
-    with pytest.raises(TimeFValidationError, match="has no source part dev"):
-        _FixtureConnector().convert([HubFileRef(_FIXTURES / "val.parquet", "dev")])
-
-
-def test_no_split_file_fails():
-    with pytest.raises(TimeFValidationError, match="nonempty"):
-        _FixtureConnector().convert([])
-
-
 def _rewrite(path: Path, position: int, **columns: str) -> None:
     """Rewrite one row of a fixture file in place, keeping its schema."""
     table = pq.read_table(path)
@@ -396,12 +385,6 @@ def test_a_printed_series_that_loses_its_line_fails_naming_the_labels(tmp_path):
     _rewrite(tmp_path / "train.parquet", position, question=question)
     with pytest.raises(TimeFValidationError, match=rf"train.parquet row {position}: .*prints series labelled"):
         _FixtureConnector().convert(_refs(tmp_path))
-
-
-def test_a_conversion_needs_every_split_file():
-    refs = [ref for ref in _refs() if ref.part == "test"]
-    with pytest.raises(TimeFValidationError, match=r"missing \['train', 'val'\]"):
-        _FixtureConnector().convert(refs)
 
 
 def test_a_file_that_is_not_parquet_fails_as_a_format_error(tmp_path):

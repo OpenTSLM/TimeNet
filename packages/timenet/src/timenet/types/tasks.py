@@ -1,19 +1,20 @@
 """Declarative modelling tasks over records and signals."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from copy import copy as shallow_copy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from functools import lru_cache
-from typing import TYPE_CHECKING, ClassVar, Self, TypeAlias, TypeGuard, TypeVar, final
+from typing import TYPE_CHECKING, ClassVar, Self, TypeAlias, TypeGuard, TypeVar, cast, final
 
 import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types._fields import ValueField
-from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
+from timenet.types._fields import TupleField, ValueField, as_tuple
+from timenet.types.annotations import Annotation, SupportsAnnotate, _copy_annotation, value_type_of
 from timenet.types.ids import EntityId, assigned_id
-from timenet.types.label_sets import LabelSet, LabelSetRegistry
+from timenet.types.label_sets import LabelSet
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -119,20 +120,19 @@ class LocalizationMode(StrEnum):
     EXHAUSTIVE = "exhaustive"
 
 
-def _target_values(values: Iterable[TargetInput] | None) -> tuple[TargetItem, ...] | None:
+def _target_values(values: TargetInput | Iterable[TargetInput] | None) -> tuple[TargetItem, ...] | None:
     """Wrap string targets while preserving native scalar and object targets.
+
+    One bare target value becomes a one-item tuple.
 
     Returns:
         Ordered targets with text handles, or ``None`` for annotation-based answers.
-
-    Raises:
-        TimeFValidationError: If ``values`` is a bare string, which would split into characters.
     """
     if values is None:
         return None
-    if isinstance(values, str):
-        raise TimeFValidationError("targets take a sequence of items; wrap a single string as (value,)")
-    return tuple(InlineText(value) if isinstance(value, str) else value for value in values)
+    single = isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable)
+    items = cast("Iterable[TargetInput]", (values,) if single else values)
+    return tuple(InlineText(value) if isinstance(value, str) else value for value in items)
 
 
 @dataclass(kw_only=True)
@@ -142,7 +142,10 @@ class Task(SupportsAnnotate):
     Targets deliberately accept a mixture of supported values. Concrete task classes describe the
     modelling operation, but they do not impose a second hierarchy of target wrapper classes. None
     means that the answer is supplied through target annotations. An empty tuple is an explicit
-    empty answer.
+    empty answer. One bare value, such as ``targets="normal"``, is one target.
+
+    The collection fields, such as ``inputs`` and ``input_annotations``, accept any iterable and
+    store a tuple.
 
     Only a concrete task class, one that sets ``task_type``, can be built; ``Task`` itself cannot.
 
@@ -151,18 +154,19 @@ class Task(SupportsAnnotate):
     final. To reuse a prompt, write a function that builds a built-in task::
 
         def age_question(record: Record, age: int) -> AnswerTask:
-            return AnswerTask(inputs=(record,), prompt="How old is the subject?", targets=(str(age),))
+            return AnswerTask(inputs=[record], prompt="How old is the subject?", targets=str(age))
     """
 
     task_type: ClassVar[TaskType]
     """The concrete task class's stable storage tag."""
 
-    inputs: tuple["Record", ...] = field(default=(), compare=False)
+    inputs: TupleField["Record"] = field(default=ValueField(as_tuple, ()), compare=False)
     """Records supplied to the model, in semantic order."""
-    targets: ValueField[Iterable[TargetInput] | None, tuple[TargetItem, ...] | None] = field(
+    targets: ValueField[TargetInput | Iterable[TargetInput] | None, tuple[TargetItem, ...] | None] = field(
         default=ValueField(_target_values, None), compare=False
     )
-    """Ordered native values and stored objects that form the expected output."""
+    """Ordered native values and stored objects that form the expected output. One bare value is one
+    target."""
     prompt: ValueField[str | TextHandle | None, TextHandle | None] = field(default=ValueField(optional_text, None))
     """Call ``read()`` for the prompt; ``None`` identifies an unprompted task."""
     split: Split | None = None
@@ -172,16 +176,17 @@ class Task(SupportsAnnotate):
     """Optional override. None infers the input kinds when resolved or written."""
     scope: Span | None = None
     """Optional region of the inputs to which the task applies."""
-    input_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
+    input_annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()), compare=False)
     """Existing annotation occurrences supplied to the model as context."""
-    target_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
+    target_annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()), compare=False)
     """Existing annotation occurrences that form the expected output."""
     rationale: ValueField[str | TextHandle | None, TextHandle | None] = field(default=ValueField(optional_text, None))
     """Call ``read()`` for the explanation; ``None`` means no rationale is present."""
-    from_tasks: tuple["Task", ...] = field(default=(), compare=False)
+    from_tasks: TupleField["Task"] = field(default=ValueField(as_tuple, ()), compare=False)
     """Tasks from which this task was derived."""
-    annotations: tuple[Annotation, ...] = ()
-    """Annotations describing this task itself."""
+    annotations: TupleField[Annotation] = field(default=ValueField(as_tuple, ()))
+    """Annotations describing this task itself. The task attaches a new occurrence of each annotation, as
+    :meth:`annotate` does."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
     _id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
@@ -201,7 +206,7 @@ class Task(SupportsAnnotate):
         super().__init_subclass__(**kwargs)
 
     def __post_init__(self) -> None:
-        """Normalize caller-provided sequences and validate target item types and the split.
+        """Validate the task type, the metadata, the split, and the target item types.
 
         Raises:
             TimeFValidationError: If the class sets no ``task_type``, one target item has an
@@ -211,12 +216,6 @@ class Task(SupportsAnnotate):
             raise TimeFValidationError(
                 f"{type(self).__name__} sets no task_type; build a concrete task class such as AnswerTask"
             )
-        self.inputs = tuple(self.inputs)
-        self.targets = None if self.targets is None else tuple(self.targets)
-        self.input_annotations = tuple(self.input_annotations)
-        self.target_annotations = tuple(self.target_annotations)
-        self.from_tasks = tuple(self.from_tasks)
-        self.annotations = tuple(self.annotations)
         self.metadata = validate_json_mapping(self.metadata)
         if self.split is not None:
             self.split = parse_split(self.split)
@@ -225,6 +224,7 @@ class Task(SupportsAnnotate):
         for target in self.targets or ():
             if not _is_target_item(target):
                 raise TimeFValidationError(f"{type(self).__name__} target has unsupported type {type(target).__name__}")
+        self.annotations = tuple(annotation._new_occurrence() for annotation in self.annotations)
 
     @property
     def id(self) -> EntityId:
@@ -281,6 +281,10 @@ class Task(SupportsAnnotate):
         self.annotations = (*self.annotations, attached)
         return attached
 
+    def walk_annotations(self) -> Iterator[Annotation]:
+        """Yield the annotation occurrences of the task. A task class that holds another annotated object adds its own."""
+        return iter(self.annotations)
+
     def spans(self) -> tuple[Span, ...]:
         """Return the task scope followed by every span-valued target."""
         spans = [] if self.scope is None else [self.scope]
@@ -331,7 +335,9 @@ class Task(SupportsAnnotate):
             TimeFValidationError: If a Record or Signal that the task references has no ID, or if
                 ``records`` or ``signals`` has no object for its ID.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by _by_id and assigned_id)
-        return replace(self, **self._references_by_id(records, signals))
+        copy = replace(self, **self._references_by_id(records, signals))
+        copy.annotations = self.annotations
+        return copy
 
     def _references_by_id(
         self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]
@@ -358,15 +364,6 @@ class Task(SupportsAnnotate):
 
     def check_targets(self) -> None:
         """Make sure that the final targets follow the rules of this task class."""
-
-    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
-        """Add the label set of the task to the dataset's label sets.
-
-        Only a classification task has a label set.
-
-        Args:
-            label_sets: The label sets of the dataset so far.
-        """
 
 
 @final
@@ -407,8 +404,7 @@ class ClassificationTask(Task):
         for value in values:
             if not isinstance(value, TextHandle):
                 raise TimeFValidationError(
-                    f"{name} has label set {self.label_set.name!r}, so each label must be text, "
-                    f"not {type(value).__name__}"
+                    f"{name} has {self.label_set}, so each label must be text, not {type(value).__name__}"
                 )
             labels.append(value.read())
         try:
@@ -416,19 +412,32 @@ class ClassificationTask(Task):
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
 
-    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
-        """Add the label set of the task to the dataset's label sets.
+    def walk_annotations(self) -> Iterator[Annotation]:
+        """Yield the annotation occurrences of the task, then those of its label set.
+
+        Yields:
+            Each annotation occurrence, in the order above.
+        """
+        yield from self.annotations
+        yield from self.label_set.annotations
+
+    def with_references(self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]) -> Self:
+        """Return a copy of the task that references the given Records and Signals, by ID.
+
+        See :meth:`Task.with_references`. The copy also gets its own copy of the label set and of its
+        annotations, so a change to the set of the copy leaves the set of the task as it is.
 
         Args:
-            label_sets: The label sets of the dataset so far.
+            records: The Records for the copy, by ID.
+            signals: The Signals for the copy, by ID.
 
-        Raises:
-            TimeFValidationError: If a different set already has the same name.
+        Returns:
+            The copy.
         """
-        try:
-            label_sets.register_or_reuse_matching_label_set(self.label_set)
-        except TimeFValidationError as exc:
-            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
+        copy = super().with_references(records, signals)
+        copy.label_set = shallow_copy(self.label_set)
+        copy.label_set.annotations = tuple(_copy_annotation(annotation) for annotation in self.label_set.annotations)
+        return copy
 
 
 @final
@@ -510,7 +519,7 @@ class TSCorrespondenceTask(Task):
     """Relate input recordings to an optional candidate pool."""
 
     task_type: ClassVar[TaskType] = TaskType.TS_CORRESPONDENCE
-    candidate_records: tuple["Record", ...] = field(default=(), compare=False)
+    candidate_records: TupleField["Record"] = field(default=ValueField(as_tuple, ()), compare=False)
     """Optional candidate pool. An empty tuple means the dataset-wide pool."""
 
     def __post_init__(self) -> None:
@@ -520,7 +529,6 @@ class TSCorrespondenceTask(Task):
             TimeFValidationError: If a Record target is outside the declared candidate pool.
         """
         super().__post_init__()
-        self.candidate_records = tuple(self.candidate_records)
         if not self.candidate_records:
             return
         candidates = {id(record) for record in self.candidate_records}

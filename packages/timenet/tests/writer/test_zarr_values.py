@@ -60,7 +60,7 @@ def test_spec_types_encode_to_distinct_single_path_segments():
 
 
 def test_index_locator_resolves_to_values(tmp_path):
-    version_dir = _write(tmp_path, chunk_max_bytes=64)
+    version_dir = _write(tmp_path, chunk_max_bytes=64, shard_target_bytes=2**16)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         row = connection.execute(
             """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
@@ -79,7 +79,7 @@ def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
     dataset = make_dataset()
-    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64)
+    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64, shard_target_bytes=2**16)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute("SELECT signal_id, n_values FROM signal_chunks").fetchall()
     signal_ids = [row[0] for row in index]
