@@ -302,6 +302,64 @@ def test_a_read_back_annotation_equals_the_constant_it_was_written_from(tmp_path
     assert stored == (1, 2)
 
 
+def _shared_annotation_dataset(shared: Annotation) -> TimeFDataset:
+    dataset = _referenced_annotation_dataset(with_task=False)
+    spec = TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt)
+    axis = RegularAxis.from_rate_hz(Fraction(500))
+    for name in ("first", "second"):
+        eager = Signal(spec=spec, name="I", time_axis=axis, data=[0.0, 1.0], annotations=[shared])
+        lazy = Signal.from_values([2.0, 3.0], spec=spec, name="II", time_axis=axis)
+        lazy = Signal.from_loader(
+            spec=spec,
+            name="III",
+            time_axis=axis,
+            loader=lazy.to_arrow,
+            n_values=2,
+            annotations=[shared],
+        )
+        source = Source(name, signals=[eager, lazy], annotations=[shared])
+        record = dataset.add_record(Record(sources=[source], annotations=[shared]))
+        dataset.add_task(
+            AnswerTask(
+                prompt="Condition?",
+                targets=("healthy",),
+                inputs=(record,),
+                input_annotations=(record.annotations[0], eager.annotations[0]),
+                annotations=[shared],
+            )
+        )
+    return dataset
+
+
+@_PLANS
+def test_owners_built_with_one_annotation_object_each_attach_a_new_occurrence(tmp_path, load):
+    shared = Annotation("condition", value="healthy")
+    dataset = _shared_annotation_dataset(shared)
+    owners = [
+        *dataset.tasks,
+        *(owner for record in dataset.records[1:] for owner in (record, *record.walk_sources(), *record.signals)),
+    ]
+    attached = [annotation for owner in owners for annotation in owner.annotations]
+    assert all(annotation == shared and annotation is not shared for annotation in attached)
+    assert len({id(annotation) for annotation in attached}) == len(attached)
+
+    version_dir = _write(tmp_path, dataset=dataset)
+    restored = _read(version_dir, load)
+
+    assert_datasets_equal(dataset, restored)
+    for task in restored.tasks:
+        (record,) = task.inputs
+        assert task.input_annotations[0] is record.annotations[0]
+        assert task.input_annotations[1] is record.signals[0].annotations[0]
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        stored = connection.execute(
+            """SELECT count(DISTINCT content_id), count(*)
+               FROM annotation_occurrences JOIN annotation_contents USING (content_id)
+               WHERE name = 'condition'"""
+        ).fetchone()
+    assert stored == (1, 10)
+
+
 def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     dataset = _referenced_annotation_dataset(with_task=False)
     record = dataset.records[0]

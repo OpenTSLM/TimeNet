@@ -39,18 +39,18 @@ Build the hierarchy from the leaves upward:
 from timenet.dataset import Record, Source
 
 accelerometer = Source(
-    name="Accelerometer",
+    "Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 imu = Source(
-    name="IMU",
+    "IMU",
     sources=(accelerometer,),
 )
 record = Record(
     sources=(imu,),
     metadata={"site": "lab-a", "run": "run-001"},
 )
-dataset.add_record(record=record)
+dataset.add_record(record)
 ```
 
 `dataset.add_record()` gives the Record and each of its Signals a read-only int64 `id`. A Source
@@ -74,12 +74,17 @@ Use an [Annotation](annotations.md) for a typed, searchable fact. Examples inclu
 firmware version, or an event on the timeline.
 
 ```python
+from timenet.dataset import Record
 from timenet.types import Annotation
 
-record.annotate(Annotation(key="condition", value="healthy"))
+record = Record(
+    sources=(source,),
+    annotations=[Annotation("condition", value="healthy")],
+)
 ```
 
-Sources and Signals also support `metadata` and `annotate()`.
+Sources and Signals also take `metadata` and `annotations`. To annotate an owner that exists
+already, call `annotate()`, as [Attach annotations](annotations.md#attach-annotations) shows.
 
 ## Add time information
 
@@ -95,8 +100,8 @@ origin = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
 record = Record(
     start_time=origin,
     sources=(
-        Source(name="sensor A", signals=(signal_a,)),
-        Source(name="sensor B", signals=(signal_b,)),
+        Source("sensor A", signals=[signal_a]),
+        Source("sensor B", signals=[signal_b]),
     ),
 )
 ```
@@ -119,19 +124,16 @@ A [Task](tasks.md) refers directly to its input Records. Registering a Task does
 Records.
 
 ```python
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.types import ClassificationTask, LabelSet
 
-CONDITION = LabelSet(
-    name="condition",
-    labels=(Label(name="healthy"), Label(name="faulty")),
-)
+CONDITION = LabelSet(["healthy", "faulty"])
 
 task = ClassificationTask(
     inputs=(record,),
-    targets=("healthy",),
+    targets="healthy",
     label_set=CONDITION,
 )
-dataset.add_task(task=task)
+dataset.add_task(task)
 ```
 
 Use `dataset.tasks_for(record)` to resolve the Task objects for one Record.

@@ -14,7 +14,6 @@ from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import ClassificationTask, InputModality, MissingReason, Split, read_value, read_values
 from timenet.writer import TimeFWriter
-from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.datadog.arfbench.connector import ARFBenchConnector
 from timenet_connectors.datasets.datadog.arfbench.questions import QUESTION_COLUMNS
 from timenet_connectors.datasets.datadog.arfbench.tests.release import (
@@ -30,13 +29,9 @@ from timenet_connectors.datasets.datadog.arfbench.tests.release import (
 
 
 @pytest.fixture
-def release(tmp_path: Path) -> list[HubFileRef]:
+def release(tmp_path: Path) -> dict[str, Path]:
     """A release with two metrics and one question about each metric count."""
     return write_release(tmp_path)
-
-
-def _path(refs: list[HubFileRef], part: str) -> Path:
-    return next(ref.path for ref in refs if ref.part == part)
 
 
 def test_a_metric_record_keeps_every_rollup_per_tag_group(release):
@@ -107,16 +102,20 @@ def test_each_question_is_a_classification_task_over_its_options(release):
     }
 
 
-def test_questions_with_equal_options_share_a_label_set(release):
+def test_questions_with_equal_options_in_equal_order_share_a_label_set(release):
     up_down = {**PRESENCE_ROW, "Unnamed: 0": "2", "options_str": '["Up", "Down"]', "correct_answer": "Up"}
-    write_qa_csv(_path(release, "questions").parent, [*ROWS, up_down])
-    presence, correlation, up_down_task = ARFBenchConnector().convert(release).get_all()
+    no_yes = {**PRESENCE_ROW, "Unnamed: 0": "3", "options_str": '["No", "Yes"]', "correct_answer": "No"}
+    write_qa_csv(release["questions"].parent, [*ROWS, up_down, no_yes])
+    presence, correlation, up_down_task, no_yes_task = ARFBenchConnector().convert(release).get_all()
 
     assert isinstance(presence, ClassificationTask) and isinstance(correlation, ClassificationTask)
-    assert isinstance(up_down_task, ClassificationTask)
+    assert isinstance(up_down_task, ClassificationTask) and isinstance(no_yes_task, ClassificationTask)
+    assert presence.label_set.ordered
     assert presence.label_set == correlation.label_set
-    assert presence.label_set.name.startswith("options_")
-    assert up_down_task.label_set.name != presence.label_set.name
+    assert presence.label_set.annotations == ()
+    assert up_down_task.label_set != presence.label_set
+    assert no_yes_task.label_set != presence.label_set
+    assert no_yes_task.label_set.names == ("No", "Yes")
 
 
 def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(release, tmp_path):
@@ -162,25 +161,25 @@ def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(rele
 )
 def test_a_malformed_question_raises_with_its_location(release, change, message):
     rows = [*ROWS, {**CORRELATION_ROW, "Unnamed: 0": "2"} | change]
-    write_qa_csv(_path(release, "questions").parent, rows)
+    write_qa_csv(release["questions"].parent, rows)
     with pytest.raises(TimeNetConnectorError, match=rf"(arfbench-qa\.csv )?{message}"):
         ARFBenchConnector().convert(release)
 
 
 def test_an_unexpected_header_raises(release):
-    write_qa_csv(_path(release, "questions").parent, [PRESENCE_ROW], columns=QUESTION_COLUMNS[1:])
+    write_qa_csv(release["questions"].parent, [PRESENCE_ROW], columns=QUESTION_COLUMNS[1:])
     with pytest.raises(TimeNetConnectorError, match=r"arfbench-qa\.csv: expected columns"):
         ARFBenchConnector().convert(release)
 
 
 def test_a_row_off_the_rollup_grid_raises(release):
-    write_series_file(_path(release, "series") / "35997_1_10.parquet", [(30, "", 0.5), (35, "", 0.6)])
+    write_series_file(release["series"] / "35997_1_10.parquet", [(30, "", 0.5), (35, "", 0.6)])
     with pytest.raises(TimeNetConnectorError, match=r"35997_1_10\.parquet group '': rows are off the 10 s grid"):
         ARFBenchConnector().convert(release)
 
 
 def test_a_series_file_without_an_interval_raises(release):
-    series_dir = _path(release, "series")
+    series_dir = release["series"]
     (series_dir / "35997_1_10.parquet").rename(series_dir / "35997_1_10s.parquet")
     with pytest.raises(TimeNetConnectorError, match=r"35997_1_10s\.parquet is not named"):
         ARFBenchConnector().convert(release)

@@ -9,8 +9,7 @@ from fractions import Fraction
 
 import pyarrow as pa
 
-from timenet.dataset import Signal
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import RegularAxis, Signal
 from timenet.errors import TimeFFormatError
 from timenet.types import TimeSeriesSpec
 from timenet_connectors.bases.edf import reader

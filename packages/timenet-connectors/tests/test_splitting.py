@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.types.splits import Split
+from timenet.types import Split
 from timenet_connectors.splitting import StratifiedSplitter, stratified
 
 

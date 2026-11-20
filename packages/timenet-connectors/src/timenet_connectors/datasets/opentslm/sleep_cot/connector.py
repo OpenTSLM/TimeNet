@@ -17,8 +17,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError, model_validator
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
@@ -36,15 +35,15 @@ SPLITS_PATH = Path(__file__).with_name("splits.json")
 # The release writes the stage codes of the Rechtschaffen and Kales manual. The prompts and the
 # rationales write the names in the descriptions.
 SLEEP_STAGE = LabelSet(
-    name="sleep_stage",
-    labels=(
+    [
         Label(name="W", description="Wake"),
         Label(name="N1", description="Non-REM stage 1"),
         Label(name="N2", description="Non-REM stage 2"),
         Label(name="N3", description="Non-REM stage 3"),
         Label(name="N4", description="Non-REM stage 4"),
         Label(name="REM", description="REM sleep"),
-    ),
+    ],
+    annotations=[Annotation("name", value="sleep_stage")],
 )
 # OpenTSLM converted the microvolts of Sleep-EDF to volts and kept every second sample of 100 Hz.
 EEG = TimeSeriesSpec(spec_type="eeg", name="EEG", unit_value=ureg.volt, dtype="float64")
@@ -141,8 +140,8 @@ class SleepCotRow:
             The new record.
         """
         signal = Signal.from_values(self.eeg, spec=EEG, name="EEG Fpz-Cz", time_axis=SAMPLED_AT_50_HZ)
-        source = Source(name="EEG", signals=(signal,))
-        subject = Annotation(key="subject_ids", value=[self.subject_id])
+        source = Source("EEG", signals=[signal])
+        subject = Annotation("subject_ids", value=[self.subject_id])
         return Record(sources=(source,), annotations=(subject,), metadata={"recording_id": self.recording_id})
 
     def create_classification_task(self, record: Record, *, split: Split) -> ClassificationTask:
@@ -153,7 +152,7 @@ class SleepCotRow:
         """
         return ClassificationTask(
             inputs=(record,),
-            targets=(self.label,),
+            targets=self.label,
             label_set=SLEEP_STAGE,
             rationale=self.rationale,
             split=split,
@@ -263,7 +262,7 @@ class SleepCotReader:
 class SleepCotConnector(BaseConnector[SleepCotReader]):
     """Connector for the SleepEDF-CoT release of OpenTSLM."""
 
-    async def download_async(self, cache_dir: Path) -> list[SleepCotReader]:  # ruff: ignore[no-self-use]
+    async def download_async(self, cache_dir: Path) -> SleepCotReader:  # ruff: ignore[no-self-use]
         """Download the release CSV.
 
         Args:
@@ -274,24 +273,23 @@ class SleepCotConnector(BaseConnector[SleepCotReader]):
         """
         artifact = Artifact(SLEEP_COT_URL, cache_dir / "sleep_cot.csv", sha256=SLEEP_COT_SHA256)
         (csv_path,) = await download_files([artifact])
-        return [SleepCotReader(csv_path=csv_path, splits_path=SPLITS_PATH)]
+        return SleepCotReader(csv_path=csv_path, splits_path=SPLITS_PATH)
 
-    def convert(self, raw_refs: list[SleepCotReader]) -> TimeFDataset:
+    def convert(self, reader: SleepCotReader) -> TimeFDataset:
         """Create one Record and one ClassificationTask for each window.
 
         Args:
-            raw_refs: The reader from :meth:`download_async`.
+            reader: The reader from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
-        (reader,) = raw_refs
         rows = reader.read_rows()
         splits = reader.read_splits(len(rows))
         dataset = TimeFDataset(metadata=self.metadata())
         for row, split in zip(rows, splits, strict=True):
-            record = dataset.add_record(record=row.create_record())
-            dataset.add_task(task=row.create_classification_task(record, split=split))
+            record = dataset.add_record(row.create_record())
+            dataset.add_task(row.create_classification_task(record, split=split))
         return dataset
 
 

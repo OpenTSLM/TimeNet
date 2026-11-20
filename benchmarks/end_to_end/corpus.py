@@ -19,7 +19,6 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     ForecastingTask,
-    Label,
     LabelSet,
     License,
     TimeInterval,
@@ -31,10 +30,10 @@ from timenet.types import (
 from timenet.types.wire import ValueDtype
 
 
-CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="outer-race-fault")))
-RHYTHM = LabelSet(name="rhythm", labels=(Label(name="normal-sinus"), Label(name="atrial-fibrillation")))
-SLEEP_STAGE = LabelSet(name="sleep-stage", labels=tuple(Label(name=stage) for stage in ("W", "N1", "N2", "N3", "REM")))
-MEAN_SIGN = LabelSet(name="mean-sign", labels=(Label(name="above-zero"), Label(name="below-zero")))
+CONDITION = LabelSet(["healthy", "outer-race-fault"])
+RHYTHM = LabelSet(["normal-sinus", "atrial-fibrillation"])
+SLEEP_STAGE = LabelSet(["W", "N1", "N2", "N3", "REM"])
+MEAN_SIGN = LabelSet(["above-zero", "below-zero"])
 
 
 @dataclass(frozen=True)
