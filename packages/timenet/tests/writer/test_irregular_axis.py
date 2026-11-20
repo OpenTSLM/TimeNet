@@ -76,11 +76,11 @@ def test_an_irregular_series_round_trips(tmp_path, values_backend):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
 
-    reader = TimeFReader(open_local_version(_written(tmp_path, dataset, values_backend=values_backend)))
-    back = next(iter(reader.iter_records())).signals[0]
-    assert back.time_axis == IrregularAxis(first_us=0, last_us=6_527_881_000)
-    assert back.time_offsets_us().tolist() == _HATCH_US
-    assert back.to_numpy().tolist() == _HATCH_VALUES
+    with TimeFReader(open_local_version(_written(tmp_path, dataset, values_backend=values_backend))) as reader:
+        back = next(iter(reader.iter_records())).signals[0]
+        assert back.time_axis == IrregularAxis(first_us=0, last_us=6_527_881_000)
+        assert back.time_offsets_us().tolist() == _HATCH_US
+        assert back.to_numpy().tolist() == _HATCH_VALUES
 
 
 def test_the_window_comes_from_the_stored_endpoints():
@@ -108,16 +108,16 @@ def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),)))
     dataset.derive_schema()
 
-    reader = TimeFReader(open_local_version(_written(tmp_path, dataset)))
-    back = {ts.name: ts for ts in next(iter(reader.iter_records())).signals}
-    assert back["temp"].time_offsets_us().tolist() == shared_us
-    assert back["humidity"].time_offsets_us().tolist() == shared_us
-    assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
-    assert back["z"].time_axis == RegularAxis.from_rate_hz(500)
-    # The regular series computes its time offsets and stores none, in the same shard as those that do.
-    with pytest.raises(TimeFValidationError, match="only an IrregularAxis"):
-        back["z"].time_offsets_us()
-    assert back["z"].span_us == (0, 1_000_000)
+    with TimeFReader(open_local_version(_written(tmp_path, dataset))) as reader:
+        back = {ts.name: ts for ts in next(iter(reader.iter_records())).signals}
+        assert back["temp"].time_offsets_us().tolist() == shared_us
+        assert back["humidity"].time_offsets_us().tolist() == shared_us
+        assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
+        assert back["z"].time_axis == RegularAxis.from_rate_hz(500)
+        # The regular series computes its time offsets and stores none, in the same shard as those that do.
+        with pytest.raises(TimeFValidationError, match="only an IrregularAxis"):
+            back["z"].time_offsets_us()
+        assert back["z"].span_us == (0, 1_000_000)
 
 
 def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypatch):
@@ -193,10 +193,10 @@ def test_value_chunking_does_not_affect_shared_time_offsets(tmp_path):
     dataset.derive_schema()
 
     # The values split into small chunks while the axis remains one control-plane object.
-    reader = TimeFReader(open_local_version(_written(tmp_path, dataset, chunk_max_bytes=480)))
-    back = next(iter(reader.iter_records())).signals[0]
-    assert back.time_offsets_us().tolist() == time_offsets
-    assert back.to_numpy().tolist() == list(range(4000))
+    with TimeFReader(open_local_version(_written(tmp_path, dataset, chunk_max_bytes=480))) as reader:
+        back = next(iter(reader.iter_records())).signals[0]
+        assert back.time_offsets_us().tolist() == time_offsets
+        assert back.to_numpy().tolist() == list(range(4000))
 
 
 def test_an_irregular_series_needs_its_time_offsets():
@@ -281,8 +281,9 @@ def test_zarr_shared_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max
     version = _written(
         tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes, shard_target_bytes=2**16
     )
-    back = next(iter(TimeFReader(open_local_version(version)).iter_records())).signals[0]
-    assert back.time_offsets_us().tolist() == _HATCH_US
+    with TimeFReader(open_local_version(version)) as reader:
+        back = next(iter(reader.iter_records())).signals[0]
+        assert back.time_offsets_us().tolist() == _HATCH_US
 
 
 def test_zarr_keeps_only_values_in_the_values_plane(tmp_path):
@@ -313,11 +314,12 @@ def test_zarr_keeps_only_values_in_the_values_plane(tmp_path):
     assert not (store / "_irregular").exists()
     assert not (store / "_time_offsets").exists()
 
-    back = {ts.name: ts for ts in next(iter(TimeFReader(open_local_version(version)).iter_records())).signals}
-    assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
-    assert back["steady"].to_numpy().tolist() == list(range(8))
-    with pytest.raises(TimeFValidationError, match="only an IrregularAxis"):
-        back["steady"].time_offsets_us()
+    with TimeFReader(open_local_version(version)) as reader:
+        back = {ts.name: ts for ts in next(iter(reader.iter_records())).signals}
+        assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
+        assert back["steady"].to_numpy().tolist() == list(range(8))
+        with pytest.raises(TimeFValidationError, match="only an IrregularAxis"):
+            back["steady"].time_offsets_us()
 
 
 def test_a_spec_type_cannot_collide_with_the_zarr_groups():
@@ -338,10 +340,11 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     version = open_local_version(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE axes SET last_us = last_us + 1000 WHERE axis_type = 'irregular'")
-    back = next(iter(TimeFReader(version).iter_records())).signals[0]
-    # The writer numbers axes from 1, and this release has one.
-    with pytest.raises(TimeFFormatError, match="axis 1 has offsets disagreeing with its axis endpoints"):
-        back.time_offsets_us()
+    with TimeFReader(version) as reader:
+        back = next(iter(reader.iter_records())).signals[0]
+        # The writer numbers axes from 1, and this release has one.
+        with pytest.raises(TimeFFormatError, match="axis 1 has offsets disagreeing with its axis endpoints"):
+            back.time_offsets_us()
 
 
 def test_reader_rejects_different_signal_lengths_on_one_irregular_axis(tmp_path):
@@ -385,9 +388,10 @@ def test_reader_rejects_decreasing_stored_time_offsets(tmp_path):
     rows = table.to_pylist()
     rows[0]["time_offsets"][1] = -1
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
-    back = next(iter(TimeFReader(version).iter_records())).signals[0]
-    with pytest.raises(TimeFFormatError, match="axis 1 has decreasing offsets"):
-        back.time_offsets_us()
+    with TimeFReader(version) as reader:
+        back = next(iter(reader.iter_records())).signals[0]
+        with pytest.raises(TimeFFormatError, match="axis 1 has decreasing offsets"):
+            back.time_offsets_us()
 
 
 def _hatch_release(tmp_path):
@@ -529,8 +533,9 @@ def test_writing_a_loaded_release_reuses_its_shared_time_offsets_without_hashing
     assert [source.release for source in manifest.payload_sources.values()] == [
         DatasetRef(dataset_id="demo/irregular", version=_SOURCE)
     ]
-    back = next(TimeFReader(open_local_version(target)).iter_records()).signals
-    assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
+    with TimeFReader(open_local_version(target)) as reader:
+        back = next(reader.iter_records()).signals
+        assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
 
 
 def test_stored_offsets_digest_is_the_content_id_writers_compare(tmp_path):
@@ -628,11 +633,12 @@ def test_the_writer_reuses_stored_offsets_and_compares_them_by_digest_without_re
     assert [source.release for source in manifest.payload_sources.values()] == [
         DatasetRef(dataset_id="demo/irregular", version=_SOURCE)
     ]
-    back = next(TimeFReader(open_local_version(target)).iter_records()).signals
-    # The child reads its time offsets from the source release, which their location names.
-    assert isinstance(back[0]._time_offsets, StoredOffsets)
-    assert back[0]._time_offsets._location.source == "demo/irregular@1.0.0"
-    assert [signal.time_offsets_us().tolist() for signal in back] == [_SHARED_US, _SHARED_US]
+    with TimeFReader(open_local_version(target)) as reader:
+        back = next(reader.iter_records()).signals
+        # The child reads its time offsets from the source release, which their location names.
+        assert isinstance(back[0]._time_offsets, StoredOffsets)
+        assert back[0]._time_offsets._location.source == "demo/irregular@1.0.0"
+        assert [signal.time_offsets_us().tolist() for signal in back] == [_SHARED_US, _SHARED_US]
 
 
 def test_the_writer_refuses_stored_offsets_whose_digest_differs_on_one_axis(tmp_path):
@@ -659,8 +665,9 @@ def test_the_writer_never_reads_stored_offsets(tmp_path, monkeypatch, stored_fir
     assert bool(manifest.payload_sources) is stored_first
     assert bool(manifest.files.payloads) is not stored_first
 
-    back = next(TimeFReader(open_local_version(target)).iter_records()).signals
-    assert [signal.time_offsets_us().tolist() for signal in back] == [_SHARED_US, _SHARED_US]
+    with TimeFReader(open_local_version(target)) as reader:
+        back = next(reader.iter_records()).signals
+        assert [signal.time_offsets_us().tolist() for signal in back] == [_SHARED_US, _SHARED_US]
 
 
 @pytest.mark.parametrize(
@@ -725,12 +732,12 @@ def test_a_slice_round_trips_with_its_place_on_the_timeline(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(hatch_part, temperature_part)),)))
     dataset.derive_schema()
 
-    reader = TimeFReader(open_local_version(_written(tmp_path, dataset)))
-    hatch_back, temperature_back = next(iter(reader.iter_records())).signals
-    assert hatch_back.time_axis == IrregularAxis(first_us=1_655_412_000, last_us=6_486_006_000)
-    assert hatch_back.time_offsets_us().tolist() == [1_655_412_000, 6_486_006_000]
-    assert hatch_back.to_numpy().tolist() == [0.0, 1.0]
-    assert hatch_back.span_us == hatch_part.span_us
-    assert temperature_back.time_axis == temperature_part.time_axis
-    assert temperature_back.to_numpy().tolist() == [21.0, 22.0]
-    assert temperature_back.span_us == (1_000_000, 3_000_000)
+    with TimeFReader(open_local_version(_written(tmp_path, dataset))) as reader:
+        hatch_back, temperature_back = next(iter(reader.iter_records())).signals
+        assert hatch_back.time_axis == IrregularAxis(first_us=1_655_412_000, last_us=6_486_006_000)
+        assert hatch_back.time_offsets_us().tolist() == [1_655_412_000, 6_486_006_000]
+        assert hatch_back.to_numpy().tolist() == [0.0, 1.0]
+        assert hatch_back.span_us == hatch_part.span_us
+        assert temperature_back.time_axis == temperature_part.time_axis
+        assert temperature_back.to_numpy().tolist() == [21.0, 22.0]
+        assert temperature_back.span_us == (1_000_000, 3_000_000)
