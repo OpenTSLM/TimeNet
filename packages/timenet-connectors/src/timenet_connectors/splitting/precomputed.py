@@ -12,26 +12,26 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types.splits import Split
 
 
-K = TypeVar("K", int, str)
+SampleKeyT = TypeVar("SampleKeyT", int, str)
 """How a split file names a sample: a row position or a source id."""
 
 
-class PrecomputedSplits(BaseModel, Generic[K]):
+class PrecomputedSplits(BaseModel, Generic[SampleKeyT]):
     """The validation and test samples of a split that a script computed once and wrote to a file.
 
-    Use it when the source has no split of its own and the published split depends on a library that
-    the connector should not pin, such as a seeded shuffle. The script runs the published code once
-    and writes this file. The file names each sample by a key: a row position or a source id. Every
-    sample that the file does not name is in the train split. The file is JSON, compressed with xz
-    when its name ends in ``.xz``.
+    Use it when the source has no split of its own and the split depends on the version of a library,
+    such as a seeded shuffle, so that making it again at build time could change it. The script makes
+    the split once and writes this file. The file names each sample by a key: a row position or a
+    source id. Every sample that the file does not name is in the train split. The file is JSON,
+    compressed with xz when its name ends in ``.xz``.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_sha256: str
     """SHA-256 digest of the source file that the split was made from."""
-    validation: tuple[K, ...]
-    test: tuple[K, ...]
+    validation: tuple[SampleKeyT, ...]
+    test: tuple[SampleKeyT, ...]
 
     @model_validator(mode="after")
     def _each_key_in_one_split(self) -> Self:
@@ -41,7 +41,7 @@ class PrecomputedSplits(BaseModel, Generic[K]):
         return self
 
     @property
-    def named_keys(self) -> tuple[K, ...]:
+    def named_keys(self) -> tuple[SampleKeyT, ...]:
         """The validation and test keys together."""
         return (*self.validation, *self.test)
 
@@ -63,7 +63,7 @@ class PrecomputedSplits(BaseModel, Generic[K]):
         except (lzma.LZMAError, ValidationError) as exc:
             raise TimeNetConnectorError(f"{path.name} does not hold a valid split: {exc}") from exc
 
-    def assign_splits(self, keys: Sequence[K], *, source_sha256: str) -> list[Split]:
+    def assign_splits(self, keys: Sequence[SampleKeyT], *, source_sha256: str) -> list[Split]:
         """Assign a split to each sample of the pinned source.
 
         Args:
