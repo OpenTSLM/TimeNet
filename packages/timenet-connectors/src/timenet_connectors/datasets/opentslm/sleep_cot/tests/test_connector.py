@@ -9,8 +9,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal
-from timenet.types import ClassificationTask, Split
-from timenet.types.text import read_value
+from timenet.types import ClassificationTask, Split, read_value
 from timenet_connectors.datasets.opentslm.sleep_cot.connector import (
     COLUMNS,
     SAMPLES_PER_WINDOW,
@@ -75,7 +74,7 @@ def _write_release(
 
 
 def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
-    tasks = SleepCotConnector().convert([_write_release(tmp_path)]).tasks_of(ClassificationTask)
+    tasks = SleepCotConnector().convert(_write_release(tmp_path)).tasks_of(ClassificationTask)
     assert [task.split for task in tasks] == [Split.TRAIN, Split.VALIDATION, Split.TRAIN, Split.TEST]
     for task, row in zip(tasks, _ROWS, strict=True):
         (record,) = task.inputs
@@ -106,7 +105,7 @@ def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
 )
 def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, splits, message):
     with pytest.raises(TimeNetConnectorError, match=message):
-        SleepCotConnector().convert([_write_release(tmp_path, **splits)])
+        SleepCotConnector().convert(_write_release(tmp_path, **splits))
 
 
 @pytest.mark.parametrize(
@@ -122,13 +121,13 @@ def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, splits, mes
 def test_a_malformed_row_raises_with_its_location(tmp_path, change, message):
     rows = [*_ROWS[:2], _ROWS[2] | change]
     with pytest.raises(TimeNetConnectorError, match=rf"sleep_cot\.csv data row 3: {message}"):
-        SleepCotConnector().convert([_write_release(tmp_path, rows)])
+        SleepCotConnector().convert(_write_release(tmp_path, rows))
 
 
 def test_the_dataset_round_trips_through_storage(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
-    dataset = SleepCotConnector().convert([_write_release(source)])
+    dataset = SleepCotConnector().convert(_write_release(source))
     version_dir = dataset.write(path=tmp_path / "registry")
     with TimeFReader(open_local_version(version_dir)) as reader:
         reader.verify()

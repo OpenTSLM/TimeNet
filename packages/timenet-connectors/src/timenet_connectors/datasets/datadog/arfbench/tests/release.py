@@ -12,7 +12,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.types import SupportsAnnotate, read_value
-from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.datadog.arfbench.connector import QA_CSV, SERIES_DIR
 from timenet_connectors.datasets.datadog.arfbench.questions import QUESTION_COLUMNS
 
@@ -116,13 +115,10 @@ def facts(annotated: SupportsAnnotate) -> dict[str, object]:
     return {annotation.key: read_value(annotation.value) for annotation in annotated.annotations}
 
 
-def write_release(root: Path) -> list[HubFileRef]:
+def write_release(root: Path) -> dict[str, Path]:
     """Write the question table and the series files.
 
     Returns:
-        The refs that the series connector downloads.
+        The files that the series connector downloads.
     """
-    return [
-        HubFileRef(write_qa_csv(root, ROWS), "questions"),
-        HubFileRef(write_series_dir(root), "series"),
-    ]
+    return {"questions": write_qa_csv(root, ROWS), "series": write_series_dir(root)}

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -16,7 +17,6 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     InputModality,
-    Label,
     LabelSet,
     License,
     ScalarPredictionTask,
@@ -33,22 +33,7 @@ from timenet.types import (
 )
 
 
-TEST_LABELS = LabelSet(
-    name="labels",
-    labels=(
-        Label(name="N2"),
-        Label(name="a"),
-        Label(name="afib"),
-        Label(name="b"),
-        Label(name="beat"),
-        Label(name="c"),
-        Label(name="d"),
-        Label(name="e"),
-        Label(name="event"),
-        Label(name="walking"),
-        Label(name="x"),
-    ),
-)
+TEST_LABELS = LabelSet(["N2", "a", "afib", "b", "beat", "c", "d", "e", "event", "walking", "x"])
 
 
 def _classification_task(record: Record, label: str, **kwargs: Any) -> ClassificationTask:
@@ -68,6 +53,25 @@ def _metadata():
 
 def _dataset():
     return TimeFDataset(metadata=_metadata())
+
+
+def test_the_constructor_attaches_annotations_in_order_as_annotate_does():
+    site = Annotation("site", value="lab")
+    dataset = TimeFDataset(metadata=_metadata(), annotations=[site, Annotation("revision", value=3)])
+    assert [(one.key, one.value) for one in dataset.annotations] == [("site", "lab"), ("revision", 3)]
+    assert dataset.annotations[0] is not site
+    assert _dataset().annotations == ()
+
+
+@pytest.mark.parametrize("annotations", ["ab", {"a": 1}, Annotation("site", value="lab")])
+def test_the_constructor_rejects_annotations_that_are_not_an_iterable_of_items(annotations):
+    with pytest.raises(TimeFValidationError, match="takes an iterable"):
+        TimeFDataset(metadata=_metadata(), annotations=annotations)
+
+
+def test_the_constructor_rejects_an_annotation_with_a_time_span():
+    with pytest.raises(TimeFValidationError, match="cannot have a time span"):
+        TimeFDataset(metadata=_metadata(), annotations=[Annotation("mark", span=TimePoint.seconds(1.0))])
 
 
 def test_add_record_registers_and_returns(make_series):
@@ -177,6 +181,90 @@ def test_derive_schema(make_series):
     )
     assert ClassificationTask in schema.tasks
     assert ds.schema is schema
+
+
+def test_derive_schema_collects_label_set_annotations(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    labels = ("a", "b")
+    ds.add_task(
+        task=ClassificationTask(
+            inputs=(record,),
+            targets=("a",),
+            label_set=LabelSet(labels, annotations=(Annotation(key="name", value="letters", unit="meter"),)),
+        )
+    )
+    ds.add_task(
+        task=ClassificationTask(
+            inputs=(record,),
+            targets=("b",),
+            label_set=LabelSet(labels, annotations=(Annotation(key="note", value="extra"),)),
+        )
+    )
+
+    schema = ds.derive_schema()
+
+    assert [descriptor.key for descriptor in schema.annotations] == ["name", "note"]
+    assert schema.annotations[0] == AnnotationDescriptor(
+        key="name", annotation_type=AnnotationType.STATIC, value_type="str", unit="meter"
+    )
+
+
+def test_derive_schema_rejects_a_label_set_annotation_that_conflicts_with_a_record_annotation(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="name", value=1))
+    ds.add_task(
+        task=ClassificationTask(
+            inputs=(record,),
+            targets=("a",),
+            label_set=LabelSet(["a"], annotations=(Annotation(key="name", value="letters"),)),
+        )
+    )
+    with pytest.raises(TimeFValidationError, match="conflicting descriptors"):
+        ds.derive_schema()
+
+
+def test_a_task_stream_adds_its_annotation_keys_to_the_schema(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="age", value=64))
+    label_set = LabelSet(["a"], annotations=(Annotation(key="name", value="letters"),))
+    task = ClassificationTask(inputs=(record,), targets=("a",), label_set=label_set)
+    task.annotate(Annotation(key="difficulty", value=2))
+    ds.set_task_stream([ClassificationTask], lambda: iter((task,)))
+    assert [descriptor.key for descriptor in ds.derive_schema().annotations] == ["age"]
+
+    list(ds.iter_streamed_tasks_validated())
+
+    assert ds.schema is not None
+    assert [descriptor.key for descriptor in ds.schema.annotations] == ["age", "difficulty", "name"]
+
+
+def test_a_task_stream_rejects_an_annotation_key_that_conflicts_with_the_schema(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="name", value=1))
+    label_set = LabelSet(["a"], annotations=(Annotation(key="name", value="letters"),))
+    task = ClassificationTask(inputs=(record,), targets=("a",), label_set=label_set)
+    ds.set_task_stream([ClassificationTask], lambda: iter((task,)))
+    ds.derive_schema()
+
+    with pytest.raises(TimeFValidationError, match="conflicting descriptors"):
+        list(ds.iter_streamed_tasks_validated())
+
+
+def test_derive_schema_collects_dataset_and_task_annotations(make_series):
+    ds = _dataset()
+    record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    record.annotate(Annotation(key="age", value=64))
+    ds.annotate(Annotation(key="cohort", value="adult"))
+    task = ds.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
+    task.annotate(Annotation(key="difficulty", value=2))
+
+    schema = ds.derive_schema()
+
+    assert [descriptor.key for descriptor in schema.annotations] == ["cohort", "age", "difficulty"]
 
 
 def test_derive_schema_dedupes_specs(make_series):
@@ -830,6 +918,22 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     assert ds.tasks == ()  # all-or-nothing: the valid one is not registered either
 
 
+def test_walk_annotations_goes_from_the_dataset_to_records_to_tasks(make_series):
+    ds = _dataset()
+    signal = make_series()
+    source = Source(name="Source", signals=(signal,))
+    record = ds.add_record(record=Record(sources=(source,)))
+    task = ds.add_task(task=_classification_task(record, "a"))
+    answer = ds.add_task(task=AnswerTask(inputs=(record,), targets=("x",)))
+    task.label_set = replace(task.label_set)
+    owners = ((answer, "answer"), (task.label_set, "label_set"), (task, "task"), (signal, "signal"))
+    for owner, key in (*owners, (source, "source"), (record, "record")):
+        owner.annotate(Annotation(key=key, value=key))
+    ds.annotate(Annotation(key="dataset", value="dataset"))
+    keys = [a.key for a in ds.walk_annotations()]
+    assert keys == ["dataset", "record", "source", "signal", "task", "label_set", "answer"]
+
+
 def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_series):
     # The deriving task is listed before its parent, so this only passes because the batch is validated
     # as a unit rather than task by task.
@@ -1065,3 +1169,12 @@ def test_to_features_and_targets_can_take_one_split(make_series):
     assert y_test.tolist() == ["c"]
     with pytest.raises(TimeFValidationError, match="features of the validation split"):
         dataset.to_features_and_targets(task=ClassificationTask, split=Split.VALIDATION)
+
+
+def test_add_methods_take_their_argument_positionally(make_series):
+    ds = _dataset()
+    record = ds.add_record(Record(sources=[Source("Source", signals=[make_series()])]))
+    task = ds.add_task(_classification_task(record, "afib"))
+    more = ds.add_tasks([AnswerTask(inputs=[record], prompt="Alive?", targets="Yes")])
+    assert ds.records == (record,)
+    assert ds.tasks == (task, *more)

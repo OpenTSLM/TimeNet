@@ -58,12 +58,12 @@ from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
-ORDER = LabelSet(name="order", labels=(Label(name="late"),))
+ORDER = LabelSet(["late"])
 
 
 _ALIAS = ParentAlias("base")
 _SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
-SCP = LabelSet(name="scp", labels=(Label(name="normal", description="No finding."), Label(name="abnormal")))
+SCP = LabelSet([Label(name="normal", description="No finding."), "abnormal"])
 
 
 def store(root, dataset):

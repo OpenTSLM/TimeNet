@@ -20,7 +20,6 @@ from timenet.errors import TimeFFormatError
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
 from timenet.format.task_target_row import TargetValueRow
 from timenet.types import (
-    ClassificationTask,
     EntityId,
     InputModality,
     LocalizationMode,
@@ -57,11 +56,11 @@ ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRela
 """The fields stored in ``task_annotation_refs``."""
 
 
-PAYLOAD_COLUMNS = ("label_set", "unit", "target_name", "mode")
+PAYLOAD_COLUMNS = ("unit", "target_name", "mode")
 """The ``tasks`` columns that hold configuration for each task type.
 
-Unused columns are NULL. A classification task stores its label set name in ``label_set``.
-The ``label_sets`` table stores the set itself."""
+Unused columns are NULL. The writer sets the ``label_set_id`` column of a classification task itself.
+The ``label_sets`` table stores the set."""
 
 
 def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality]:
@@ -182,9 +181,7 @@ def encode_task_payload(task: Task) -> dict[str, str | None]:
         One value per :data:`PAYLOAD_COLUMNS`, ``None`` where the task type has no such field.
     """
     columns: dict[str, str | None] = dict.fromkeys(PAYLOAD_COLUMNS)
-    if isinstance(task, ClassificationTask):
-        columns["label_set"] = task.label_set.name
-    elif isinstance(task, ScalarPredictionTask):
+    if isinstance(task, ScalarPredictionTask):
         columns["unit"] = None if task.unit is None else str(task.unit)
         columns["target_name"] = task.target_name
     elif isinstance(task, TemporalLocalizationTask):

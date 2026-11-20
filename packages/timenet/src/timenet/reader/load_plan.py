@@ -67,7 +67,7 @@ def _task_children(item: Task) -> tuple[object, ...]:
         item.prompt,
         item.rationale,
         *(item.targets or ()),
-        *item.annotations,
+        *item.walk_annotations(),
         *item.inputs,
         *getattr(item, "candidate_records", ()),
         *item.input_annotations,
