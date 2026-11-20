@@ -203,6 +203,9 @@ have a checkpoint.
 - **Use measures that do not reward the majority class:** AUROC, the precision-recall curve of `resolved` (its baseline is the resolved rate), balanced accuracy, and calibration (Brier score) for a health score.
 - **Count each run once.** A long run gives up to four checkpoints, and long runs fail more often. When training, weight a checkpoint by 1 / (checkpoints of its run), or sample one checkpoint per run.
 - **Compare against simple baselines:** always `unresolved`; the numeric signals alone; the thoughts alone.
+- **Score the status report by its last sentence.** The first three restate counts the inputs show,
+  so text overlap (ROUGE, BLEU) on the whole answer stays high even when the prediction is wrong. The
+  last sentence starts with "The run will go on for"; score its step count, ending and outcome apart.
 
 ## Release details a user should know
 
