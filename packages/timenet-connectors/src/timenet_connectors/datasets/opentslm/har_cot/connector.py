@@ -199,17 +199,17 @@ class HarCotConnector(BaseConnector[list[HarCotSplitFile]]):
         root = await ensure_archive(HAR_COT_URL, cache_dir, filename="har_cot.zip", sha256=HAR_COT_SHA256)
         return [HarCotSplitFile(split=split, path=root / name) for split, name in SPLIT_FILES.items()]
 
-    def convert(self, raw_refs: list[HarCotSplitFile]) -> TimeFDataset:
+    def convert(self, split_files: list[HarCotSplitFile]) -> TimeFDataset:
         """Create one Record and one ClassificationTask for each window.
 
         Args:
-            raw_refs: The split files from :meth:`download_async`.
+            split_files: The split files from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for split_file in raw_refs:
+        for split_file in split_files:
             for row in split_file.read_rows():
                 record = dataset.add_record(row.create_record())
                 dataset.add_task(row.create_classification_task(record, split=split_file.split))

@@ -18,7 +18,7 @@ this branch. Anchor files:
   a lightweight handle. I/O only, no parsing, idempotent for a given `cache_dir`.
 - `convert(self, raw: TRaw, /) -> TimeFDataset` (abstract): parse the download result into a
   `TimeFDataset`. CPU only, no network. The parameter is positional-only, so name it as you like
-  (`source`, `raw_refs`).
+  (`source`, `recordings`).
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)

@@ -67,7 +67,7 @@ A connector takes no constructor arguments. Configuration comes from environment
 It can be any value, for example one small dataclass, a list of file references, or `None`. The
 connector is generic over `TRaw`: `class MyConnector(BaseConnector[MySource])`. The engine passes the
 value to `compose` unchanged. The base takes it as a positional argument, so a connector can name the
-parameter, for example `source` or `raw_refs`.
+parameter, for example `source` or `recordings`.
 
 If an assumption about your source data, downloads, or parents does not hold, raise
 `TimeNetConnectorError` from `timenet.errors`.

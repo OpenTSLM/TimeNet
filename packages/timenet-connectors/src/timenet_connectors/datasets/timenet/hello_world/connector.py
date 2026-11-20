@@ -122,13 +122,13 @@ class HelloWorldConnector(BaseConnector[list[HelloWorldRecording]]):
         """
         return [HelloWorldRecording(index=0, n_values=16), HelloWorldRecording(index=1, n_values=512)]
 
-    def convert(self, raw_refs: list[HelloWorldRecording]) -> TimeFDataset:
+    def convert(self, recordings: list[HelloWorldRecording]) -> TimeFDataset:
         """Build the complete dataset from the recording descriptions.
 
         The dataset includes every TimeF feature.
 
         Args:
-            raw_refs: The recordings from :meth:`download`.
+            recordings: The recordings from :meth:`download`.
 
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
@@ -137,7 +137,7 @@ class HelloWorldConnector(BaseConnector[list[HelloWorldRecording]]):
 
         # Record 0's sine signal.
         shared = Signal.from_values(
-            _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
+            _wave_values(np.sin, recordings[0].n_values, phase=0.0),
             spec=_SINE,
             name="a",
             time_axis=_AXIS,
@@ -148,7 +148,7 @@ class HelloWorldConnector(BaseConnector[list[HelloWorldRecording]]):
 
         # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = Signal.from_values(
-            _wave_values(np.cos, raw_refs[0].n_values, phase=0.0),
+            _wave_values(np.cos, recordings[0].n_values, phase=0.0),
             spec=_COSINE,
             name="b",
             time_axis=_AXIS,
@@ -210,8 +210,8 @@ class HelloWorldConnector(BaseConnector[list[HelloWorldRecording]]):
             spec=_SINE,
             name="a",
             time_axis=_AXIS,
-            loader=_wave(np.sin, raw_refs[1].n_values, phase=1.0),
-            n_values=raw_refs[1].n_values,
+            loader=_wave(np.sin, recordings[1].n_values, phase=1.0),
+            n_values=recordings[1].n_values,
         )
         record1 = Record(
             sources=[
@@ -219,7 +219,7 @@ class HelloWorldConnector(BaseConnector[list[HelloWorldRecording]]):
                     "Synthetic generator",
                     signals=[
                         Signal.from_values(
-                            _wave_values(np.sin, raw_refs[0].n_values, phase=0.0),
+                            _wave_values(np.sin, recordings[0].n_values, phase=0.0),
                             spec=_SINE,
                             name="a",
                             time_axis=_AXIS,
@@ -236,11 +236,11 @@ class HelloWorldConnector(BaseConnector[list[HelloWorldRecording]]):
         # half of rec-0. As a result, the window is a true offset window and not a byte-identical
         # prefix of the shared sine signal. The phase offset continues the same wave. The values
         # therefore match rec-0 over the window.
-        window_start = raw_refs[0].n_values // 2
+        window_start = recordings[0].n_values // 2
         window = Signal.from_values(
             _wave_values(
                 np.sin,
-                raw_refs[0].n_values - window_start,
+                recordings[0].n_values - window_start,
                 phase=2.0 * np.pi * window_start / _SAMPLING_RATE_HZ,
             ),
             spec=_SINE,
