@@ -4,36 +4,31 @@ An ``s3://<bucket>/<prefix>`` root holds datasets under ``datasets/<dataset_id>/
 matches the hosted registry's bucket layout. The manifest's relative file paths do not change. Only
 the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credentials, region, and an
 optional endpoint override come from boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
-``AWS_ENDPOINT_URL``). Opening a version reads its payload sources' manifests upfront and reads remote
-payloads on demand. Complete cached releases are reused. The backend has no catalog, so listing and
-search are unsupported. Use it to ``store`` and to fetch by an explicit ``org/name@version``.
+``AWS_ENDPOINT_URL``). Opening a version reads remote payloads on demand. The backend has no
+catalog, so listing and search are unsupported. Use it to publish and to fetch by an explicit
+``org/name@version``.
 
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Generator
+from contextlib import contextmanager
 import os
 from pathlib import Path
-import shutil
-import tempfile
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, ClassVar
 from urllib.parse import urlparse
 import uuid
 
 import pyarrow.fs as pafs
 
-from timenet.config import settings
-from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError, TimeNetUnreachableError
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import Manifest, PayloadSource
-from timenet.registry._paths import release_dir
+from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Version
+from timenet.types import DatasetFilter, DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.references import DatasetRef, is_latest
-from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 # Dataset objects live under a ``datasets/`` prefix, matching the hosted registry's bucket layout, so
@@ -42,32 +37,35 @@ _DATASETS_PREFIX = "datasets"
 
 
 class S3Registry(LazyReadRegistry):
-    """Serves and publishes datasets under an ``s3://bucket/prefix`` root."""
+    """A registry that reads and publishes datasets under an S3 bucket or prefix."""
 
-    def __init__(self, uri: str, *, cache_dir: str | Path | None = None) -> None:
-        """Open an S3-backed registry.
+    has_catalog: ClassVar[bool] = False
+    _staging_prefix = "timenet-s3-"
+
+    def __init__(self, uri: str, *, read_only: bool = False) -> None:
+        """Configure an S3 registry.
 
         Args:
-            uri: The bucket or prefix root, for example ``s3://my-bucket/registry``.
-            cache_dir: Where downloads are cached; defaults to the configured storage directory.
+            uri: The bucket or prefix URL, such as ``s3://my-bucket/registry``.
+            read_only: Refuse every write to this registry.
 
         Raises:
-            TimeNetRegistryError: If ``uri`` is not an ``s3://bucket[/prefix]`` URL.
+            TimeNetRegistryError: If the URL lacks an ``s3`` scheme or bucket name.
         """
         parsed = urlparse(uri)
         if parsed.scheme != "s3" or not parsed.netloc:
             raise TimeNetRegistryError(f"S3 registry URI must be s3://bucket[/prefix], got {uri!r}")
         self._bucket = parsed.netloc
         self._prefix = parsed.path.strip("/")
-        self._cache_dir = Path(cache_dir) if cache_dir is not None else settings().storage_dir
+        self._read_only = read_only
 
     def __str__(self) -> str:
         return f"S3 registry {self._display_root()}"
 
     @property
-    def local_root(self) -> Path:
-        """The directory that holds complete local releases."""
-        return self._cache_dir
+    def location(self) -> str:
+        """The registry's root URL as ``s3://bucket/prefix``."""
+        return self._display_root()
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Unsupported: the S3 backend has no catalog.
@@ -80,7 +78,7 @@ class S3Registry(LazyReadRegistry):
             "explicit org/name@version."
         )
 
-    def search(self, **_kwargs: Any) -> list[DatasetMetadata]:
+    def search(self, filter: DatasetFilter) -> list[DatasetMetadata]:
         """Unsupported: the S3 backend has no catalog.
 
         Raises:
@@ -103,7 +101,8 @@ class S3Registry(LazyReadRegistry):
 
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version has no manifest in the bucket.
-        """
+            TimeFFormatError: If the stored manifest is not valid.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_manifest
         validate_dataset_id(dataset_id)
         resolved = self._latest_version(dataset_id) if is_latest(version) else version
         if resolved is None:
@@ -115,7 +114,7 @@ class S3Registry(LazyReadRegistry):
             raise TimeNetDatasetNotFoundError(
                 f"no manifest for {dataset_id!r} version {resolved!r} under {self._display_root()}"
             )
-        return Manifest.model_validate_json(body.decode())
+        return parse_manifest(body, f"the manifest of {dataset_id}@{resolved} in {self}")
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -135,83 +134,62 @@ class S3Registry(LazyReadRegistry):
 
         client = self._client()
         try:
-            response = client.get_object(Bucket=self._bucket, Key=self._key(dataset_id, version, relpath))
+            with self._reaching():
+                response = client.get_object(Bucket=self._bucket, Key=self._key(dataset_id, version, relpath))
         except botocore.exceptions.ClientError as exc:
             raise TimeNetDatasetNotFoundError(f"no object {relpath!r} for {dataset_id!r} version {version!r}") from exc
         return response["Body"]
 
-    def _open_remote_version(self, reference: DatasetRef) -> DatasetVersion:
-        """Bind one remote manifest to Arrow's native S3 filesystem.
+    def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
+        """Open a release through Arrow's S3 filesystem.
+
+        Args:
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already fetched from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle without its payload sources, which ``open_version`` attaches.
+            A handle to the S3 release without attached payload sources.
         """
-        manifest = self.get_manifest(reference.dataset_id, str(reference.version))
+        if manifest is None:
+            manifest = self.get_manifest(reference.dataset_id, str(reference.version))
         root = f"{self._bucket}/{self._key(reference.dataset_id, str(reference.version))}"
         return DatasetVersion(manifest, self._s3_filesystem(), root)
 
-    def store(
-        self,
-        dataset: TimeFDataset,
-        *,
-        force: bool = False,
-        values_backend: str = "parquet",
-        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-    ) -> str:
-        """Compile a dataset locally and upload it under this registry's prefix.
+    def put_release(self, from_directory: Path) -> DatasetRef:
+        """Upload a release directory to S3.
 
-        Uploads every file to a temporary ``<version>.tmp-<uuid>`` prefix first. Then moves each object
-        into the final ``<version>/`` prefix with a server-side copy, writing ``manifest.json`` last as
-        the commit marker. A failed publish then never leaves a partial version a reader can trust. An
-        already-committed version is skipped unless ``force``.
+        The directory must contain ``manifest.json`` and every file it lists. This method uploads
+        the listed files and publishes ``manifest.json`` last.
 
         Args:
-            dataset: The populated dataset to store.
-            force: Publish even if the version is already committed.
-            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional writer progress callback.
-            pinned_by: The releases that already read files of this release, with their pins. The
-                writer publishes only if it reproduced each pinned file.
+            from_directory: The release directory.
 
         Returns:
-            The stored version string.
-        """
-        if dataset.schema is None:
-            dataset.derive_schema()
-        dataset_id = dataset.metadata.dataset_id
-        version = str(dataset.metadata.dataset_version)
-        if not force and self.exists(dataset_id, version):
-            return version
+            A reference to the published release.
+
+        Raises:
+            TimeNetRegistryError: If this registry is read-only.
+            TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
+            TimeNetFileError: If a listed file is missing or its size differs from the manifest.
+            TimeNetBuildError: If the manifest records TimeNet code with local changes.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
+        self.check_writable("put_release()")
+        manifest = self._read_release(from_directory)
         client = self._client()
-        final_base = self._key(dataset_id, version)
+        final_base = self._key(manifest.dataset_id, str(manifest.metadata.dataset_version))
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
-        staging = Path(tempfile.mkdtemp(prefix="timenet-s3-"))
-        try:
-            # The writer stages locally but checks every payload source against this registry.
-            with TimeFWriter(
-                staging,
-                dataset,
-                values_backend=values_backend,
-                progress_cb=progress_cb,
-                registry=self,
-                pinned_by=pinned_by,
-            ) as writer:
-                writer.write()
-            version_dir = release_dir(staging, DatasetRef.parse(f"{dataset_id}@{version}"))
-            self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
-            files = sorted(path for path in version_dir.rglob("*") if path.is_file())
-            for path in files:
-                relpath = path.relative_to(version_dir).as_posix()
-                client.upload_file(str(path), self._bucket, f"{temp_base}/{relpath}")
-            data_relpaths = [path.relative_to(version_dir).as_posix() for path in files if path.name != MANIFEST_FILE]
-            for relpath in data_relpaths:
-                self._move(client, f"{temp_base}/{relpath}", f"{final_base}/{relpath}")
-            self._move(client, f"{temp_base}/{MANIFEST_FILE}", f"{final_base}/{MANIFEST_FILE}")
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
-            self._delete_prefix(client, f"{temp_base}/")  # remove any objects left staged in the temp prefix
-        return version
+        with self._reaching():
+            try:
+                self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
+                data_relpaths = sorted({part.path for part in manifest.files.all_files()})
+                for relpath in (*data_relpaths, MANIFEST_FILE):
+                    client.upload_file(str(from_directory / relpath), self._bucket, f"{temp_base}/{relpath}")
+                for relpath in data_relpaths:
+                    self._move(client, f"{temp_base}/{relpath}", f"{final_base}/{relpath}")
+                self._move(client, f"{temp_base}/{MANIFEST_FILE}", f"{final_base}/{MANIFEST_FILE}")
+            finally:
+                self._delete_prefix(client, f"{temp_base}/")  # remove any objects left staged in the temp prefix
+        return DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
 
     @staticmethod
     def _s3_filesystem() -> pafs.S3FileSystem:
@@ -252,8 +230,21 @@ class S3Registry(LazyReadRegistry):
 
         return boto3.client("s3")
 
+    @contextmanager
+    def _reaching(self) -> Generator[None]:
+        """Name the bucket in the error of a request that fails on the network.
+
+        Raises:
+            TimeNetUnreachableError: If a request fails to reach the bucket.
+        """
+        import botocore.exceptions  # ruff: ignore[import-outside-top-level] - optional S3 dependency
+
+        try:
+            yield
+        except (botocore.exceptions.ConnectionError, botocore.exceptions.HTTPClientError) as error:
+            raise TimeNetUnreachableError(f"cannot reach {self._display_root()}: {error}") from error
+
     def _key(self, *parts: str) -> str:
-        # ruff: ignore[docstring-missing-returns]
         """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""
         segments = [self._prefix, _DATASETS_PREFIX, *parts]
         return "/".join(segment.strip("/") for segment in segments if segment)
@@ -285,7 +276,8 @@ class S3Registry(LazyReadRegistry):
 
         client = self._client()
         try:
-            response = client.get_object(Bucket=self._bucket, Key=key)
+            with self._reaching():
+                response = client.get_object(Bucket=self._bucket, Key=key)
         except botocore.exceptions.ClientError as exc:
             if exc.response.get("Error", {}).get("Code") in {"NoSuchKey", "404"}:
                 return None  # a genuinely absent object
@@ -297,12 +289,13 @@ class S3Registry(LazyReadRegistry):
         prefix = f"{self._key(dataset_id)}/"
         client = self._client()
         versions: list[str] = []
-        paginator = client.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix, Delimiter="/"):
-            for entry in page.get("CommonPrefixes", []):
-                name = entry["Prefix"][len(prefix) :].strip("/")
-                if _is_version(name):
-                    versions.append(name)
+        with self._reaching():
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix, Delimiter="/"):
+                for entry in page.get("CommonPrefixes", []):
+                    name = entry["Prefix"][len(prefix) :].strip("/")
+                    if _is_version(name):
+                        versions.append(name)
         return max(versions, key=Version.parse) if versions else None
 
 

@@ -10,6 +10,7 @@ import uuid
 import numpy as np
 import pyarrow as pa
 
+from timenet._fs import publish_directory
 from timenet.dataset import Signal, TimeFDataset
 from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFFormatError, TimeFValidationError
@@ -26,8 +27,16 @@ from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.storage import StorageSources
 from timenet.format.stored_array import StoredArray
 from timenet.format.stored_values import PackedValueWriter
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
-from timenet.provenance import build_env
+from timenet.manifest import (
+    TIMEF_FORMAT_VERSION,
+    BuildEnvironment,
+    FilePart,
+    Manifest,
+    ManifestCounts,
+    ManifestFiles,
+    PayloadSource,
+)
+from timenet.provenance import TimeNetSnapshot
 from timenet.types.ids import EntityId
 from timenet.types.reference_keys import SourceKey
 from timenet.types.references import DatasetRef
@@ -147,6 +156,7 @@ class TimeFWriter:
             from timenet.registry.local import LocalRegistry  # ruff: ignore[import-outside-top-level]
 
             registry = LocalRegistry(self._root)
+        self._null_counts: dict[EntityId, int] = {}
         self._storage_sources = StorageSources(
             DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version), registry
         )
@@ -163,9 +173,13 @@ class TimeFWriter:
         Raises:
             FileExistsError: If a committed ``manifest.json`` already exists at the version directory
                 and ``replace`` is not set.
-        """
+            TimeNetBuildError: If the commit of an installed TimeNet package is unknown.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by TimeNetSnapshot.read
         if not self._replace and (self._final_dir / MANIFEST_FILE).exists():
             raise FileExistsError(f"a committed version already exists at {self._final_dir}")
+        # Read the commit before any data is written. An unknown commit then fails before the work,
+        # and a commit or checkout during the write does not change the record.
+        self._snapshot = TimeNetSnapshot.read()
         self._sweep_stale_staging()
         self._staging_dir.mkdir(parents=True, exist_ok=True)
         return self
@@ -225,6 +239,7 @@ class TimeFWriter:
             self._dataset,
             placements,
             tasks=tasks,
+            null_counts=self._null_counts,
         )
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
@@ -246,32 +261,12 @@ class TimeFWriter:
                 write as pinned. Nothing is published.
             OSError: If publishing fails and the old release cannot be moved back either. The
                 error names the ``<version>.old-<uuid>`` directory that holds it.
-        """  # ruff: ignore[docstring-extraneous-exception] - _check_pinned_by raises TimeFFormatError
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_pinned_by and publish_directory
         if not self._written:
             raise RuntimeError("write() must run successfully before close()")
         self._check_pinned_by(self._write_manifest())
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
-        old = None
-        if self._final_dir.exists():
-            # A committed version reaches here only with replace=True, which LocalRegistry.store()
-            # and run_pipeline() pass for force. Otherwise the caller pre-created the directory.
-            old = self._final_dir.with_name(f"{self._final_dir.name}.old-{uuid.uuid4().hex}")
-            self._final_dir.replace(old)
-        try:
-            self._staging_dir.replace(self._final_dir)
-        except BaseException as error:
-            if old is not None:
-                try:
-                    old.replace(self._final_dir)
-                except OSError as restore_error:
-                    raise OSError(
-                        f"could not publish {self._final_dir} ({error}) or move the old release back "
-                        f"({restore_error}); it is in {old}, so rename that to {self._final_dir} to recover it"
-                    ) from error
-            raise
-        if old is not None:
-            # The new release is published, so failing to delete the old one must not fail the write.
-            shutil.rmtree(old, ignore_errors=True)
+        publish_directory(self._staging_dir, self._final_dir)
         self._emit(ProgressStage.COMMIT, 1, 1)
 
     def abort(self) -> None:
@@ -376,6 +371,9 @@ class TimeFWriter:
             location = values._location
             if signal.spec != values.spec or signal.n_values != sum(chunk.n_values for chunk in location.chunks):
                 raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
+            if signal.null_count is None:
+                raise TimeFValidationError(f"shared signal {signal.id!r} does not know its null count")
+            self._null_counts[signal.id] = signal.null_count
             source = self._storage_sources.add(values.reader._version, location, nullable=values.spec.nullable)
             for chunk in location.chunks:
                 shared[signal.id, chunk.chunk_idx] = ChunkPlacement(
@@ -388,21 +386,19 @@ class TimeFWriter:
                 )
         return shared, owned
 
-    def _read_and_validate(self, ts: Signal) -> pa.Array:  # ruff: ignore[no-self-use]
-        """Read a series' values and enforce the per-series array contract.
+    def _read_and_validate(self, ts: Signal) -> pa.Array:
+        """Read and validate a series' values, and record its number of missing timesteps.
 
         Args:
             ts: The series to read.
 
         Returns:
-            The validated values in the spec's canonical Arrow representation.
-
-            The method accepts ``NaN``, ``+Infinity``, and ``-Infinity`` as floating-point values.
-            They are distinct from missing values. The ``nullable`` flag controls Arrow nulls only.
+            The validated values in the spec's Arrow representation. ``NaN`` and infinities are
+            present values, not missing ones.
 
         Raises:
-            TimeFValidationError: If the array disagrees with the spec's dtype, shape, or
-                nullability, has partial tensor nulls, or its length disagrees with ``n_values``.
+            TimeFValidationError: If the dtype, shape, missing values, or length differ from the
+                specification. Also if the supplied null count differs from the values.
         """
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":
@@ -427,8 +423,13 @@ class TimeFWriter:
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
-        if values.null_count and not ts.spec.nullable:
-            raise TimeFValidationError(f"series {ts.id!r} has null values but nullable=False")
+        if values.null_count:
+            ts.spec.check_nulls_allowed(values.null_count, series=f"series {ts.id!r}")
+        if ts.null_count is not None and ts.null_count != values.null_count:
+            raise TimeFValidationError(
+                f"series {ts.id!r} states null_count={ts.null_count} but its values hold {values.null_count} nulls"
+            )
+        self._null_counts[ts.id] = values.null_count
         if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
             raise TimeFValidationError(f"series {ts.id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":
@@ -486,8 +487,8 @@ class TimeFWriter:
             payload_sources=self._storage_sources.sources,
             parent_cards=import_state.parent_cards,
             lineage=tuple(import_state.lineage.values()),
-            build_env=build_env(),
-            timef_format_version=1,
+            build_env=BuildEnvironment.capture(git=self._snapshot.to_source_map()),
+            timef_format_version=TIMEF_FORMAT_VERSION,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
         return manifest

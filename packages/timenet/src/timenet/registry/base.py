@@ -2,7 +2,7 @@
 
 A registry serves compiled TimeF versions. It does not run connector code. Concrete backends
 must implement the four data-access methods: :meth:`list_datasets`, :meth:`get_manifest`,
-:meth:`open_file`, and :meth:`open_version`. :meth:`BaseRegistry.search` is shared. It filters
+:meth:`open_file`, and :meth:`open_release`. :meth:`BaseRegistry.search` is shared. It filters
 the output of :meth:`list_datasets` and uses :meth:`get_manifest` for the type filters.
 """
 
@@ -10,37 +10,70 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 import shutil
-from typing import BinaryIO, TypeVar
-import uuid
+from typing import BinaryIO, ClassVar
 
-from timenet.errors import TimeFValidationError, TimeNetFileError
+from timenet._fs import staged_directory
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetFileError, TimeNetRegistryError
 from timenet.format.checksums import file_checksum
+from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest
-from timenet.registry._paths import safe_version_path, split_release_dir
-from timenet.registry.dependencies import prepare_local_copy
+from timenet.registry._paths import safe_version_path
+from timenet.registry.dependencies import validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.sources import FoundInRegistry, NotFound, NotServed, ReleaseLookup
+from timenet.types import Access, DatasetFilter, DatasetMetadata, ListedRelease, Version
+from timenet.types.access import access_requirements, effective_access
 from timenet.types.references import DatasetRef
 
 
-T = TypeVar("T")
-
-# Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_version``
+# Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_release``
 # implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
-ProgressCallback = Callable[[int], None]
+ByteCountCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A source of TimeF datasets: their manifests, files, and searchable metadata."""
+    """A registry of TimeF manifests, files, and searchable dataset metadata.
+
+    :meth:`open_release` and :meth:`download_release` handle one release without its payload
+    sources. :func:`~timenet.registry.copy_release` copies a release with its payload sources.
+    """
+
+    has_catalog: ClassVar[bool] = True
+    """Whether :meth:`list_datasets` and :meth:`search` work. Without a catalog, both raise ``NotImplementedError``."""
+    _read_only: bool = False
 
     def __str__(self) -> str:
         return type(self).__name__
 
     @property
+    def read_only(self) -> bool:
+        """Whether this registry refuses every write, set with ``read_only=True``."""
+        return self._read_only
+
+    @property
     @abstractmethod
-    def local_root(self) -> Path:
-        """The local registry or cache directory that holds prepared releases."""
+    def location(self) -> str:
+        """The registry's URL, path, or name."""
+
+    def check_writable(self, write: str) -> None:
+        """Refuse a write if this registry is read-only.
+
+        Args:
+            write: The write to refuse, for the message, such as ``"put_dataset()"``.
+
+        Raises:
+            TimeNetRegistryError: If this registry is read-only.
+        """
+        if self._read_only:
+            raise TimeNetRegistryError(
+                f"{self} has read_only=True, so it refuses {write}. Open it without read_only=True to write to it."
+            )
+
+    @property
+    def requires_open_access(self) -> bool:
+        """Whether stored or served releases must declare open access."""
+        return True
 
     @abstractmethod
     def list_datasets(self) -> list[DatasetMetadata]:
@@ -65,6 +98,25 @@ class BaseRegistry(ABC):
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
+    def find_manifest(self, release: DatasetRef) -> Manifest | None:
+        """Return the manifest of a release, or ``None`` if this registry does not hold it.
+
+        Args:
+            release: The exact release.
+
+        Returns:
+            The manifest, or ``None``.
+
+        Raises:
+            TimeFFormatError: If the stored manifest names another release.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
+        try:
+            manifest = self.get_manifest(release.dataset_id, str(release.version))
+        except TimeNetDatasetNotFoundError:
+            return None
+        validate_manifest_reference(manifest, release)
+        return manifest
+
     @abstractmethod
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -82,121 +134,85 @@ class BaseRegistry(ABC):
         """
 
     @abstractmethod
-    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
-        """Open a committed dataset version as a random-access handle.
+    def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
+        """Open an exact release without attaching its payload sources.
 
-        The returned :class:`~timenet.registry.version.DatasetVersion` object bundles the parsed
-        manifest with a handle to the files of the version. The handle is rooted in a filesystem.
-        A reader built from this object does not re-open the registry. It also does not re-read
-        ``manifest.json``. The filesystem of the handle MUST serve range reads. The reader uses it
-        to read Parquet footers and value slices out of order.
+        Opening reads metadata only. Attach payload sources with
+        :func:`~timenet.registry.dependencies.attach_payload_sources`.
 
         Args:
-            dataset_id: The dataset id.
-            version: The version string, or ``None`` for the latest version.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle to the manifest and files of the committed version.
+            A handle to the release's manifest and files.
 
         Raises:
-            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the registry lacks the release.
+            TimeFFormatError: If the manifest declares a different release.
+            TimeNetFileError: If a local file is missing or has an incorrect size.
         """
 
-    def download_version(  # ruff: ignore[too-many-arguments]
-        self,
-        dataset_id: str,
-        version: str,
-        dest_dir: str | Path,
-        *,
-        force: bool = False,
-        manifest: Manifest | None = None,
-        progress_cb: ProgressCallback | None = None,
-    ) -> None:
-        """Download complete local copies of a release and of each of its payload sources.
+    def resolve(self, dataset_id: str, version: Version | None) -> ReleaseLookup:
+        """Check whether the registry serves a dataset release.
 
-        Only the release's own payload sources are downloaded: it lists every release whose files it
-        reads. Each is checked against the files the release pins.
+        If :attr:`requires_open_access` is true, the registry serves a release only if its card and each card in its
+        lineage declare open access.
 
         Args:
             dataset_id: The dataset ID.
-            version: The exact release version.
-            dest_dir: The local ``<registry>/<org>/<name>/<version>`` directory.
-            force: Download the requested release again.
-            manifest: An already-loaded manifest for the requested release.
-            progress_cb: Report transferred bytes.
+            version: An exact version, or ``None`` for the latest version.
 
-        Raises:
-            TimeFValidationError: If the destination does not identify the requested release.
+        Returns:
+            ``FoundInRegistry`` if served, ``NotServed`` if access is restricted, or ``NotFound`` if absent.
         """
-        reference = DatasetRef.parse(f"{dataset_id}@{version}")
-        root, destination_ref = split_release_dir(Path(dest_dir))
-        if destination_ref != reference:
-            raise TimeFValidationError(
-                f"download destination {dest_dir} identifies {destination_ref}, expected {reference}"
-            )
-        prepare_local_copy(
-            root,
-            reference,
-            fetch_from=self,
-            manifest=manifest,
-            force=force,
-            progress_cb=progress_cb,
-        )
+        try:
+            manifest = self.get_manifest(dataset_id, None if version is None else str(version))
+        except TimeNetDatasetNotFoundError:
+            return NotFound()
+        held = manifest.metadata.dataset_version
+        access = effective_access(manifest.metadata, manifest.lineage)
+        if access is Access.OPEN or not self.requires_open_access:
+            return FoundInRegistry(held, self, manifest)
+        return NotServed(held, access, access_requirements(manifest.metadata, manifest.lineage), manifest)
 
-    def _download_release(  # ruff: ignore[too-many-arguments]
+    def download_release(
         self,
-        dataset_id: str,
-        version: str,
-        dest_dir: str | Path,
+        reference: DatasetRef,
+        directory: str | Path,
         *,
         force: bool = False,
         manifest: Manifest | None = None,
-        progress_cb: ProgressCallback | None = None,
+        progress_cb: ByteCountCallback | None = None,
     ) -> None:
-        """Download a version's files into ``dest_dir``, swapping the directory in atomically.
+        """Download one release's files to a local directory.
 
-        Fetches every file through :meth:`open_file` into a sibling ``<version>.tmp-*`` staging
-        directory, with ``manifest.json`` last as the commit marker. It then renames the staging
-        directory over ``dest_dir`` in one step. An interrupted download never leaves a half-written
-        copy in place. Subclasses can override this method with a faster path, such as concurrent
-        streaming from a remote service.
+        Reuse a complete copy unless ``force`` is set.
+        Replace ``directory`` only after every downloaded file matches its manifest record.
 
         Args:
-            dataset_id: The dataset id.
-            version: The version string.
-            dest_dir: The target ``<...>/<id>/<version>`` directory.
-            force: Re-download even if a copy already exists.
-            manifest: The parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
-            progress_cb: Called with each staged file's byte count, for a progress display.
+            reference: The exact release.
+            directory: The local release directory, ``<root>/<dataset_id>/<version>``.
+            force: Download again even if a complete copy exists.
+            manifest: The release's manifest, or ``None`` to fetch it from this registry.
+            progress_cb: Callback that receives each downloaded file's byte count, or ``None``.
 
         Raises:
-            TimeNetFileError: If a downloaded file's size or checksum differs from the manifest.
+            TimeNetFileError: If a downloaded file's size or checksum differs from its manifest record.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_staged_file
+        dataset_id, version = reference.dataset_id, str(reference.version)
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
-        target = Path(dest_dir)
+        target = Path(directory)
         if complete_copy(target, manifest) and not force:
             return  # already downloaded and current
-        parent = target.parent
-        parent.mkdir(parents=True, exist_ok=True)
-        # Each download stages into a unique dir and removes it in the finally below. A hard kill
-        # (SIGKILL/power loss) can leave one behind, but do NOT sweep sibling <version>.tmp-* dirs here:
-        # a concurrent download of the same version has a live staging dir with the same prefix, and
-        # sweeping it would break that download mid-write. A rare orphaned dir is the lesser evil.
-        staging = parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
-        release = DatasetRef.parse(f"{dataset_id}@{version}")
-        try:
+        with staged_directory(target) as staging:
             for part in manifest.files.all_files():
                 self._stage_file(dataset_id, version, part.path, staging)
-                self._check_staged_file(staging / part.path, part, release)
+                self._check_staged_file(staging / part.path, part, reference)
                 if progress_cb is not None:
                     progress_cb(part.size)
-            (staging / "manifest.json").write_text(manifest.to_json())
-            if target.exists():
-                shutil.rmtree(target)
-            staging.replace(target)
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            (staging / MANIFEST_FILE).write_text(manifest.to_json())
 
     def _check_staged_file(self, path: Path, part: FilePart, release: DatasetRef) -> None:
         """Compare one downloaded file with its manifest record, first by size, then by checksum.
@@ -229,98 +245,17 @@ class BaseRegistry(ABC):
         with self.open_file(dataset_id, version, relpath) as source, destination.open("wb") as sink:
             shutil.copyfileobj(source, sink)
 
-    def search(  # ruff: ignore[too-many-arguments]
-        self,
-        *,
-        query: str | list[str] | None = None,
-        domain: Domain | list[Domain] | None = None,
-        task: type[Task] | list[type[Task]] | None = None,
-        license: License | list[License] | None = None,
-        time_series_spec: str | list[str] | None = None,
-        dataset_id: str | list[str] | None = None,
-        tag: str | list[str] | None = None,
-        limit: int = 100,
-    ) -> list[DatasetMetadata]:
-        """Filter datasets by any combination of criteria.
+    def search(self, filter: DatasetFilter) -> list[DatasetMetadata]:
+        """Find datasets that match a filter.
 
-        Each filter accepts a single value or a list of values. The method ignores filters set to
-        ``None``. It combines all other filters with AND logic. The filters ``query``, ``domain``,
-        ``task``, ``license``, and ``dataset_id`` match a dataset when any of their values match.
-        The filters ``time_series_spec`` and ``tag`` match a dataset only when all of their values
-        match. The type filters ``task`` and ``time_series_spec`` read the manifest schema of each
-        dataset.
+        A ``task`` or ``time_series_spec`` filter reads the manifest of a dataset only if its card matches.
 
         Args:
-            query: Free-text terms. The method matches each term as a case-insensitive substring
-                in the dataset name, description, or tags.
-            domain: Keep datasets that share any of these domains.
-            task: Keep datasets whose schema includes any of these task classes.
-            license: Keep datasets that have any of these licenses.
-            time_series_spec: Keep datasets that declare all of these ``spec_type`` values.
-            dataset_id: Keep only these ids.
-            tag: Keep datasets that declare all of these tags.
-            limit: The maximum number of results. The default is 100.
+            filter: The filters and the limit.
 
         Returns:
-            The matching dataset metadata. The list has at most ``limit`` entries.
-
-        Raises:
-            ValueError: If ``limit`` is negative.
+            The matching dataset metadata, sorted by dataset ID, with at most ``filter.limit`` entries.
         """
-        if limit < 0:
-            raise ValueError(f"limit must be non-negative, got {limit}")
-        queries = _as_list(query)
-        domains = _as_list(domain)
-        tasks = _as_list(task)
-        licenses = _as_list(license)
-        specs = _as_list(time_series_spec)
-        ids = _as_list(dataset_id)
-        tags = _as_list(tag)
-
-        results: list[DatasetMetadata] = []
-        for metadata in self.list_datasets():
-            if len(results) >= limit:
-                break
-            if ids and metadata.dataset_id not in ids:
-                continue
-            if licenses and metadata.license not in licenses:
-                continue
-            if domains and not set(metadata.domains) & set(domains):
-                continue
-            if tags and not set(tags) <= set(metadata.tags):
-                continue
-            if queries and not _query_matches(metadata, queries):
-                continue
-            if (tasks or specs) and not self._schema_matches(metadata.dataset_id, tasks, specs):
-                continue
-            results.append(metadata)
-        return results
-
-    def _schema_matches(self, dataset_id: str, tasks: list[type[Task]], specs: list[str]) -> bool:
-        """Return whether the manifest schema of a dataset satisfies the type filters."""
-        schema = self.get_manifest(dataset_id).dataset_schema
-        if tasks and not set(tasks) & set(schema.tasks):
-            return False
-        return not (specs and not set(specs) <= {spec.spec_type for spec in schema.time_series_specs})
-
-
-def _as_list(value: T | list[T] | None) -> list[T]:
-    """Normalize a filter value to a list.
-
-    Args:
-        value: ``None``, a single value, or a list of values.
-
-    Returns:
-        An empty list, the list itself, or a list with one value.
-    """
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
-def _query_matches(metadata: DatasetMetadata, terms: list[str]) -> bool:
-    """Return whether any term is a case-insensitive substring of the dataset name, description, or tags."""
-    haystack = " ".join([metadata.name, metadata.description, *metadata.tags]).lower()
-    return any(term.lower() in haystack for term in terms)
+        # Sorted, so that the limit keeps the first matches by dataset ID, also for a catalog in another order.
+        rows = sorted(self.list_datasets(), key=lambda row: row.dataset_id)
+        return filter.select(ListedRelease(row, self) for row in rows)

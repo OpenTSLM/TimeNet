@@ -1,7 +1,15 @@
 import jsonschema
 import pytest
 
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import (
+    TIMEF_FORMAT_VERSION,
+    BuildEnvironment,
+    FilePart,
+    GitSource,
+    Manifest,
+    ManifestCounts,
+    ManifestFiles,
+)
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -15,6 +23,13 @@ from timenet.types import (
     TimeSeriesSpec,
     Version,
     ureg,
+)
+
+
+_BUILD_ENV = BuildEnvironment(
+    python="3.13.1",
+    packages={"timenet": "0.1.0"},
+    git={"timenet": GitSource(sha="a" * 40, contains_local_changes=False)},
 )
 
 
@@ -72,7 +87,8 @@ def _manifest() -> Manifest:
                 ),
             ),
         ),
-        timef_format_version=1,
+        build_env=_BUILD_ENV,
+        timef_format_version=TIMEF_FORMAT_VERSION,
     )
 
 

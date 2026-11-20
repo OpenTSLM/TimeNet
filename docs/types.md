@@ -43,8 +43,8 @@ another object, use the object itself. For example, a span holds Signal objects.
 
 Only a few APIs use Record IDs:
 
-- `TimeFReader.record_ids()`, and the `record_ids` argument of `iter_records()`, `task_table()`,
-  and `target_table()`.
+- `TimeFReader.record_ids()`, and the `record_ids` argument of `iter_records()`,
+  `read_task_table()`, and `read_target_table()`.
 - `remove_records()` and `edit_version()` in `timenet.dataset.edit`.
 
 IDs are unique per kind within one dataset, and they stay the same across edits. Two datasets can
@@ -108,7 +108,7 @@ vibration = TimeSeriesSpec(
 | `categories` | Allowed labels for an enum specification. |
 | `value_shape` | Shape of one timestep, without the time dimension. |
 | `dimension_names` | Optional names for every dimension in `value_shape`. |
-| `nullable` | Whether a complete timestep can be missing. |
+| `missing` | Why complete timesteps can be missing. `None` forbids missing timesteps. |
 | `modality` | Input kind used for Task inference. Defaults to `TIME_SERIES`; also accepts `IMAGE`, `AUDIO`, or `TEXT`. |
 
 The full logical shape is `(n_steps, *value_shape)`. Parquet stores scalar values. Use the Zarr
@@ -116,14 +116,44 @@ backend for multidimensional values.
 
 ### Missing values
 
-Pass `None` for a missing timestep when `nullable=True`. Arrow stores missingness in a validity
-bitmap. This keeps a missing value distinct from a valid floating-point NaN.
+A spec allows no missing timestep unless the connector says why timesteps are missing. It does so
+with a `MissingValues` record: one `MissingReason` and an optional description for a reader who
+does not know the source.
+
+```python
+from timenet.types import MissingReason, MissingValues, TimeSeriesSpec
+
+glucose = TimeSeriesSpec(
+    spec_type="glucose",
+    name="Interstitial glucose",
+    unit_value="mg/dL",
+    missing=MissingValues(
+        reason=MissingReason.SENSOR_GAP,
+        description="The sensor lost contact with the skin.",
+    ),
+)
+```
+
+| Reason | Meaning |
+| --- | --- |
+| `sensor_gap` | The device recorded nothing for a while. |
+| `not_recorded` | The source reported no value for the timestep, although the recording ran. |
+| `alignment_padding` | The source aligned several series to one time grid, and this series covers only part of it. |
+| `not_applicable` | The quantity has no meaning at the timestep. |
+| `redacted` | The source removed the value on purpose. |
+
+Pass `None` for a missing timestep. Arrow stores missingness in a validity bitmap. This keeps a
+missing value distinct from a valid floating-point NaN. The writer rejects a null when the spec has
+no `missing` record. It records how many timesteps each signal misses, and a reader gets that
+number as `Signal.null_count` without loading the values. A consumer reads `spec.missing.reason`
+and `Signal.null_count` to decide whether it can fill the gaps, cut them off, or must leave the
+series out. `spec.nullable` is `True` exactly when the spec has a `missing` record.
 
 `Signal.to_arrow()` preserves nulls. `Signal.to_numpy()` rejects an array that contains nulls.
-The PyTorch adapter also rejects actual nulls, even when `nullable=True`. Consumers must handle
-missing data before tensor conversion.
+The PyTorch adapter also rejects actual nulls, even when the spec allows them. Consumers must
+handle missing data before tensor conversion.
 
-Nullability applies to the complete timestep. TimeF rejects a partially missing multidimensional
+Missingness applies to the complete timestep. TimeF rejects a partially missing multidimensional
 value.
 
 ## Spans
@@ -148,8 +178,7 @@ Signals. The reader replaces these IDs with the Signals that it reads back.
 ```python
 import numpy as np
 
-from timenet.dataset import Signal
-from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.dataset import OrdinalAxis, RegularAxis, Signal
 from timenet.types import StepInterval, TimeInterval, TimePoint
 
 accelerometer = Signal(
@@ -186,7 +215,7 @@ Record's known origin. Relative spans also work when its absolute timestamp is u
 | Field | Required | Description |
 | --- | --- | --- |
 | `dataset_id` | yes | One `org/name` identifier. |
-| `dataset_version` | yes | Semantic version of the source dataset. |
+| `dataset_version` | yes | Semantic version of the built TimeNet dataset. |
 | `name` | yes | Display name. |
 | `description` | yes | Short dataset description. |
 | `license` | yes | Known SPDX-style license value, `OTHER`, or `NONE`. |
@@ -263,20 +292,32 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | --- | --- |
 | `TimeNetError` | Base class for TimeNet failures. |
 | `TimeNetRegistryError` | A registry cannot complete an operation. |
+| `TimeNetUnreachableError` | A request to a registry or its storage failed on the network. The original error is its cause. A `TimeNetRegistryError`. |
+| `TimeNetNoCatalogError` | No source of a list or a search has a catalog. The hint names the read of an exact release. A `TimeNetRegistryError`. |
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
+| `TimeNetVersionUnavailableError` | The installed connector of a dataset builds another version than the requested one. A `TimeNetDatasetNotFoundError` and a `TimeFValidationError`. |
+| `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. `difference` is `ReleaseDifference.FILES` or `ReleaseDifference.CARD`, from `timenet.errors`, and `registry_location` is the location of that registry. For a publish, the hint asks for a new version. For `timenet-build build --publish-to` before the build, the hint names `--force`. For a copy into the local registry, the hint names the release folder to delete. |
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFNotFoundError` | An ID, parent alias, or parent release names nothing in the dataset, or the stored object has another kind. A `TimeFValidationError` and a `LookupError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
+| `TimeNetManifestError` | A stored manifest is not a valid manifest. `where` names the file or the place in a registry, and `detail` names the first problem. `path` is the file, or `None` for a manifest that a registry served. A `TimeFFormatError`. |
+| `TimeFFormatVersionError` | A stored manifest or control database has a format version that this TimeNet does not read. `subject` is a `FormatVersionSubject` that names the version, `found` is the stored version, and `oldest_readable` and `newest_readable` are the versions that this TimeNet reads. `where` names the file or the place in a registry, and `path` is the file, or `None` for a file that a registry served. A `TimeFFormatError`. |
+| `TimeNetOriginError` | The provenance record of a release in the local registry is not valid. `release` names the release, `path` the file, and `detail` the first problem. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 | `TimeNetConnectorError` | A connector found that an assumption about its source data, a download, or a parent does not hold. `TimeNetDownloadError` is a `TimeNetConnectorError`. |
+| `TimeNetBuildError` | A build failed: the connector build, or the environment that it needs. |
+| `TimeNetIsolationError` | An isolated build cannot make its environment, for example because `uv` is missing. A `TimeNetBuildError`. |
+
+Most TimeNet errors come with a `hint`: what you can do about the error.
 
 Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the
 native field location and details.
 
-Manifest parsing uses the same error for invalid JSON and invalid fields.
+`Manifest.model_validate_json()` uses the same error for invalid JSON and invalid fields. A registry
+that reads a stored manifest raises `TimeNetManifestError` or `TimeFFormatVersionError` instead.
 
 `TimeFValidationError` also subclasses `ValueError`. Existing input-validation handlers can catch it
 without losing the TimeNet-specific error type.
@@ -284,4 +325,11 @@ without losing the TimeNet-specific error type.
 `SpanOutsideWindowWarning` reports a span outside a Signal window when the caller has chosen warning
 behavior. It derives from `TimeNetWarning` and `UserWarning`.
 
-See the [API reference for `timenet.types`](api/types.md) for all symbols.
+`ConnectorCardWarning` reports a connector card that cannot be read. The list of installed
+connectors leaves its dataset out, so the card fails only its own dataset.
+
+`CatalogWarning` reports a source without a catalog, which `TimeNet.list()` and
+`TimeNet.search()` leave out. Both warnings point at the first line of the call stack outside the
+`timenet` package, which is usually your own call.
+
+See the [API reference for `timenet.types`](api/timenet.types.md) for all symbols.

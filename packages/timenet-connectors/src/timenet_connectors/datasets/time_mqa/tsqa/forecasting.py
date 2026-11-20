@@ -66,15 +66,15 @@ class SeriesForecastingRow:
         Returns:
             The added task.
         """
-        history = dataset.add_record(record=self.history.create_record(self.row.record_metadata("history")))
-        future = dataset.add_record(record=self.future.create_record(self.row.record_metadata("future")))
+        history = dataset.add_record(self.history.create_record(self.row.record_metadata("history")))
+        future = dataset.add_record(self.future.create_record(self.row.record_metadata("future")))
         task = ForecastingTask(
-            inputs=(history,),
-            targets=(future,),
+            inputs=[history],
+            targets=[future],
             prompt=self.row.question_with_series_placeholders((self.history,)),
             metadata=self.row.task_metadata(),
         )
-        dataset.add_task(task=task)
+        dataset.add_task(task)
         return task
 
 

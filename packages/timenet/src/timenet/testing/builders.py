@@ -16,7 +16,6 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     EntityId,
-    Label,
     LabelSet,
     License,
     LocalizationMode,
@@ -31,9 +30,9 @@ from timenet.types import (
 )
 
 
-_RHYTHM_LABELS = LabelSet(name="rhythm", labels=(Label(name="normal"), Label(name="abnormal")))
+_RHYTHM_LABELS = LabelSet(["normal", "abnormal"])
 """The label set of the fixture's rhythm classification task."""
-_EVENT_LABELS = LabelSet(name="event", labels=(Label(name="onset"), Label(name="offset")))
+_EVENT_LABELS = LabelSet(["onset", "offset"])
 """The label set of the fixture's scoped event classification task."""
 
 
@@ -100,7 +99,7 @@ def _series(spec, signal, n, phase=0.0):
     )
 
 
-def make_dataset() -> TimeFDataset:
+def make_dataset(**card: object) -> TimeFDataset:
     """Build a deterministic dataset that exercises every TimeF feature.
 
     The dataset covers two modalities over a shared data source. Every signal has one owning source.
@@ -111,19 +110,21 @@ def make_dataset() -> TimeFDataset:
     and an interval. The dataset numbers every id, so two calls build equal datasets. This is the
     canonical writer and reader round-trip fixture.
 
+    Args:
+        **card: Card fields that replace those of the demo card, for example ``dataset_id="org/name"``.
+
     Returns:
         The populated :class:`TimeFDataset`.
     """
-    dataset = TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="timenet/hello-world",
-            dataset_version=Version(1, 0, 0),
-            name="Hello World",
-            description="A synthetic demo dataset.",
-            license=License.CC_BY_4_0,
-            domains=(Domain.GENERAL,),
-        )
-    )
+    fields: dict[str, object] = {
+        "dataset_id": "timenet/hello-world",
+        "dataset_version": Version(1, 0, 0),
+        "name": "Hello World",
+        "description": "A synthetic demo dataset.",
+        "license": License.CC_BY_4_0,
+        "domains": (Domain.GENERAL,),
+    }
+    dataset = TimeFDataset(metadata=DatasetMetadata.model_validate({**fields, **card}))
     shared = _series(_SINE, "a", 16)
 
     record0 = dataset.add_record(

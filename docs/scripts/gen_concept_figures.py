@@ -56,6 +56,8 @@ plt.rcParams.update(
         "font.size": 9,
         "figure.facecolor": "white",
         "savefig.facecolor": "white",
+        # A fixed salt keeps the SVG element ids the same on every run.
+        "svg.hashsalt": "timenet-concept-figures",
     }
 )
 
@@ -142,7 +144,8 @@ def arrow(fig, x=0.635, y=0.46):
 def save(fig, name):
     """Write ``fig`` as an SVG under ``OUT`` (and a PNG under ``FIG_PNG_DIR`` when set)."""
     OUT.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT / f"{name}.svg")
+    # Leave out the date and the matplotlib version, so a re-run writes the same bytes.
+    fig.savefig(OUT / f"{name}.svg", metadata={"Date": None, "Creator": None})
     if PNG_DIR:
         fig.savefig(Path(PNG_DIR) / f"{name}.png", dpi=150)
     plt.close(fig)

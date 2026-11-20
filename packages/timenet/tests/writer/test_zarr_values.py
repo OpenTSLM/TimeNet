@@ -10,7 +10,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
-from timenet.manifest import Manifest
+from timenet.manifest import TIMEF_FORMAT_VERSION, Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -60,7 +60,7 @@ def test_spec_types_encode_to_distinct_single_path_segments():
 
 
 def test_index_locator_resolves_to_values(tmp_path):
-    version_dir = _write(tmp_path, chunk_max_bytes=64)
+    version_dir = _write(tmp_path, chunk_max_bytes=64, shard_target_bytes=2**16)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         row = connection.execute(
             """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
@@ -79,7 +79,7 @@ def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
     dataset = make_dataset()
-    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64)
+    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64, shard_target_bytes=2**16)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute("SELECT signal_id, n_values FROM signal_chunks").fetchall()
     signal_ids = [row[0] for row in index]
@@ -197,7 +197,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
         writer.write()
     version_dir = tmp_path / "bench/camera/1.0.0"
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert manifest.timef_format_version == 1
+    assert manifest.timef_format_version == TIMEF_FORMAT_VERSION
     with TimeFReader(open_local_version(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).signals[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)

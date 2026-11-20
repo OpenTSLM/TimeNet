@@ -5,7 +5,8 @@ from contextlib import ExitStack
 from pathlib import Path
 import shutil
 
-from timenet.config import settings
+from timenet.cache import _check_cache_deletion
+from timenet.config import is_cache_folder, make_cache_folder, settings
 from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.dataset.composition import _record_parent
@@ -13,15 +14,12 @@ from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import PayloadSource
 from timenet.reader import TimeFReader
-from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.local import LocalRegistry
-from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
-from timenet.types.access import require_open_access
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
-from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
+from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -33,7 +31,6 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     keep_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
-    values_backend: str | None = None,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> Path:
     """Run one connector through the full build pipeline and return the version directory.
@@ -41,7 +38,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     This function is idempotent. If the target version is already committed, it skips the expensive
     ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
     to rebuild it. Otherwise the stages run in order: create the cache directory, open the declared
-    parents from ``root``, ``download`` raw references into the cache, ``compose`` them into a
+    parents from ``root``, ``download`` the raw source into the cache, ``compose`` the result into a
     dataset, check that the dataset has the card that the engine read, record each declared parent
     in it, ``derive_schema``, ``store``, then delete the cache directory. Parents must already be in
     ``root``; the engine never fetches or builds them. A card that declares parents needs a
@@ -52,13 +49,10 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     Args:
         connector: The connector to build.
         root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
-        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
+        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/downloads/<dataset_id>``).
         keep_cache: Keep the cache directory instead of removing it once the dataset is stored.
             Conversion is the only stage that needs the raw sources, so removing them frees disk
             after a successful build. The sources re-download on the next run.
-        values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``). When
-            ``None``, this function uses the connector's ``values_backend``, so a connector that
-            needs Zarr declares it once on the class.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
         pinned_by: The releases that already read files of this release, with their pins. The write
@@ -70,9 +64,11 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     Raises:
         TimeFValidationError: If the card declares parents and the connector does not override
             ``compose``, or the dataset that ``compose`` returns has another card than the one that
-            the engine read. The build then stores no release.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes and _compose
-    resolved_backend = _resolve_values_backend(connector, values_backend)
+            the engine read. The build then stores no release. Also before any download, if
+            ``root`` and the raw downloads that the build removes overlap, or the cache is the home
+            folder or a folder above it.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose and the cache check
+    values_backend = _check_values_backend(connector)
     # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
     # us resolve the version directory and skip the expensive download and convert when it exists.
     metadata = connector.metadata()
@@ -82,7 +78,19 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
         return version_dir
     _check_composes(connector, metadata)
 
-    cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
+    # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
+    # delete it.
+    downloads = None
+    if cache_dir is None:
+        cfg = settings()
+        downloads = cfg.downloads_dir
+        make_cache_folder(downloads)
+        cache = downloads / metadata.dataset_id
+        if not keep_cache and is_cache_folder(downloads):
+            # The build removes these downloads at the end, so it checks them before the first download.
+            _check_cache_deletion(cfg.cache_dir, [cache], local_registry=root)
+    else:
+        cache = cache_dir
     cache.mkdir(parents=True, exist_ok=True)
 
     # Open the declared parents before downloading, so a missing parent fails before any raw I/O.
@@ -95,99 +103,36 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
         store_dataset(
             dataset,
             root,
-            values_backend=resolved_backend,
+            values_backend=values_backend,
             progress_cb=progress_cb,
             replace=force,
             pinned_by=pinned_by,
         )
-    # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
-    # delete it.
-    if not keep_cache and cache_dir is None and cache.is_dir():
-        shutil.rmtree(cache)
+    if not keep_cache and downloads is not None:
+        _remove_downloads(downloads, cache)
     return version_dir
 
 
-def publish_pipeline(  # ruff: ignore[too-many-arguments]
-    connector: BaseConnector,
-    registry: WritableRegistry,
-    *,
-    cache_dir: Path | None = None,
-    keep_cache: bool = False,
-    progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    force: bool = False,
-    values_backend: str | None = None,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-) -> str:
-    """Run one connector and publish the result through a writable registry.
-
-    Like :func:`run_pipeline`, but the converted dataset is handed to ``registry.store`` instead of
-    written to a local directory, so it also targets a remote or S3 registry. It is idempotent: an
-    already-committed version skips the ``download`` and ``convert`` stages and returns unless ``force``.
-    Like :func:`run_pipeline`, it checks after ``compose`` that the dataset has the card that the
-    engine read.
-    A registry other than a local one holds open releases only, so a card that is not open fails
-    before any download. The composed dataset can be a child whose card says open while a parent is
-    not open. So the engine checks the dataset again with its lineage before the write.
+def _remove_downloads(downloads: Path, folder: Path) -> None:
+    """Remove dataset downloads when the download cache has TimeNet's marker.
 
     Args:
-        connector: The connector to build.
-        registry: The writable registry to publish into (local, remote, or S3).
-        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        keep_cache: Keep the cache directory instead of removing it after publishing.
-        values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``). When
-            ``None``, this function uses the connector's ``values_backend``.
-        progress_cb: Optional writer progress callback.
-        force: Republish even if the version is already committed.
-        pinned_by: The releases that already read files of this release, with their pins. The store
-            publishes only if it reproduces each pinned file, and otherwise raises.
-
-    Returns:
-        The published version string.
-
-    Raises:
-        TimeFValidationError: If the card declares parents and the connector does not override
-            ``compose``, or the dataset that ``compose`` returns has another card than the one that
-            the engine read. Nothing is published then.
-        TimeNetAccessError: If the registry is not local, and the card, or the composed dataset with
-            its lineage, is not open.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
-    resolved_backend = _resolve_values_backend(connector, values_backend)
-    metadata = connector.metadata()
-    dataset_id = metadata.dataset_id
-    version = str(metadata.dataset_version)
-    if not force and registry.exists(dataset_id, version):
-        return version
-    if not isinstance(registry, LocalRegistry):
-        require_open_access(metadata)
-    _check_composes(connector, metadata)
-
-    cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
-    cache.mkdir(parents=True, exist_ok=True)
-
-    with open_parents(metadata, registry) as context:
-        dataset = _compose(connector, metadata, cache, context)
-        if not isinstance(registry, LocalRegistry):
-            require_open_access(dataset.metadata, dataset.lineage.values())
-        dataset.derive_schema()
-        # Pass pins only when there are any, so a registry written against the earlier store()
-        # signature keeps working for every other build.
-        pinned = {"pinned_by": pinned_by} if pinned_by else {}
-        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb, **pinned)
-    if not keep_cache and cache_dir is None and cache.is_dir():
-        shutil.rmtree(cache)
-    return version
+        downloads: The download cache folder.
+        folder: The dataset directory in ``downloads``.
+    """
+    if folder.is_dir() and is_cache_folder(downloads):
+        shutil.rmtree(folder)
 
 
-def open_parents(metadata: DatasetMetadata, registry: BaseRegistry) -> BuildContext:
-    """Open each declared parent of a card from the registry a build writes to.
+def open_parents(metadata: DatasetMetadata, registry: LocalRegistry) -> BuildContext:
+    """Open readers for the dataset's declared parents in a local registry.
 
-    A local registry must hold every parent complete, with its payload sources. A remote registry
-    resolves the payload source manifests upfront, and the readers read catalogs and payloads only
-    when the connector needs them. The engine never fetches or builds a parent here.
+    The registry must hold every parent complete, with its payload sources. The engine never fetches
+    or builds a parent here.
 
     Args:
         metadata: The child dataset card with exact parent references.
-        registry: The registry the child is written to.
+        registry: The local registry containing the parents.
 
     Returns:
         The opened readers, keyed by parent alias. Close the context after the write.
@@ -200,12 +145,7 @@ def open_parents(metadata: DatasetMetadata, registry: BaseRegistry) -> BuildCont
     # the stack lets the readers go, and the context closes them.
     with ExitStack() as stack:
         for alias, ref in metadata.parents.items():
-            version = (
-                prepare_local_copy(registry.root, ref)
-                if isinstance(registry, LocalRegistry)
-                else registry.open_version(ref.dataset_id, str(ref.version))
-            )
-            parents[alias] = stack.enter_context(TimeFReader(version))
+            parents[alias] = stack.enter_context(TimeFReader(prepare_local_copy(registry.root, ref)))
         stack.pop_all()
     return BuildContext(references=dict(metadata.parents), parents=parents)
 
@@ -256,21 +196,21 @@ def _compose(connector: BaseConnector, metadata: DatasetMetadata, cache: Path, c
     return dataset
 
 
-def _resolve_values_backend(connector: BaseConnector, override: str | None) -> str:
-    """Resolve and validate the backend before a build changes any files.
+def _check_values_backend(connector: BaseConnector) -> ValuesBackend:
+    """Validate and return a connector's values backend.
 
     Returns:
-        The supported backend selected by the override or connector default.
+        The connector's supported values backend.
 
     Raises:
-        TimeFValidationError: If the selected backend is unknown.
+        TimeFValidationError: If the connector's values backend is unknown.
     """
-    backend = connector.values_backend if override is None else override
+    backend = connector.values_backend
     if backend not in SUPPORTED_VALUES_BACKENDS:
         raise TimeFValidationError(
             f"unknown values_backend {backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
         )
-    return backend
+    return ValuesBackend(backend)
 
 
 def store_dataset(  # ruff: ignore[too-many-arguments]
@@ -278,7 +218,7 @@ def store_dataset(  # ruff: ignore[too-many-arguments]
     root: Path,
     *,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    values_backend: str = "parquet",
+    values_backend: ValuesBackend = ValuesBackend.PARQUET,
     replace: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> Path:

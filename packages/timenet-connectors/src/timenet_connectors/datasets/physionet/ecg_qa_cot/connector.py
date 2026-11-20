@@ -13,7 +13,8 @@ live in memory.
 The connector imports the recordings and their patient metadata from the pinned PTB-XL TimeF
 parent. The per-template answer options come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed
 CoT rows (question, answer, rationale, template) come from the OpenTSLM release, the only public
-source for the rationales. Build the PTB-XL parent first, or pass ``--build-parents``.
+source for the rationales. If the local registry lacks the PTB-XL parent, a build copies it from the remote
+registry or builds it from its connector first.
 
 The clinical context comes from the annotations of the imported PTB-XL records. It states the patient's
 age and sex, the recording device, and the signal-quality issues, extra beats, and pacemaker that PTB-XL
@@ -23,10 +24,11 @@ records for the recording.
 import ast
 import asyncio
 from collections.abc import Iterator, Mapping
-import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
+
+from pydantic import ConfigDict
 
 from timenet.connectors import BaseConnector
 from timenet.connectors.context import BuildContext
@@ -40,6 +42,7 @@ from timenet.types import (
 )
 from timenet.types.reference_keys import ParentAlias
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
+from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
 
 # The per-template answer options (the multiple-choice candidates), keyed by template_id. The URL
@@ -78,10 +81,9 @@ _SEXES = frozenset({"male", "female"})
 
 @dataclass(frozen=True)
 class EcgQaCotSource:
-    """A lightweight handle to the fetched sources, so ``compose`` streams rather than holding refs.
+    """A lightweight handle to the fetched sources.
 
-    ``download`` returns one of these instead of a row per question, so the ~230k questions are read
-    lazily during ``compose`` and the task stream, never materialized as a list.
+    ``compose`` and the task stream read the ~230k questions lazily. Nothing holds them as a list.
     """
 
     answers_path: Path
@@ -193,6 +195,28 @@ def _clinical_context(recording: _PtbxlRecording) -> str:
     return f"{parts[0]} {parts[1]}. " + ". ".join(parts[2:]) + "."
 
 
+class _TemplateSourceRow(DataRow):
+    """Fields used from the published template answer table."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    template_id: str
+    classes: str
+
+
+class _QuestionSourceRow(DataRow):
+    """Published question fields before source-specific parsing."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    ecg_id: str
+    template_id: str
+    question_type: str
+    question: str
+    answer: str
+    rationale: str
+
+
 @dataclass(frozen=True)
 class _CotRow:
     """One CoT question, parsed once from its CSV row."""
@@ -226,10 +250,9 @@ def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
         A mapping of ``template_id`` to its ordered answer options.
     """
     answers: dict[int, tuple[str, ...]] = {}
-    with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            classes = ast.literal_eval(row["classes"])
-            answers[_parse_int(row["template_id"])] = tuple(str(option) for option in classes)
+    for row in CsvDataReader(path, _TemplateSourceRow).iter_rows():
+        classes = ast.literal_eval(row.classes)
+        answers[_parse_int(row.template_id)] = tuple(str(option) for option in classes)
     return answers
 
 
@@ -242,16 +265,15 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[_CotRow]:
     Yields:
         Each parsed row. Rationale and clinical-context fields span multiple physical lines.
     """
-    with csv_path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            yield _CotRow(
-                ecg_id=_parse_ecg_id(row["ecg_id"]),
-                template_id=_parse_int(row["template_id"]),
-                question_type=row["question_type"],
-                question=row["question"],
-                answer=row["answer"],
-                rationale=row["rationale"],
-            )
+    for row in CsvDataReader(csv_path, _QuestionSourceRow).iter_rows():
+        yield _CotRow(
+            ecg_id=_parse_ecg_id(row.ecg_id),
+            template_id=_parse_int(row.template_id),
+            question_type=row.question_type,
+            question=row.question,
+            answer=row.answer,
+            rationale=row.rationale,
+        )
 
 
 class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
@@ -263,7 +285,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         (Split.TEST, "ecg_qa_cot_test.csv"),
     )
 
-    async def download_async(self, cache_dir: Path) -> list[EcgQaCotSource]:
+    async def download_async(self, cache_dir: Path) -> EcgQaCotSource:
         """Fetch the template answers and CoT CSVs and return one lightweight handle.
 
         The template-answers CSV and the CoT archive download concurrently. This method reads no
@@ -273,7 +295,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             cache_dir: The directory that holds downloaded archives.
 
         Returns:
-            A single-element list holding the :class:`EcgQaCotSource` handle.
+            The :class:`EcgQaCotSource` handle.
         """
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
@@ -286,9 +308,9 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         cot_csvs = tuple(
             (split, find_dir_containing(cot_root, csv_name) / csv_name) for split, csv_name in self._COT_CSVS
         )
-        return [EcgQaCotSource(answers_path=answers_path, cot_csvs=cot_csvs)]
+        return EcgQaCotSource(answers_path=answers_path, cot_csvs=cot_csvs)
 
-    def compose(self, raw_refs: list[EcgQaCotSource], context: BuildContext) -> TimeFDataset:
+    def compose(self, source: EcgQaCotSource, context: BuildContext) -> TimeFDataset:
         """Build one record per recording and stream one :class:`AnswerTask` per CoT row.
 
         A first pass over the CoT CSVs collects each recording's split and the distinct question
@@ -298,7 +320,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         themselves stream from :meth:`_iter_tasks`, so the ~230k questions never all live in memory.
 
         Args:
-            raw_refs: The single-element list from :meth:`download`.
+            source: The handle from :meth:`download`.
             context: The opened PTB-XL parent, under the parent alias ``ptbxl``.
 
         Returns:
@@ -309,7 +331,6 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
                 name, or if an imported Record has no patient, age, or sex, or has a sex other than
                 male or female.
         """
-        source = raw_refs[0]
         answers = _load_template_answers(source.answers_path)
         dataset = TimeFDataset(metadata=self.metadata())
 
@@ -342,10 +363,10 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             # Keep the sex and the age from PTB-XL, which have no span. Clear the other imported
             # annotations. Then the Records match our standalone ECG-QA-CoT 1.1.0, whose Records
             # have ``sex``, ``age``, and the split.
-            record.annotations = tuple(
+            record.annotations = [
                 annotation for annotation in record.annotations if annotation.key in _KEPT_ANNOTATIONS
-            )
-            record.add_annotations([Annotation(key="split", value=split.value)])
+            ]
+            record.add_annotations([Annotation("split", value=split.value)])
             records[ecg_id] = record
             contexts[ecg_id] = _clinical_context(recording)
 
@@ -377,7 +398,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             The attached annotations, keyed by the value that :meth:`_iter_tasks` looks them up by.
         """
         question_type_annotations = {
-            question_type: dataset.annotate(Annotation(key="question_type", value=question_type))
+            question_type: dataset.annotate(Annotation("question_type", value=question_type))
             for question_type in sorted(question_types)
         }
         answer_options_annotations: dict[int, Annotation] = {}
@@ -385,10 +406,10 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             options = answers.get(template_id)
             if options:
                 answer_options_annotations[template_id] = dataset.annotate(
-                    Annotation(key="answer_options", value=list(options))
+                    Annotation("answer_options", value=list(options))
                 )
         context_annotations = {
-            context: dataset.annotate(Annotation(key="clinical_context", value=context))
+            context: dataset.annotate(Annotation("clinical_context", value=context))
             for context in sorted(set(contexts.values()))
         }
         return _TaskAnnotations(
@@ -422,9 +443,9 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
                 yield AnswerTask(
                     inputs=(records[row.ecg_id],),
                     prompt=row.question,
-                    targets=(row.answer,),
+                    targets=row.answer,
                     rationale=row.rationale,
-                    input_annotations=tuple(input_annotations),
+                    input_annotations=input_annotations,
                     split=split,
                     metadata={"template_id": row.template_id},
                 )

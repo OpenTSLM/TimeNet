@@ -1,8 +1,10 @@
 """Opened dataset handles with payload-source and file-path lookups."""
 
 from dataclasses import dataclass, field
+from functools import cached_property
+from typing import Any
 
-from fsspec import FSMap
+from fsspec import AbstractFileSystem, FSMap
 from fsspec.implementations.arrow import ArrowFSWrapper
 from fsspec.implementations.local import LocalFileSystem
 import pyarrow.fs as pafs
@@ -69,5 +71,29 @@ class DatasetVersion:
         elif isinstance(self.filesystem, pafs.PyFileSystem) and isinstance(self.filesystem.handler, pafs.FSSpecHandler):
             filesystem = self.filesystem.handler.fs
         else:
-            filesystem = ArrowFSWrapper(self.filesystem)
+            filesystem = _ArrowFileSystem(self.filesystem)
         return filesystem.get_mapper(path)
+
+
+class _ArrowFileSystem(ArrowFSWrapper):
+    """An fsspec view of a pyarrow filesystem that Zarr can read from.
+
+    It works around two faults of fsspec's ``ArrowFSWrapper`` that make a Zarr release on S3 unreadable.
+    ``test_version.py`` has a strict ``xfail`` test for each fault, which fails when fsspec fixes it.
+    When a test fails, raise the fsspec minimum in ``pyproject.toml`` to the release with the fix. Then
+    remove the matching override and the test.
+
+    - ``fsid`` reads ``host`` and ``port``, which only the HDFS filesystem has. Zarr wraps the mapper's
+      filesystem in fsspec's ``AsyncFileSystemWrapper``, which reads ``fsid``.
+    - ``cat_file`` opens a non-seekable stream when a range starts at 0 or gives only an end, then seeks
+      in it. Zarr reads byte ranges from offset 0. Before fsspec 2026.7.0, ``cat_file`` also dropped
+      ``start`` and ``end``, so the override calls the ``cat_file`` of the base class.
+    """
+
+    @cached_property
+    def fsid(self) -> str:
+        return f"arrow_{self.fs.type_name}_{self._fs_token}"
+
+    def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
+        kwargs.setdefault("seekable", start is not None or end is not None)
+        return AbstractFileSystem.cat_file(self, path, start=start, end=end, **kwargs)

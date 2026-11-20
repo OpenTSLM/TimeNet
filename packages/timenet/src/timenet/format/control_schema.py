@@ -3,11 +3,9 @@
 The SQL table definitions and the writer's Arrow batch schemas come from :data:`CONTROL_TABLES`.
 The audit also uses it to examine keys and references. Define schema changes there.
 
-This is version 1 of the control schema. Every table except ``label_sets`` uses ids as keys.
-Records, Signals, and Tasks use the public ids that the caller sees. All other objects use the
-writer's storage ids.
-
-Each label set has a unique name in a dataset. The ``label_sets`` table uses this name as its key. A foreign key stores the key of the row that it refers to.
+This is version 3 of the control schema. Every table uses ids as keys.
+Records, Signals, and Tasks use the public ids that the caller sees. All other objects, label sets
+included, use the writer's storage ids. A foreign key stores the key of the row that it refers to.
 
 Fixed-shape fields are typed columns, so SQL can filter them. Only the free-form ``metadata``
 dictionaries are JSON. The database has no persisted constraints. The writer keeps
@@ -124,6 +122,7 @@ ANNOTATED_OWNER_TABLES: dict[ObjectKind, tuple[str, str] | None] = {
     ObjectKind.SOURCE: ("sources", "source_id"),
     ObjectKind.SIGNAL: ("signals", "signal_id"),
     ObjectKind.TASK: ("tasks", "task_id"),
+    ObjectKind.LABEL_SET: ("label_sets", "label_set_id"),
 }
 """The owner table and key column of each annotated object type. The Dataset has no owner row."""
 
@@ -211,8 +210,10 @@ SIGNALS = Table(
         _required("categories", ColumnType.VARCHAR_LIST),
         _required("value_shape", ColumnType.BIGINT_LIST),
         _required("dimension_names", ColumnType.VARCHAR_LIST),
-        _required("nullable", ColumnType.BOOLEAN),
+        Column("missing_reason", ColumnType.VARCHAR),
+        Column("missing_description", ColumnType.VARCHAR),
         _key("n_values"),
+        Column("null_count", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
         _required("modality"),
     ),
@@ -222,6 +223,12 @@ SIGNALS = Table(
         ForeignKey("axis_id", "axes", "axis_id"),
     ),
 )
+"""The ``missing_*`` columns hold a spec's missing-value record, or are all null when it has none.
+
+A specification allows missing timesteps when ``missing_reason`` is set.
+``null_count`` is the number of missing timesteps among the signal's ``n_values`` timesteps.
+It is null only when the signal has no stored values and no supplied count.
+"""
 
 SIGNAL_CHUNKS = Table(
     "signal_chunks",
@@ -273,24 +280,28 @@ ANNOTATION_OCCURRENCES = Table(
     unique=(("occurrence_id",),),
     foreign_keys=(ForeignKey("content_id", "annotation_contents", "content_id"),),
 )
-"""The owner is ``(object_type, object_id)``. ``object_id`` is the public id of a Record, Signal,
-or Task, or the storage id of a Source. Ids are unique only within one kind, so the type is part of
-the reference. ``object_id`` is NULL exactly when the owner is the Dataset."""
+"""The owner is ``(object_type, object_id)``. ``object_id`` is the key of the owner row in the table
+that :data:`ANNOTATED_OWNER_TABLES` names for its type. Ids are unique only within one kind, so the type
+is part of the reference. ``object_id`` is NULL exactly when the owner is the Dataset."""
 
 LABEL_SETS = Table(
     "label_sets",
     (
-        _required("name"),
+        _key("label_set_id"),
         _required("labels", ColumnType.LABEL_LIST),
         _required("multi_label", ColumnType.BOOLEAN),
+        _required("ordered", ColumnType.BOOLEAN),
     ),
-    unique=(("name",),),
+    unique=(("label_set_id",),),
 )
 """Each row stores one label set that a classification task uses.
 
 The ``labels`` column holds one ``{name, description}`` entry per label, in label order.
-If a label has no description, ``description`` is NULL. Tasks refer to a set by its name in
-``tasks.label_set``."""
+``ordered`` says whether that order is part of the identity of the set.
+If a label has no description, ``description`` is NULL. Tasks refer to a set by its id in
+``tasks.label_set_id``. The writer gives each distinct set one id, in the order that tasks first use it.
+The annotations of a set are part of its identity, so two sets with the same labels and different
+annotations are two rows."""
 
 TASKS = Table(
     "tasks",
@@ -305,7 +316,7 @@ TASKS = Table(
         Column("scope_end", ColumnType.BIGINT),
         Column("scope_signal_ids", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
-        Column("label_set", ColumnType.VARCHAR),
+        Column("label_set_id", ColumnType.BIGINT),
         Column("unit", ColumnType.VARCHAR),
         Column("target_name", ColumnType.VARCHAR),
         Column("mode", ColumnType.VARCHAR),
@@ -315,7 +326,7 @@ TASKS = Table(
     unique=(("task_id",),),
     foreign_keys=(
         ForeignKey("scope_signal_ids", "signals", "signal_id", many=True),
-        ForeignKey("label_set", "label_sets", "name"),
+        ForeignKey("label_set_id", "label_sets", "label_set_id"),
     ),
 )
 

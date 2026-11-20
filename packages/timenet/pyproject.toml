@@ -1,6 +1,6 @@
 [project]
 name = "timenet"
-version = "0.11.0"
+version = "0.12.0"
 description = "TimeNet is infrastructure for registering, querying, downloading, converting, and exploring time series datasets in a shared TimeF format."
 readme = "README.md"
 license = "MIT"
@@ -23,7 +23,8 @@ classifiers = [
 dependencies = [
     "cachetools>=7,<8",
     "duckdb>=1.5.6,<1.6",
-    "fsspec[http]>=2025.3",
+    # Before 2025.12.0, ArrowFile.size is a method, and registry/version.py reads byte ranges from the end.
+    "fsspec[http]>=2025.12.0",
     "httpx>=0.28",
     "jaxtyping>=0.3",
     "numpy>=2.1",

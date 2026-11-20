@@ -35,15 +35,15 @@ class FreeAnswerRow:
         Returns:
             The added task.
         """
-        records = tuple(
-            dataset.add_record(record=printed.create_record(self.row.record_metadata(f"series_{number}")))
+        records = [
+            dataset.add_record(printed.create_record(self.row.record_metadata(f"series_{number}")))
             for number, printed in enumerate(self.series, start=1)
-        )
+        ]
         task = AnswerTask(
             inputs=records,
             prompt=self.row.question_with_series_placeholders(self.series),
-            targets=(self.row.answer,),
+            targets=self.row.answer,
             metadata=self.row.task_metadata(),
         )
-        dataset.add_task(task=task)
+        dataset.add_task(task)
         return task

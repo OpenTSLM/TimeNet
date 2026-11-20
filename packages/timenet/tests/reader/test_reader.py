@@ -13,13 +13,19 @@ from typing import NoReturn
 import duckdb
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
-from pydantic import ValidationError
 import pytest
 
 from timenet.client import TimeNet
+from timenet.config import settings
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError, TimeNetFileError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFFormatVersionError,
+    TimeFReaderError,
+    TimeFValidationError,
+    TimeNetFileError,
+)
 from timenet.format.checksums import file_checksum
 import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
@@ -296,6 +302,64 @@ def test_a_read_back_annotation_equals_the_constant_it_was_written_from(tmp_path
     assert stored == (1, 2)
 
 
+def _shared_annotation_dataset(shared: Annotation) -> TimeFDataset:
+    dataset = _referenced_annotation_dataset(with_task=False)
+    spec = TimeSeriesSpec(spec_type="ecg", name="lead", unit_value=ureg.millivolt)
+    axis = RegularAxis.from_rate_hz(Fraction(500))
+    for name in ("first", "second"):
+        eager = Signal(spec=spec, name="I", time_axis=axis, data=[0.0, 1.0], annotations=[shared])
+        lazy = Signal.from_values([2.0, 3.0], spec=spec, name="II", time_axis=axis)
+        lazy = Signal.from_loader(
+            spec=spec,
+            name="III",
+            time_axis=axis,
+            loader=lazy.to_arrow,
+            n_values=2,
+            annotations=[shared],
+        )
+        source = Source(name, signals=[eager, lazy], annotations=[shared])
+        record = dataset.add_record(Record(sources=[source], annotations=[shared]))
+        dataset.add_task(
+            AnswerTask(
+                prompt="Condition?",
+                targets=("healthy",),
+                inputs=(record,),
+                input_annotations=(record.annotations[0], eager.annotations[0]),
+                annotations=[shared],
+            )
+        )
+    return dataset
+
+
+@_PLANS
+def test_owners_built_with_one_annotation_object_each_attach_a_new_occurrence(tmp_path, load):
+    shared = Annotation("condition", value="healthy")
+    dataset = _shared_annotation_dataset(shared)
+    owners = [
+        *dataset.tasks,
+        *(owner for record in dataset.records[1:] for owner in (record, *record.walk_sources(), *record.signals)),
+    ]
+    attached = [annotation for owner in owners for annotation in owner.annotations]
+    assert all(annotation == shared and annotation is not shared for annotation in attached)
+    assert len({id(annotation) for annotation in attached}) == len(attached)
+
+    version_dir = _write(tmp_path, dataset=dataset)
+    restored = _read(version_dir, load)
+
+    assert_datasets_equal(dataset, restored)
+    for task in restored.tasks:
+        (record,) = task.inputs
+        assert task.input_annotations[0] is record.annotations[0]
+        assert task.input_annotations[1] is record.signals[0].annotations[0]
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        stored = connection.execute(
+            """SELECT count(DISTINCT content_id), count(*)
+               FROM annotation_occurrences JOIN annotation_contents USING (content_id)
+               WHERE name = 'condition'"""
+        ).fetchone()
+    assert stored == (1, 10)
+
+
 def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     dataset = _referenced_annotation_dataset(with_task=False)
     record = dataset.records[0]
@@ -335,7 +399,7 @@ def test_streamed_and_batched_tasks_read_back_equally(tmp_path, load):
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_split_value_chunks_round_trip_and_support_range_reads(tmp_path, backend):
-    version_dir = _write(tmp_path, values_backend=backend, chunk_max_bytes=64)
+    version_dir = _write(tmp_path, values_backend=backend, chunk_max_bytes=64, shard_target_bytes=2**16)
     with TimeFReader(open_local_version(version_dir)) as reader:
         signal = next(iter(reader.iter_records())).signals[0]
         expected = signal.to_arrow().slice(3, 7)
@@ -375,7 +439,7 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch, entry_poi
     if entry_point == "reader":
         reader = TimeFReader(open_local_version(version_dir))
     elif entry_point == "client":
-        reader = TimeNet(tmp_path, storage_path=tmp_path / "store").open("timenet/hello-world")
+        reader = TimeNet(sources=[str(tmp_path)]).open("timenet/hello-world")
     else:
         reader = TimeFReader.open(version_dir)
     with reader:
@@ -538,14 +602,21 @@ def test_missing_root_or_manifest_raises(tmp_path):
         open_local_version(empty)
 
 
-@pytest.mark.parametrize("format_version", [2, 3, 99])
-def test_unsupported_format_version_raises(tmp_path, format_version):
+@pytest.mark.parametrize(
+    ("format_version", "error", "message"),
+    [
+        (3, TimeFFormatVersionError, "uses TimeF format version 3, but the newest that this timenet reads is 2"),
+        (99, TimeFFormatVersionError, "uses TimeF format version 99, but the newest that this timenet reads is 2"),
+        (1, TimeFFormatVersionError, "uses TimeF format version 1, but the oldest that this timenet reads is 2"),
+    ],
+)
+def test_unsupported_format_version_raises(tmp_path, format_version, error, message):
     version_dir = _write(tmp_path)
     manifest_path = version_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(ValidationError, match="timef_format_version"):
+    with pytest.raises(error, match=message):
         open_local_version(version_dir)
 
 
@@ -899,8 +970,6 @@ def test_other_duckdb_errors_propagate_unchanged(tmp_path, monkeypatch):
 
 
 def test_a_reader_verifies_a_remote_catalog_once_and_again_after_its_copy_is_gone(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("TIMENET_CACHE", raising=False)
     version_dir = _write(tmp_path)
     local = open_local_version(version_dir)
     # A filesystem other than the local one makes the reader fetch the catalog into its cache.
@@ -924,6 +993,6 @@ def test_a_reader_verifies_a_remote_catalog_once_and_again_after_its_copy_is_gon
         assert len(checks) == 1
         # The cached copy disappears while the reader is closed; the reopen fetches and checks it again.
         reader.close()
-        shutil.rmtree(tmp_path / "home" / "cache" / "control")
+        shutil.rmtree(settings().control_cache_dir)
         assert reader.record_ids() == expected
     assert len(checks) == 2

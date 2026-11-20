@@ -18,8 +18,8 @@ for per-component detail.
 TimeNet splits into three parts. A **connector** builds a raw source into a TimeF version. The
 **client/SDK** reads its manifest from a **registry** and loads the data. The relational control
 plane is one immutable DuckDB file. The values plane can be Parquet or Zarr. Reading never runs
-connector code. Against a local registry, `open` and `load` can first build a dataset that the
-registry does not have from an installed connector.
+connector code. If the sources of the client include the installed connectors, `open` and `load`
+can first build a dataset that no registry has into the local registry.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
@@ -37,19 +37,19 @@ There can be several registries: one public, private internal ones, or a local d
 PRODUCE  dataset.yaml + connector
              │
              ▼
-         engine   download ─► convert ─► derive_schema ─► store
+         engine   download ─► convert ─► derive_schema ─► store_dataset
              │
              ▼
          registry
              │
              ▼
-CONSUME  SDK ─► open_version ─► TimeFReader ─► Arrow
+CONSUME  SDK ─► TimeNet.open ─► TimeFReader ─► Arrow
 ```
 
 The compiled `manifest.json` is the entry point and commit marker. It contains the card metadata,
-derived schema, counts, and file list. `open_version` returns a handle to the manifest and version
-files. `TimeFReader` uses the handle to read the DuckDB hierarchy and lazy Signal values. The SDK
-never imports connector code.
+derived schema, counts, and file list. `TimeNet.open()` reads the manifest and opens a handle to
+the files of the version. `TimeFReader` uses the handle to read the DuckDB hierarchy and lazy Signal
+values. The SDK never imports connector code.
 
 ---
 
@@ -61,7 +61,7 @@ Three producer-side pieces, each with one job:
 | --- | --- | --- |
 | **Connector** | one `BaseConnector` subclass per dataset ([connectors](connectors.md)) | the dataset-specific recipe: `download()` fetches raw files, `convert()` builds a `TimeFDataset`. Knows nothing about the engine or registry. |
 | **Engine** | `run_pipeline` ([build & publish](build.md)) | drives any connector through the fixed pipeline and owns caching, idempotency, and `force` / `keep_cache`. Knows no dataset specifics. |
-| **Builder** | the `timenet-build` CLI ([build](build.md)) | the entry point: resolves the id to its connector and runs the engine into a registry. |
+| **Builder** | the `timenet-build` CLI and `timenet.build()` ([build](build.md)) | the entry point: resolves the id to its connector and runs the engine into the local registry. |
 
 ```
 timenet-build build org/name
@@ -69,14 +69,14 @@ timenet-build build org/name
   ├─ builder  discovery.resolve("org/name") -> Connector class
   │             datasets/<org>/<name>/ exposes CONNECTOR
   │
-  └─ engine   run_pipeline(connector, <registry>)
-                metadata -> download -> convert -> derive_schema -> store
-                  -> <registry>/org/name/<version>/
+  └─ engine   run_pipeline(connector, <local registry>)
+                metadata -> download -> convert -> derive_schema -> store_dataset
+                  -> <local registry>/org/name/<version>/
 ```
 
 `metadata()` reads the `dataset.yaml` card. The engine streams the converted dataset through
-[`TimeFWriter`](timef-writer.md). A local output directory is also a valid registry, so the client
-can read it directly.
+[`TimeFWriter`](timef-writer.md) into the local registry, from where the client can
+read it directly.
 
 ---
 
@@ -115,9 +115,11 @@ can read it directly.
 
 1. **Author** a connector under `timenet_connectors/datasets/<org>/<name>/`. Its `__init__.py`
    exposes `CONNECTOR`, and its `dataset.yaml` card sits beside it.
-2. **Build**: `timenet-build build <org>/<name>` runs the engine, compiles the manifest, and writes a TimeF version.
-3. **Verify** locally: point the SDK at the output directory (itself a valid local registry).
-4. **Publish** the complete TimeF version to a registry.
+2. **Build**: `timenet-build build <org>/<name>` or `timenet.build("<org>/<name>")` runs the engine,
+   compiles the manifest, and writes a TimeF version.
+3. **Verify** locally: the SDK reads the local registry, so it finds the new version there.
+4. **Publish** the complete TimeF version to a remote registry with `timenet publish` or
+   `timenet.publish()`.
 5. **Consume**: use `TimeNet.open()` for lazy access, `TimeNet.load()` for a dataset with every
    value in memory, or `timenet download` from the CLI for a local copy.
 
@@ -140,10 +142,10 @@ runs, the build prepares each parent release, as
 [Prepare parent releases](build.md#prepare-parent-releases) describes.
 
 `TimeNet.open()`, `TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the
-payload sources before the first read. A read never opens the catalog of a parent. Against a local
-registry, the client reuses a complete copy of each release, copies it from `fetch_from`, or builds
-it. `auto_build` is on by default. A remote client never runs connector code. See
-[Open, load, or download](client.md#open-load-or-download).
+payload sources before the first read. A read never opens the catalog of a parent. A client
+reads each release where it is, through its ordered list of sources. If only
+`InstalledConnectors()` in that list provides a release, the client builds it into the local
+registry. See [Open, load, or download](client.md#open-load-or-download).
 
 The child keeps an internal map from the ID of each parent object to the ID of its copy. Through
 this map, `get(..., parent=)` finds a copy. Through the same map, a later import reuses a copy. The

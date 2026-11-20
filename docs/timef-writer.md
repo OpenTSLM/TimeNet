@@ -79,8 +79,7 @@ therefore needs a different dataset ID or version than its sources.
 
 Its readers find the sources in the registry the release is published to, so the writer checks each
 source there at its first reuse, during `write()`. Pass that registry as `registry=`. It defaults to a
-local registry over `root`, and `S3Registry.store()` and `RemoteRegistry.store()` pass themselves while
-they stage the release locally. The writer fetches the source's manifest from the registry once and
+local registry over `root`. The writer fetches the manifest of the source from the registry once and
 compares the record of each reused file. It refuses the write, before it writes the remaining values
 and with nothing published, when:
 
@@ -108,7 +107,7 @@ differing payload source.
 | `data_page_size` | Optional Parquet data-page target. |
 | `value_encoding` | Parquet values-column encoding, or `"auto"`. |
 
-Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve nullable
+Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve missing
 timesteps. Irregular-axis time offsets live in packed Parquet payloads under `payloads/`, not in
 either values backend.
 
