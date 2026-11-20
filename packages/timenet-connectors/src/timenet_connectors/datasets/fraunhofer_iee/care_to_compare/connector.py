@@ -63,24 +63,24 @@ PERIOD_S = PERIOD_US / 1_000_000
 _FARM_DIRECTORY = re.compile(r"^Wind Farm ([A-Z])$")
 
 EVENT_LABEL = LabelSet(
-    name="event_label",
-    labels=(
+    [
         Label(
             name="anomaly",
             description="The prediction period holds an anomaly that leads up to a documented turbine fault.",
         ),
         Label(name="normal", description="The prediction period shows normal behavior."),
-    ),
+    ],
+    annotations=[Annotation("name", value="event_label")],
 )
 FAULT_COMPONENT = LabelSet(
-    name="fault_component",
-    labels=(
+    [
         Label(name="hydraulic", description="The hydraulic group."),
         Label(name="gearbox", description="The gearbox or its bearings."),
         Label(name="generator_bearing", description="A generator bearing."),
         Label(name="transformer", description="The transformer or its cell."),
         Label(name="rotor_bearing", description="The rotor (main) bearing."),
-    ),
+    ],
+    annotations=[Annotation("name", value="fault_component")],
 )
 
 DETECTION_PROMPT = (
@@ -233,13 +233,13 @@ class _FarmConverter:
 
     def _signal_annotations(self, column: str) -> list[Annotation]:
         sensor, statistic = self._sensor(column)
-        annotations = [Annotation(key="statistic", value=statistic)]
+        annotations = [Annotation("statistic", value=statistic)]
         if sensor.unit and sensor.unit_expression is None:
-            annotations.append(Annotation(key="source_unit", value=sensor.unit))
+            annotations.append(Annotation("source_unit", value=sensor.unit))
         if sensor.is_angle:
-            annotations.append(Annotation(key="is_angle", value=True))
+            annotations.append(Annotation("is_angle", value=True))
         if sensor.is_counter:
-            annotations.append(Annotation(key="is_counter", value=True))
+            annotations.append(Annotation("is_counter", value=True))
         return annotations
 
     def add_event(self, dataset: TimeFDataset, event: EventInfo) -> None:
@@ -268,6 +268,7 @@ class _FarmConverter:
                 time_axis=self._axis,
                 loader=_column_loader(cache_path, index),
                 n_values=table.n_steps,
+                annotations=self._signal_annotations(column),
             )
             for index, column in enumerate(table.feature_columns)
         ]
@@ -277,42 +278,38 @@ class _FarmConverter:
             name="status_type_id",
             time_axis=self._axis,
         )
+        prediction = _interval(*table.prediction_steps)
+        facts = [
+            Annotation("wind_farm", value=self.farm.name),
+            Annotation("event_id", value=event.event_id),
+            Annotation("asset_id", value=event.asset_id),
+            Annotation("event_label", value=event.label),
+            Annotation("training_period", span=_interval(*table.train_steps)),
+            Annotation("prediction_period", span=prediction),
+        ]
+        if event.description is not None:
+            facts.append(Annotation("event_description", value=event.description))
+        component = event.fault_component(self.farm.name)
+        if component is not None:
+            facts.append(Annotation("fault_component", value=component))
         record = Record(
             metadata={"source_record_id": f"care-{self.farm.name.lower()}-{event.event_id}"},
             start_time=TimeOrigin(table.start_us),
-            sources=(
-                Source(name="SCADA", signals=tuple(signals)),
-                Source(name="Turbine controller", signals=(status,)),
-            ),
+            sources=[
+                Source("SCADA", signals=signals),
+                Source("Turbine controller", signals=[status]),
+            ],
+            annotations=facts,
         )
-        dataset.add_record(record=record)
-        for signal, column in zip(signals, table.feature_columns, strict=True):
-            for annotation in self._signal_annotations(column):
-                signal.annotate(annotation)
-
-        prediction = _interval(*table.prediction_steps)
-        facts = [
-            Annotation(key="wind_farm", value=self.farm.name),
-            Annotation(key="event_id", value=event.event_id),
-            Annotation(key="asset_id", value=event.asset_id),
-            Annotation(key="event_label", value=event.label),
-            Annotation(key="training_period", span=_interval(*table.train_steps)),
-            Annotation(key="prediction_period", span=prediction),
-        ]
-        if event.description is not None:
-            facts.append(Annotation(key="event_description", value=event.description))
-        component = event.fault_component(self.farm.name)
-        if component is not None:
-            facts.append(Annotation(key="fault_component", value=component))
-        record.add_annotations(facts)
+        dataset.add_record(record)
         event_window = record.annotate(
-            Annotation(key="event_window", value=event.label, description=EVENT_WINDOW, span=_interval(*window))
+            Annotation("event_window", value=event.label, description=EVENT_WINDOW, span=_interval(*window))
         )
 
         detection = ClassificationTask(
-            inputs=(record,),
+            inputs=[record],
             prompt=DETECTION_PROMPT,
-            targets=(event.label,),
+            targets=event.label,
             label_set=EVENT_LABEL,
             scope=prediction,
         )
@@ -320,7 +317,7 @@ class _FarmConverter:
         if event.label == "anomaly":
             tasks.append(
                 TemporalLocalizationTask(
-                    inputs=(record,),
+                    inputs=[record],
                     prompt=LOCALIZATION_PROMPT,
                     mode=LocalizationMode.SPARSE,
                     scope=prediction,
@@ -331,18 +328,18 @@ class _FarmConverter:
         if component is not None:
             tasks.append(
                 ClassificationTask(
-                    inputs=(record,),
+                    inputs=[record],
                     prompt=COMPONENT_PROMPT,
-                    targets=(component,),
+                    targets=component,
                     label_set=FAULT_COMPONENT,
                     scope=prediction,
                     from_tasks=(detection,),
                 )
             )
-        dataset.add_tasks(tasks=tasks)
+        dataset.add_tasks(tasks)
 
 
-class CareToCompareConnector(BaseConnector[CareWindFarm]):
+class CareToCompareConnector(BaseConnector[list[CareWindFarm]]):
     """Connector for CARE to Compare, version 6 of the Zenodo record."""
 
     async def download_async(self, cache_dir: Path) -> list[CareWindFarm]:  # ruff: ignore[no-self-use]
@@ -357,17 +354,17 @@ class CareToCompareConnector(BaseConnector[CareWindFarm]):
         root = await ensure_archive(ZENODO_URL, cache_dir, filename=ARCHIVE_NAME, sha256=ARCHIVE_SHA256)
         return CareWindFarm.discover(Path(root))
 
-    def convert(self, raw_refs: list[CareWindFarm]) -> TimeFDataset:
+    def convert(self, farms: list[CareWindFarm]) -> TimeFDataset:
         """Create one Record and its tasks for each event of each wind farm.
 
         Args:
-            raw_refs: The wind farm directories from :meth:`download_async`.
+            farms: The wind farm directories from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for farm in raw_refs:
+        for farm in farms:
             converter = _FarmConverter(farm)
             for event in sorted(converter.events.values(), key=lambda event: event.event_id):
                 converter.add_event(dataset, event)
