@@ -163,8 +163,9 @@ serve every release that they hold, so they never answer `NotServed`. For an `S3
 owner of the bucket decides through the bucket permissions who can read and write releases. A
 `RemoteRegistry` asks its service. The service decides which releases a caller can read, and a
 refusal becomes `NotServed` with the access level and the access page of the card. The service
-lists the card of the latest version only, so they come from that card. If that card is open,
-`resolve()` raises `TimeNetRegistryError` with the reason that the service gives.
+lists only the card of the latest version. So the access level and the access page come from that
+card. If that card is open, `resolve()` raises `TimeNetRegistryError` with the reason that the
+service gives.
 
 `InstalledConnectors()` answers `Found` only for the version that the card of a connector declares,
 because a connector builds only that version. For any other request, it answers `NotFound`.

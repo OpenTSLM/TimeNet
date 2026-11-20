@@ -157,7 +157,7 @@ class TimeNetVersionConflictError(TimeNetError):
 
 
 class TimeNetAccessError(TimeNetError):
-    """A dataset needs credentialed or restricted access, and a registry does not serve or accept it.
+    """A dataset needs credentialed or restricted access, and a registry does not serve it to this caller.
 
     Attributes:
         dataset: The release.

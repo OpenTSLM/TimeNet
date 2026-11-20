@@ -147,8 +147,9 @@ nothing.
 
 `get_manifest()` reads only the manifest, and checks no other file. A registry service can
 refuse the release, for example a credentialed release on the hosted registry. Then
-`get_manifest()` raises `TimeNetAccessError` with the access page. A release gets its manifest when
-it is built. So for a release that only `InstalledConnectors()` provides, `get_manifest()` raises
+`get_manifest()` raises `TimeNetAccessError` with the access page. If the listed card is open, it
+raises `TimeNetRegistryError` with the reason that the service gives. A release gets its manifest
+when it is built. So for a release that only `InstalledConnectors()` provides, `get_manifest()` raises
 `TimeNetNotBuiltError`.
 
 `get_card()` returns the card of the release. The card comes from the manifest, or from the
