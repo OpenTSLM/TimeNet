@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: autonlab/timeseriesexam1
+dataset_version: 1.0.0
+name: TimeSeriesExam
+description: >-
+  TimeSeriesExam is a multiple-choice exam that tests how well a model
+  understands basic time series concepts. It has 746 questions in five
+  categories: pattern recognition, noise understanding, similarity analysis,
+  anomaly detection, and causality analysis. A question is about one series,
+  or about two series that it compares. The 996 series are synthetic. The
+  authors build them from baseline components such as linear and non-linear
+  trends and cyclic patterns. Most series have 1,024 values. Each question has
+  two to four answer options and an easy, medium, or hard difficulty. The
+  authors publish only a test split.
+license: MIT
+license_url: https://github.com/moment-timeseries-foundation-model/TimeSeriesExam/blob/main/LICENSE
+source_url: https://huggingface.co/datasets/AutonLab/TimeSeriesExam1
+citation: >-
+  Cai, Choudhry, Goswami, Dubrawski. TimeSeriesExam: A Time Series Understanding Exam.
+  NeurIPS 2024 Workshop on Time Series in the Age of Large Models.
+  https://arxiv.org/abs/2410.14752
+domains:
+  - general
+tags:
+  - multiple-choice
+  - question-answering
+  - synthetic
+  - huggingface
