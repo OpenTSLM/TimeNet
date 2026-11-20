@@ -213,7 +213,7 @@ inserts that stream once without retaining every Task in memory.
 
 ## Annotations
 
-The same `Annotation` type can annotate a Dataset, Task, Record, Source, or Signal. Annotation
+The same `Annotation` type can annotate a Dataset, Task, Record, Source, Signal, or label set. Annotation
 content is immutable and reusable. Every call to `annotate()` creates a separate occurrence, so a
 long payload can be stored once while its occurrences carry independent placement, confidence, and
 provenance. `Annotation` is final: reuse content through a constant, or a builder function for
@@ -238,8 +238,8 @@ lead_i.annotate(
 
 `derive_schema()` collects the time-series specifications, annotation descriptors, and concrete Task
 types found in the dataset. Annotation descriptors come from every owner: the Dataset, Records,
-Sources, Signals, and Tasks. The Tasks of a task stream are not read here. The writer adds their
-keys to the schema while it writes them. It does not load Signal values.
+Sources, Signals, Tasks, and label sets. The Tasks of a task stream are not read here. The writer
+adds their keys to the schema while it writes them. It does not load Signal values.
 
 Write a version with the declarative helper:
 

@@ -49,12 +49,12 @@ _COSINE = TimeSeriesSpec(
 # Each classification task draws its target from a label set that every task with the same question
 # shares.
 _RHYTHM = LabelSet(
-    name="rhythm",
-    labels=(Label(name="normal", description="A regular wave."), Label(name="abnormal")),
+    [Label(name="normal", description="A regular wave."), "abnormal"],
+    annotations=[Annotation("name", value="rhythm")],
 )
 _EVENT = LabelSet(
-    name="event",
-    labels=(Label(name="onset", description="The moment the wave starts."), Label(name="offset")),
+    [Label(name="onset", description="The moment the wave starts."), "offset"],
+    annotations=[Annotation("name", value="event")],
 )
 
 

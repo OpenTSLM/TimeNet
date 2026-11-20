@@ -13,6 +13,7 @@ manifest.
 """
 
 from collections.abc import Hashable
+from copy import deepcopy
 from dataclasses import KW_ONLY, dataclass, field, replace
 from enum import StrEnum, unique
 import json
@@ -184,6 +185,23 @@ class Annotation:
         return replace(self)
 
 
+def _copy_annotation(original: Annotation) -> Annotation:
+    """Copy an annotation occurrence as a value, with the handle of a stored value.
+
+    The copy has deep copies of the value, the metadata, and the occurrence metadata. So a change to
+    one of them in the copy leaves the original as it is. Imports and edits copy annotations this way.
+
+    Returns:
+        The copy.
+    """
+    return replace(
+        original,
+        value=deepcopy(original.value),
+        metadata=deepcopy(original.metadata),
+        occurrence_metadata=deepcopy(original.occurrence_metadata),
+    )
+
+
 def annotation_type_of(annotation: Annotation) -> AnnotationType:
     """Return the :class:`AnnotationType` shape of an annotation instance.
 
@@ -203,8 +221,8 @@ class SupportsAnnotate(Protocol):
 
     ``annotate`` binds a fresh occurrence of ``annotation`` to this object and returns it; the
     returned occurrence is what a Task names in ``input_annotations`` or ``target_annotations``.
-    ``annotations`` lists every occurrence attached so far. Records, Sources, Signals, Tasks, and
-    the dataset itself implement it. A :class:`~timenet.dataset.SignalSelection` does not: it fans
+    ``annotations`` lists every occurrence attached so far. Records, Sources, Signals, Tasks, label
+    sets, and the dataset itself implement it. A :class:`~timenet.dataset.SignalSelection` does not: it fans
     one annotation out over several Signals and returns every occurrence it created. The contract is
     checked statically; there is no runtime ``isinstance`` support because ``annotations`` is a
     property.

@@ -9,7 +9,7 @@ tags:
 # Annotations
 
 An `Annotation` stores reusable content. An annotation occurrence attaches that content to a Dataset,
-Task, Record, Source, or Signal.
+Task, Record, Source, Signal, or label set.
 
 ```python
 from timenet.types import Annotation
@@ -115,6 +115,25 @@ a separate occurrence with shared content. Other Signals remain unchanged.
 
 Time spans use whole microseconds on the Record timeline. Step spans are reserved for
 Tasks on ordinal Signals.
+
+## Label set annotations
+
+A `LabelSet` takes annotations like the other owners. Pass them to the constructor, or call
+`annotate()` later. Use them for a name, a description, or other context. No key is required.
+
+```python
+from timenet.types import Annotation, LabelSet
+
+SLEEP_STAGE = LabelSet(
+    ["W", "N1", "R"],
+    annotations=[Annotation("name", value="sleep_stage")],
+)
+SLEEP_STAGE.annotate(Annotation(key="description", value="Sleep stage of one epoch."))
+```
+
+A label set annotation has no span. Annotations are part of the identity of a set. Two sets with the
+same labels and different annotations are two sets, and TimeF stores each of them. TimeF stores sets
+with the same labels and the same annotations once.
 
 ## Valid values
 

@@ -11,6 +11,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
 )
+from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.sleep_edfx import tasks
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 
@@ -153,7 +154,8 @@ def _pick(built, kind, label_set=None):
 
 
 def _label_sets(built):
-    return {one.label_set.name for one in built if isinstance(one, ClassificationTask)}
+    tasks = [one for one in built if isinstance(one, ClassificationTask)]
+    return {read_value(a.value) for one in tasks for a in one.label_set.annotations if a.key == "name"}
 
 
 def test_age_is_a_scalar_with_a_unit():

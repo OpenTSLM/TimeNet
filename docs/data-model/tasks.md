@@ -12,9 +12,9 @@ A Task describes one modeling problem. It holds ordered input Records and one re
 expected output.
 
 ```python
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.types import ClassificationTask, LabelSet
 
-CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
+CONDITION = LabelSet(["healthy", "faulty"])
 
 task = ClassificationTask(
     inputs=(record,),
@@ -85,12 +85,9 @@ A dataset that ships a partition marks each Task with its `split`. Records carry
 own: one Record may serve Tasks of several splits.
 
 ```python
-from timenet.types import ClassificationTask, Label, LabelSet, Split
+from timenet.types import ClassificationTask, LabelSet, Split
 
-ACTIVITY = LabelSet(
-    name="activity",
-    labels=(Label(name="walking"), Label(name="sitting")),
-)
+ACTIVITY = LabelSet(["walking", "sitting"])
 
 dataset.add_task(
     ClassificationTask(
@@ -224,26 +221,20 @@ dataset.add_task(age_question(record, 64))
 ```python
 from timenet.types import Label, LabelSet
 
-CONDITION = LabelSet(
-    name="condition",
-    labels=(Label(name="healthy"), Label(name="faulty", description="A bearing fault.")),
-)
-FINDINGS = LabelSet(
-    name="findings",
-    labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")),
-    multi_label=True,
-)
+CONDITION = LabelSet(["healthy", Label(name="faulty", description="A bearing fault.")])
+FINDINGS = LabelSet(["AF", "PVC", "LBBB"], multi_label=True)
 
 ClassificationTask(inputs=(record,), targets="healthy", label_set=CONDITION)
 ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-A `LabelSet` defines the allowed labels for a classification target. The `multi_label` flag controls
-how many labels a target can contain.
+A `LabelSet` defines the allowed labels for a classification target. Like other owners, it can carry
+[annotations](annotations.md#label-set-annotations). The `multi_label` flag controls how many labels
+a target can contain.
 
 If `multi_label=False`, the default, a target must contain exactly one label. If `multi_label=True`,
 a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
-label applies. The order of labels does not matter.
+label applies.
 
 When the dataset adds or streams a task, it makes sure that the target follows the rules of its
 label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
@@ -252,9 +243,26 @@ must contain exactly one label.
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
 
-Tasks can share the same label set object. Each name identifies one label set within a dataset.
-If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
-error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
+A label set has no name. TimeF stores equal sets once. For this, two sets are equal if they have the
+same labels, label descriptions, `multi_label`, `ordered`, and annotations. The order of labels
+matters only for an ordered set. The order of annotations does not matter. `==` follows the same rule.
+
+Annotations are equal if all their fields are equal, the value included. So these two sets are two
+stored sets, each with its own id:
+
+```python
+LabelSet(["yes", "no"], annotations=[Annotation("name", value="afib_present")])
+LabelSet(["yes", "no"], annotations=[Annotation("name", value="signal_noisy")])
+```
+
+By default the order of labels does not matter. Use `ordered=True` when it has a meaning, for example
+for ordinal labels such as `low`, `medium` and `high`, or for answer options that a model sees in a
+fixed order. Then each order is its own set, and the stored set keeps it. An unordered set keeps the
+label order of the first equal set that the writer meets. Pass the labels as a list or a tuple. A
+label set rejects a Python set, because its order changes from one run to the next.
+
+The stored set gets one integer id, `label_set_id`. In one read, the reader gives tasks that use the
+same set a shared object.
 
 ### Answer and rationale
 

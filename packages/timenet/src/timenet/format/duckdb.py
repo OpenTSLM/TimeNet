@@ -14,13 +14,14 @@ from timenet.format.control_schema import schema_ddl
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 2
+CONTROL_SCHEMA_VERSION = 3
 """Schema version written into :data:`CONTROL_FILE`, and the newest that this TimeNet reads."""
 
-OLDEST_READABLE_CONTROL_SCHEMA_VERSION = 2
+OLDEST_READABLE_CONTROL_SCHEMA_VERSION = 3
 """The oldest schema version of :data:`CONTROL_FILE` that this TimeNet reads.
 
-Version 2 is the schema of TimeNet 0.12. Version 1 names layouts used during early development, and no TimeNet reads them.
+Version 3 stores label sets by id, with their annotations. Version 2 is the schema of TimeNet 0.12. Version 1 names
+layouts used during early development. This TimeNet reads neither of them.
 """
 
 _IN_MEMORY_DATABASE = "an in-memory control database"

@@ -6,7 +6,6 @@ from timenet.testing import assert_datasets_equal, make_dataset, sine_loader
 from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
-    Label,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -16,7 +15,7 @@ from timenet.types import (
 from timenet.writer import TimeFWriter
 
 
-LABELS = LabelSet(name="labels", labels=(Label(name="x"),))
+LABELS = LabelSet(["x"])
 
 
 def _namespaced_dataset() -> TimeFDataset:

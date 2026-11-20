@@ -5,12 +5,11 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from enum import Enum
-import hashlib
 import json
 from typing import TYPE_CHECKING, Self, TypeVar
 
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, ClassificationTask, InputModality, Label, LabelSet, Split
+from timenet.types import Annotation, ClassificationTask, InputModality, LabelSet, Split
 
 
 if TYPE_CHECKING:
@@ -106,15 +105,6 @@ def _parse_answer_options(cell: str) -> tuple[str, ...]:
     if not isinstance(options, list) or not options or not all(isinstance(option, str) for option in options):
         raise TimeNetConnectorError(f"options_str must be a non-empty list of strings, got {cell!r}")
     return tuple(options)
-
-
-def _label_set_name(options: tuple[str, ...]) -> str:
-    """Name a label set by its options, so that equal option lists share one set.
-
-    Returns:
-        ``options_`` and the first 8 hex digits of the SHA-256 of the options as a JSON list.
-    """
-    return "options_" + hashlib.sha256(json.dumps(options).encode()).hexdigest()[:8]
 
 
 @dataclass(frozen=True)
@@ -216,31 +206,29 @@ class ARFBenchQuestion:
     def _create_task(self, inputs: list[Record], modality: InputModality) -> ClassificationTask:
         """Create a test task that asks for the correct answer from the options of the question.
 
-        The options are the label set of the task. The set is named after a hash of the options, so
-        questions with the same options share one set. The row index in the metadata pairs the
-        series task with the chart task of ``datadog/arfbench-charts``. The interpolation flags
-        describe what an engineer saw. This method does not interpolate.
+        The options are the label set of the task. The set is ordered, because the order of the options is
+        part of the question. Questions with the same options in the same order share one set. The row
+        index in the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``.
+        The interpolation flags describe what an engineer saw. This method does not interpolate.
 
         Returns:
             The task, not yet added to a dataset.
         """
-        task = ClassificationTask(
+        return ClassificationTask(
             inputs=inputs,
             prompt=self.question,
             targets=self.correct_answer,
             input_modalities=frozenset({InputModality.TEXT, modality}),
             split=Split.TEST,
             metadata={"question_index": self.index},
-            label_set=LabelSet(
-                name=_label_set_name(self.answer_options),
-                labels=tuple(Label(name=option) for option in self.answer_options),
-            ),
+            label_set=LabelSet(self.answer_options, ordered=True),
+            annotations=[
+                Annotation("task_category", value=self.task_category.value),
+                Annotation("difficulty", value=self.difficulty.value),
+                Annotation("interpolate_1", value=self.interpolate_1),
+                Annotation("interpolate_2", value=self.interpolate_2),
+            ],
         )
-        task.annotate(Annotation("task_category", value=self.task_category.value))
-        task.annotate(Annotation("difficulty", value=self.difficulty.value))
-        task.annotate(Annotation("interpolate_1", value=self.interpolate_1))
-        task.annotate(Annotation("interpolate_2", value=self.interpolate_2))
-        return task
 
 
 def read_questions(qa_csv: Path) -> Iterator[ARFBenchQuestion]:

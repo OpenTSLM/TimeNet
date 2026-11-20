@@ -23,7 +23,6 @@ from timenet.types import (
     DatasetSchema,
     EntityId,
     InputModality,
-    LabelSetRegistry,
     ObjectKind,
     StepSpan,
     SupportsAnnotate,
@@ -92,8 +91,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         """The Record that holds each registered Signal, by Signal ID."""
         self._tasks: list[Task] = []
         self._tasks_by_id: dict[EntityId, Task] = {}
-        self._label_sets = LabelSetRegistry()
-        """The label sets that the registered tasks use, one per name."""
         self._ids = IdCounters()
         self._streamed_task_base = 0
         self._annotations: list[Annotation] = []
@@ -475,8 +472,8 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         the cross-task checks (``from_tasks`` derivations) that need every task at once do not run
         for a stream.
 
-        If the dataset has a schema (see :meth:`derive_schema`), the annotation keys of the tasks are
-        added to it. After the last task, the schema lists them.
+        If the dataset has a schema (see :meth:`derive_schema`), the annotation keys of the tasks and
+        their label sets are added to it. After the last task, the schema lists them.
 
         Yields:
             Each validated task, in the source's order.
@@ -487,12 +484,11 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
         declared = set(self._streamed_task_types)
-        label_sets = LabelSetRegistry()
         schema = self._schema
         descriptors = {} if schema is None else {descriptor.key: descriptor for descriptor in schema.annotations}
         for position, task in enumerate(self.iter_tasks(), start=1):
             task._id = self._ids.claim(ObjectKind.TASK, self._streamed_task_base + position)
-            self._validate_streamed_task(task, index, declared, label_sets)
+            self._validate_streamed_task(task, index, declared)
             if schema is not None:
                 self._add_descriptors(descriptors, task.walk_annotations())
             yield task
@@ -504,7 +500,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         task: Task,
         index: _TaskValidationIndex,
         declared: set[type[Task]],
-        label_sets: LabelSetRegistry,
     ) -> None:
         """Make sure that each streamed task follows the dataset rules.
 
@@ -512,8 +507,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             task: The streamed task.
             index: The shared index of dataset objects and annotations.
             declared: The task types :meth:`set_task_stream` declared.
-            label_sets: The label sets used so far in the stream.
-                This method adds the label set of this task.
 
         Raises:
             TimeFValidationError: If the task's type is not declared, or the task fails a check of
@@ -524,9 +517,9 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
                 f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
                 f"{sorted(t.__name__ for t in declared)}"
             )
-        self._check_task(task, index, label_sets)
+        self._check_task(task, index)
 
-    def _check_task(self, task: Task, index: _TaskValidationIndex, label_sets: LabelSetRegistry) -> None:
+    def _check_task(self, task: Task, index: _TaskValidationIndex) -> None:
         """Make sure that a task follows the dataset rules.
 
         This method handles tasks added alone, in a batch, or in a stream.
@@ -534,7 +527,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         Args:
             task: The task to check.
             index: The shared index of dataset objects and annotations.
-            label_sets: The label sets used so far. This method adds the label set of this task.
 
         Raises:
             TimeFValidationError: If the task's record attachment, references, answer, labels, label
@@ -544,7 +536,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         task.check_against_scope()
         self._check_task_answer(task)
         task.check_targets()
-        task.register_label_set(label_sets)
         self._check_signal_refs(task, index)
         self._validate_task_spans(task, index)
         self._check_annotation_refs(task, self._referenced_records(task), index)
@@ -582,7 +573,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         for offset, task in enumerate(batch):
             task._id = first + offset
         try:
-            label_sets = self._validate_task_batch(batch)
+            self._validate_task_batch(batch)
         except BaseException:
             for task, task_id in zip(batch, previous, strict=True):
                 task._id = task_id
@@ -591,14 +582,13 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             self._ids.claim(ObjectKind.TASK, task.id)
             self._tasks.append(task)
             self._tasks_by_id[task.id] = task
-        self._label_sets = label_sets
         return batch
 
     def _is_registered(self, task: Task) -> bool:
         """Return whether this exact task object is in the dataset."""
         return task._id is not None and self._tasks_by_id.get(task._id) is task
 
-    def _validate_task_batch(self, batch: tuple[Task, ...]) -> LabelSetRegistry:
+    def _validate_task_batch(self, batch: tuple[Task, ...]) -> None:
         """Make sure that a batch follows the dataset rules before attaching its tasks.
 
         This method examines each task and the relationships between tasks.
@@ -607,9 +597,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
 
         Args:
             batch: The tasks to register together.
-
-        Returns:
-            A copy of the registry that includes the label sets from this batch.
 
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
@@ -627,10 +614,8 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
                     )
         self._check_no_derivation_cycle(batch)
         index = _TaskValidationIndex(self)
-        label_sets = self._label_sets.copy()
         for task in batch:
-            self._check_task(task, index, label_sets)
-        return label_sets
+            self._check_task(task, index)
 
     @classmethod
     def _validate_task_spans(cls, task: Task, index: _TaskValidationIndex) -> None:
@@ -787,7 +772,6 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         dataset._tasks = list(tasks)
         for task in dataset._tasks:
             dataset._tasks_by_id[dataset._ids.claim(ObjectKind.TASK, task.id)] = task
-            task.register_label_set(dataset._label_sets)
         dataset._annotations = list(annotations)
         dataset._schema = schema
         if import_state is not None:
