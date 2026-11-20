@@ -7,8 +7,8 @@ with the ITFormer paper (Wang et al., ICML 2025).
 The paper is [arXiv 2506.20093](https://arxiv.org/abs/2506.20093).
 The authors' code is [ITFormer-ICML25](https://github.com/Pandalin98/ITFormer-ICML25).
 
-The connector builds one task per labelled question-answer pair. A single-row question reads the
-Record of its row. A multi-row question reads one joined Record: the first 60 steps of each of its
+The connector builds one task per labelled question-answer pair. It leaves out the train pairs that
+repeat a test pair. A single-row question reads the Record of its row. A multi-row question reads one joined Record: the first 60 steps of each of its
 10 rows. The authors' code gives its model the same input. The connector lives in one file,
 `connector.py`.
 
@@ -34,18 +34,20 @@ channel audit
 ([`docs/ISSUE_23_CHANNEL_AUDIT.md`](https://github.com/Pandalin98/ITFormer-ICML25/blob/b80142f/docs/ISSUE_23_CHANNEL_AUDIT.md))
 says not to name the 33 channels without a mapping, so the connector does not.
 
-The release does not say what a row is. We read about 400 rows over HTTP and found:
+The release does not say what a row is. We read the first and last steps of every row and found:
 
 - A row is a window of one flight. Consecutive ids are consecutive windows: the last step of a row
   joins the first step of the next one. So a row of 600 steps at 1 Hz is the paper's "10-minute (600
   points) time-series segment", and N-CMAPSS records its flights at 1 Hz.
-- A flight is 10 to 21 consecutive rows. When a flight ends inside a row, the release fills the rest
-  of that row with zeros in all 33 channels. In 171 consecutive rows, 11 rows ended this way, one per
-  flight.
+- When a flight ends inside a row, the release fills the rest of that row with zeros in all 33
+  channels. 6,380 rows end this way. Counted from one such row to the next, a flight is a median of
+  16 rows long.
 - The release does not mark where a flight starts. The zeros at the end of a flight are the only
-  sign of a flight boundary.
-- The values look standardized, with statistics that the release does not give. Channel 32 is
-  constant within each row, and its values do not follow the health answers.
+  sign of a flight boundary. A flight that ends exactly at the end of a row leaves no sign.
+- The values look standardized, with statistics that the release does not give.
+- Channel 32 is constant within each flight. It changes only 72 times in the whole file, so it splits
+  the rows into 73 runs of 34 to 359 flights. We read each run as one engine unit, but the release
+  does not say so.
 
 The QA files name only 7,755 of the 118,921 rows. The single-row lines name 5,945 rows. The 8,845
 distinct lists of the multi-row lines use 1,900 rows, and 90 rows occur in both. No question names
@@ -78,8 +80,9 @@ one block at the end of the train file. A labelled pair is a pair whose answer i
 | `test_qa.jsonl`, lines only in the test file | 1,500 | 14,160 | 14,022 |
 
 The copies are not a random sample of the test file. They hold 2,689 of the 3,384 multi-row test
-lines and 1,350 of the 2,155 single-row test lines. [Source issues](#source-issues) gives the
-counts per stage and compares them with the paper.
+lines and 1,350 of the 2,155 single-row test lines. [Train and test overlap](#train-and-test-overlap)
+gives the counts per stage, compares them with the paper, and says which pairs the connector leaves
+out.
 
 ### The four tasks
 
@@ -110,8 +113,14 @@ An answer is one letter. The fault cause is the exception. It can hold several l
 ### The multi-row questions
 
 The paper says that Reasoning and Decision-Making look at "10 consecutive cycles" to judge the
-long-term health of the engine. In the one list that we traced, the 10 rows are windows in the middle
-of 9 different flights, over about one day of flying. The ids of a list span a median of 145 rows.
+long-term health of the engine. In N-CMAPSS, a cycle is a flight. A list of 10 rows takes about one
+window from each of 10 consecutive flights, at a random place in the flight:
+
+- 8,194 of the 8,845 distinct lists stay within one run of channel 32. Their ids ascend. Two
+  successive rows come from the same flight or from flights at most 2 apart. A list covers 1 to 11
+  flights.
+- 651 lists mix two adjacent runs of channel 32, which we read as two engine units. In 186 of them,
+  the ids of the two runs interleave.
 
 The authors' code does not give the model the 10 whole rows. It takes the first 60 steps of each row
 and joins them into one (600, 33) array (`TsQaDataset.__getitem__` at `b80142f`). The paper does not
@@ -147,8 +156,10 @@ Record back to the authors' array, add `padded_steps` zero steps at its end.
 
 ### Tasks
 
-Each published QA pair with a label becomes one task of its stage, with one input Record. Its split is
-the split of its file: `train_qa.jsonl` is train and `test_qa.jsonl` is test. The tasks come in file
+Each published QA pair with a label becomes one task of its stage, with one input Record. A train pair
+that repeats a test pair is the exception. It gets no task, see
+[Train and test overlap](#train-and-test-overlap). The split of a task is the split of its file:
+`train_qa.jsonl` is train and `test_qa.jsonl` is test. The tasks come in file
 order, train file first.
 
 | Stage | TimeNet type | Input | Targets |
@@ -158,7 +169,7 @@ order, train file first.
 | Reasoning | `ClassificationTask` | joined Record | the published letter |
 | Decision-Making | `AnswerTask` | joined Record | the published answer |
 
-That gives 142,273 tasks: 100,296 train and 41,977 test.
+That gives 114,312 tasks: 72,335 train and 41,977 test.
 
 The prompt is the published question, unchanged, with its `<ts>` marker and its options. The connector
 adds no wording.
@@ -180,24 +191,20 @@ label set `component_health`. The other label sets are `fault_cause`, `health_st
 | `source_file`, `source_line`, `qa_offset` | where the pair is published. The line and offset are 0-based, as in the authors' evaluation |
 | `stage` | the published stage, 1 to 4 |
 | `closed_question` | the closed question, such as `hpc_health` or `fault_cause`. Closed tasks only |
-| `source_issues` | a list of issue names, empty for most tasks. See [Source issues](#source-issues) |
 
 Error messages count lines from 1, as editors do. `source_line` counts from 0, as the authors do.
 
 ### Dataset annotations
 
-The annotation `unlabelled_pairs` holds the count of closed pairs with an empty answer, 1,769. Its
-metadata `pairs` lists the place of each one. See [Empty answers](#empty-answers).
+Two annotations list the pairs that get no task. Each one holds a count, and its metadata `pairs`
+lists the place of each pair:
 
-## Source issues
-
-The connector keeps every labelled pair as published. It names two problems in the task metadata
-`source_issues`, with the same names as the TSAQA connector:
-
-| Issue | Meaning | Tasks |
+| Annotation | Pairs | Count |
 | --- | --- | --- |
-| `repeated_across_splits` | the other file has a pair with the same rows, question and answer | 27,961 train, 27,955 test |
-| `repeated_question` | another pair in the same file has the same rows, question and answer | 12 train |
+| `unlabelled_pairs` | closed pairs with an empty answer. See [Empty answers](#empty-answers) | 1,769 |
+| `test_pairs_in_train` | train pairs that repeat a test pair. See [Train and test overlap](#train-and-test-overlap) | 27,961 |
+
+## Train and test overlap
 
 4,039 of the 5,539 test lines are byte copies of a train line. The test file matches the per-stage
 counts in the paper's Fig. 8 exactly. The train file holds the paper's train counts plus those 4,039
@@ -211,10 +218,24 @@ copied lines:
 | 4 Decision-Making | 8,150 | 2,689 | 5,461 |
 
 These counts include the empty answers. So the release adds test lines to the paper's training set.
-With the released train file, a model reaches a Reasoning test accuracy of 99.3% to 99.8%, as the
-authors' issue [#34](https://github.com/Pandalin98/ITFormer-ICML25/issues/34) reports. The connector keeps the
-released split. To train on the paper's split, leave out the train tasks whose `source_issues` holds
-`repeated_across_splits`.
+The paper does not mention the copies. With the released train file, a model reaches a Reasoning
+test accuracy of 99.3% to 99.8%, as the authors' issue
+[#34](https://github.com/Pandalin98/ITFormer-ICML25/issues/34) reports.
+
+The connector keeps every labelled test pair. It leaves out each labelled train pair that repeats a
+test pair: the same rows, the same question and the same answer. That is 27,961 pairs:
+
+- The 27,955 labelled pairs of the 4,039 copied lines.
+- 6 Perception pairs of train line 2,003, about row 40034. Test line 1,765 names the same row and
+  asks the same 6 questions with the same answers. Its Understanding answers have other wording, so
+  the lines are not copies.
+
+The train split keeps 72,335 tasks. The paper's training set has 72,341 labelled pairs, which
+include those 6 pairs.
+
+The two files still share rows. Row 40034 is the only row that a single-row line of each file names.
+The multi-row lines of both files draw on the same 1,900 rows, in other combinations. No list of 10
+rows is in both files.
 
 ## Empty answers
 
@@ -273,32 +294,36 @@ infinite value, it raises `TimeFValidationError`.
 | first 60 steps of each of 10 rows, joined | the joined Record of the 10 ids |
 | SFT target: the published answer | the target: the answer, or its letters |
 | `closed_question_metrics`: the set of letters a to f | a `ClassificationTask` over a label set of letters |
-| train on `train_qa.jsonl`, evaluate on `test_qa.jsonl` | `Split.TRAIN`, `Split.TEST` |
+| train on `train_qa.jsonl`, evaluate on `test_qa.jsonl` | `Split.TRAIN` without the repeated test pairs, `Split.TEST` |
 | `source_line`, `qa_offset` | `source_line`, `qa_offset` in task metadata |
 
-The connector differs from the authors' input in one way: it does not store the padding zeros. A row
-Record stops at the last real step. A joined Record has nulls where the authors' array has zeros.
+The connector differs from the authors in two ways. It does not store the padding zeros: a row
+Record stops at the last real step, and a joined Record has nulls where the authors' array has zeros.
+It also leaves out the train pairs that repeat a test pair.
 
 ## Comparing with the paper and the card
 
 - Channels: the paper says 32 channels. The release has 33. The authors' audit cannot tell which
   column is extra, so a dropped column is a guess. The connector keeps all 33.
 - Pairs: the paper gives both 11k and 110k pairs, and the Hub card gives 87k train and 25k test
-  pairs. The files hold 101,565 train and 42,477 test pairs. See [Source issues](#source-issues) for
-  how they relate to Fig. 8.
+  pairs. The files hold 101,565 train and 42,477 test pairs. See
+  [Train and test overlap](#train-and-test-overlap) for how they relate to Fig. 8.
 - Reasoning: the paper says Reasoning predicts "the probability of future failures and the remaining
   useful life" (Section 5.1). The release has no remaining-useful-life question. Reasoning asks for
   the condition and the failure probability.
-- Cycles: the paper calls a row a "cycle" and also a "10-minute (600 points)" segment. A row is a
-  window of a flight, not a whole flight. The paper says a multi-row question is about "10
-  consecutive cycles". Every one of the 11,534 multi-row lists has gaps between its ids, and 256 of
-  them mix two ranges of ids.
+- Cycles: the paper calls a row a "cycle" and also a "10-minute (600 points)" segment. In N-CMAPSS,
+  a cycle is a flight, and a row is a 10-minute window of a flight. A multi-row list takes about one
+  window from each of 10 consecutive flights. 651 lists mix two engine units, by our reading of
+  channel 32. See [The multi-row questions](#the-multi-row-questions).
 - Multi-row input: the paper encodes each segment separately. The code joins the first 60 steps of
   each row. The connector follows the code.
 
 ## Data limitations
 
-- The train split holds copies of most of the test split. See [Source issues](#source-issues).
+- The released train file holds copies of most test lines. The connector leaves them out, but the
+  multi-row lines of both splits still draw on the same rows. See
+  [Train and test overlap](#train-and-test-overlap).
+- 651 multi-row lists mix two engine units, by our reading of channel 32. The connector keeps them.
 - The signals come from a simulator, are scaled, and have no channel names. The questions name
   signals such as altitude, but no Record says which channel is which.
 - The paper says an LLM rewrote the questions and answers, and experts reviewed them (Appendix A). The
@@ -312,7 +337,8 @@ Record stops at the last real step. A joined Record has nulls where the authors'
 - Channel names: which N-CMAPSS variable each of the 33 channels holds, and which one the paper's 32
   leaves out. The authors promise a mapping in issue
   [#9](https://github.com/Pandalin98/ITFormer-ICML25/issues/9).
-- Flights: the release does not mark where a flight or an engine unit starts.
+- Engine units: we read each run of channel 32 as one engine unit. The release does not mark where a
+  flight or an engine unit starts.
 
 ## Local build
 

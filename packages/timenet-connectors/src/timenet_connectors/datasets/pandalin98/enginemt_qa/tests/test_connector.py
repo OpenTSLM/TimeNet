@@ -165,9 +165,10 @@ def test_converts_the_fixture(dataset):
     ]
     views = _views(dataset)
     # Per single-row line: 8 answer and 7 classification tasks, less one for an empty answer.
-    # Per multi-row line: 2 classification tasks and 1 answer task.
+    # Per multi-row line: 2 classification tasks and 1 answer task. Train line 2 repeats test line 0
+    # and has none.
     single = ["AnswerTask"] * 8 + ["ClassificationTask"] * 7
-    train = single[:-1] + single + single + ["ClassificationTask"] * 2 + ["AnswerTask"]
+    train = single[:-1] + single + ["ClassificationTask"] * 2 + ["AnswerTask"]
     test = single + ["ClassificationTask"] * 2 + ["AnswerTask"] + single[:-2] + single[-1:]
     assert [view.kind for view in views] == train + test
     assert [view.split for view in views] == ["train"] * len(train) + ["test"] * len(test)
@@ -206,7 +207,6 @@ def test_closed_questions_keep_their_place_and_label_set(dataset):
             "source_line": 1,
             "qa_offset": 13,
             "stage": 2,
-            "source_issues": [],
             "closed_question": "fault_cause",
         },
     )
@@ -224,7 +224,7 @@ def test_open_questions_keep_the_published_text(dataset):
         prompt=lines[1]["conversations"][4]["value"],
         targets=(lines[1]["conversations"][5]["value"],),
         label_set=None,
-        metadata={"source_file": _TEST, "source_line": 1, "qa_offset": 2, "stage": 4, "source_issues": []},
+        metadata={"source_file": _TEST, "source_line": 1, "qa_offset": 2, "stage": 4},
     )
 
 
@@ -248,22 +248,22 @@ def test_empty_closed_answers_get_no_task_and_are_listed(dataset):
     ]
 
 
-def test_pairs_repeated_across_files_are_flagged_on_both_sides(dataset):
-    # Test line 0 is a byte copy of train line 2. The multi-row lines name other rows.
-    issues = {(view.split, view.metadata["source_line"]): view.metadata["source_issues"] for view in _views(dataset)}
-    assert issues["train", 2] == ["repeated_across_splits"]
-    assert issues["test", 0] == ["repeated_across_splits"]
-    assert issues["train", 3] == issues["test", 1] == []
+def test_train_pairs_that_repeat_a_test_pair_are_listed(dataset):
+    # Train line 2 is a byte copy of test line 0.
+    repeats = next(a for a in dataset.annotations if a.key == "test_pairs_in_train")
+    assert repeats.value == 15
+    assert repeats.metadata["pairs"] == [
+        {"source_file": _TRAIN, "source_line": 2, "qa_offset": offset} for offset in range(15)
+    ]
 
 
-def test_a_pair_repeated_in_its_file_is_flagged(files, tmp_path, monkeypatch):
+def test_a_train_pair_with_another_answer_than_the_test_pair_keeps_its_task(files, tmp_path):
     train = _lines(_TRAIN)
-    _write_qa(tmp_path / _TRAIN, [*train, train[3]])
-    counts = _COUNTS[_Part.TRAIN]
-    pairs = {**counts.pairs, _Stage.REASONING: 4, _Stage.DECISION_MAKING: 2}
-    monkeypatch.setitem(_COUNTS, _Part.TRAIN, counts._replace(lines=5, pairs=pairs))
+    conversations = [dict(turn) for turn in train[2]["conversations"]]
+    conversations[1]["value"] += " It stays steady."
+    _write_qa(tmp_path / _TRAIN, [*train[:2], {**train[2], "conversations": conversations}, train[3]])
     views = _views(EngineMTQAConnector().convert(files))
-    assert {tuple(v.metadata["source_issues"]) for v in views if v.rows == _MULTI_TRAIN} == {("repeated_question",)}
+    assert [v.metadata["qa_offset"] for v in views if v.split == "train" and v.metadata["source_line"] == 2] == [0]
 
 
 def test_a_row_record_holds_the_rows_real_steps_at_1_hz(dataset):

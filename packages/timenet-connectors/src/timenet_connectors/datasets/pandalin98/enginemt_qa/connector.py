@@ -100,21 +100,8 @@ class _Key(StrEnum):
     QA_OFFSET = "qa_offset"
     STAGE = "stage"
     CLOSED_QUESTION = "closed_question"
-    SOURCE_ISSUES = "source_issues"
     UNLABELLED_PAIRS = "unlabelled_pairs"
-
-
-@unique
-class SourceIssue(StrEnum):
-    """A problem in a published pair, which the connector keeps and names in the task's metadata.
-
-    The names match the TSAQA connector's, so one filter can serve both datasets.
-    """
-
-    REPEATED_QUESTION = "repeated_question"
-    """Another pair of the same file has the same rows, question and answer."""
-    REPEATED_ACROSS_SPLITS = "repeated_across_splits"
-    """The other file has a pair with the same rows, question and answer."""
+    TEST_PAIRS_IN_TRAIN = "test_pairs_in_train"
 
 
 @unique
@@ -364,19 +351,18 @@ class _Pair:
 
     @property
     def digest(self) -> bytes:
-        """A digest of the rows, the question and the answer, which match for a repeated pair."""
+        """A digest of the rows, the question and the answer, which match for a train pair that repeats a test pair."""
         content = json.dumps([self.rows, self.question, self.answer]).encode()
         return hashlib.blake2b(content, digest_size=_DIGEST_BYTES).digest()
 
-    def task(self, record: Record, issues: Sequence[SourceIssue]) -> AnswerTask | ClassificationTask:
+    def task(self, record: Record) -> AnswerTask | ClassificationTask:
         """Build the task of a labelled pair over the Record of its rows.
 
         Returns:
             An answer task with the published answer for an open question, or a classification task with the
             published letters for a closed one.
         """
-        issue_names: list[JsonValue] = [issue.value for issue in issues]
-        metadata = self.place.metadata | {_Key.STAGE: self.stage.value, _Key.SOURCE_ISSUES: issue_names}
+        metadata = self.place.metadata | {_Key.STAGE: self.stage.value}
         split = self.place.part.task_split
         if self.closed is None:
             return AnswerTask(
@@ -770,36 +756,23 @@ class _Scan:
     """The row lists that labelled multi-row pairs name, in first-seen order."""
     unlabelled: list[_Place] = field(default_factory=list)
     """The places of the closed pairs with an empty answer."""
-    digests: dict[_Part, Counter[bytes]] = field(default_factory=dict)
-    """How often each labelled pair's digest occurs in each file."""
-
-    def issues(self, pair: _Pair) -> list[SourceIssue]:
-        """Name the source issues of a labelled pair.
-
-        Returns:
-            The issues, in ``SourceIssue`` order.
-        """
-        digest = pair.digest
-        found = []
-        if self.digests[pair.place.part][digest] > 1:
-            found.append(SourceIssue.REPEATED_QUESTION)
-        if any(self.digests[part][digest] for part in _QA_PARTS if part is not pair.place.part):
-            found.append(SourceIssue.REPEATED_ACROSS_SPLITS)
-        return found
+    test_pairs_in_train: list[_Place] = field(default_factory=list)
+    """The places of the labelled train pairs that repeat a test pair. They get no task."""
 
 
 def _scan(qa_files: Sequence[_QAFile], counts: Mapping[_Part, _FileCounts]) -> _Scan:
     """Check every pair once, and collect what the dataset needs from all of them.
 
     Returns:
-        The rows that labelled pairs name, the unlabelled pairs, and the digests of the labelled pairs.
+        The rows that labelled pairs name, the unlabelled pairs, and the train pairs that repeat a test pair.
 
     Raises:
         TimeFValidationError: If a file's counts differ from the pinned ones.
     """
     scan = _Scan()
+    labelled: dict[_Part, list[tuple[bytes, _Place]]] = {}
     for qa in qa_files:
-        digests: Counter[bytes] = Counter()
+        digests: list[tuple[bytes, _Place]] = []
         pairs: Counter[_Stage] = Counter()
         unlabelled: Counter[_ClosedQuestion] = Counter()
         n_lines = 0
@@ -812,7 +785,7 @@ def _scan(qa_files: Sequence[_QAFile], counts: Mapping[_Part, _FileCounts]) -> _
                     scan.unlabelled.append(pair.place)
                     unlabelled[question] += 1
                     continue
-                digests[pair.digest] += 1
+                digests.append((pair.digest, pair.place))
                 if pair.stage.is_multi_row:
                     scan.row_groups[pair.rows] = None
                 else:
@@ -820,20 +793,19 @@ def _scan(qa_files: Sequence[_QAFile], counts: Mapping[_Part, _FileCounts]) -> _
         found = _FileCounts(n_lines, dict(pairs), dict(unlabelled))
         if found != counts[qa.part]:
             raise TimeFValidationError(f"{qa.path}: expected {counts[qa.part]}, found {found}")
-        scan.digests[qa.part] = digests
+        labelled[qa.part] = digests
+    test_digests = {digest for digest, _ in labelled[_Part.TEST]}
+    scan.test_pairs_in_train = [place for digest, place in labelled[_Part.TRAIN] if digest in test_digests]
     if scan.unlabelled:
         _LOGGER.warning("%d closed pairs have an empty answer and get no task", len(scan.unlabelled))
+    if scan.test_pairs_in_train:
+        _LOGGER.warning("%d train pairs repeat a test pair and get no task", len(scan.test_pairs_in_train))
     return scan
 
 
-def _unlabelled_annotation(places: Sequence[_Place]) -> Annotation:
+def _places_annotation(key: _Key, places: Sequence[_Place], description: str) -> Annotation:
     pairs: list[JsonValue] = [place.metadata for place in places]
-    return Annotation(
-        _Key.UNLABELLED_PAIRS,
-        value=len(places),
-        description="How many closed pairs have an empty published answer. They are missing labels and have no task.",
-        metadata={"pairs": pairs},
-    )
+    return Annotation(key, value=len(places), description=description, metadata={"pairs": pairs})
 
 
 class EngineMTQAConnector(
@@ -879,7 +851,7 @@ class EngineMTQAConnector(
             files: The downloaded file of each part.
 
         Returns:
-            A dataset with the Records, the unlabelled pairs as an annotation, and a stream of every task.
+            A dataset with the Records, the pairs without a task as annotations, and a stream of the other tasks.
 
         Raises:
             TimeFValidationError: If a file is malformed or has other counts.
@@ -896,18 +868,32 @@ class EngineMTQAConnector(
         }
         records |= {rows: _joined_record(rows, lengths, joined_reader) for rows in scan.row_groups}
 
-        dataset = TimeFDataset(metadata=self.metadata(), annotations=[_unlabelled_annotation(scan.unlabelled)])
+        annotations = [
+            _places_annotation(
+                _Key.UNLABELLED_PAIRS,
+                scan.unlabelled,
+                "How many closed pairs have an empty published answer. They are missing labels and have no task.",
+            ),
+            _places_annotation(
+                _Key.TEST_PAIRS_IN_TRAIN,
+                scan.test_pairs_in_train,
+                "How many train pairs repeat a test pair with the same rows, question and answer. They have no task.",
+            ),
+        ]
+        dataset = TimeFDataset(metadata=self.metadata(), annotations=annotations)
         for record in records.values():
             dataset.add_record(record)
+
+        left_out = set(scan.test_pairs_in_train)
 
         def tasks() -> Iterator[Task]:
             for qa in qa_files:
                 for pair in qa.pairs():
-                    if not pair.has_label:
+                    if not pair.has_label or pair.place in left_out:
                         continue
                     if pair.rows not in records:
                         raise TimeFFormatError(f"{qa.path}: {pair.place} names rows {pair.rows} without a Record")
-                    yield pair.task(records[pair.rows], scan.issues(pair))
+                    yield pair.task(records[pair.rows])
 
         dataset.set_task_stream((AnswerTask, ClassificationTask), tasks)
         return dataset
