@@ -22,11 +22,13 @@ description: >-
   grouped by problem, which is the variant without its dtype, seed and launch options (the
   CUTLASS raster, swizzle and b options such as _rH_s8_b1 or _sw4, and a microbenchmark's
   thread-block size such as _T256). cutlass_ws_overlap runs the CUTLASS GEMM of cutlass_gemm with
-  device timer markers added, so one shape of the two motifs is one problem. No problem crosses
-  partitions. The split is stratified by dominant_l1, with 3/1/1 folds and seed 42. softmax has
-  only two problems, and both are in the training split. Each record's metadata
-  keeps the authors' split memberships under release_splits (train, val, test, iid, param_ood,
-  composed, length_ood), so the released benchmark stays reproducible.
+  device timer markers added, so one shape of the two motifs is one problem. A short CUTLASS name,
+  such as m4096_k2048 or kheavy, leaves the other sizes at a default. Where the launch times of
+  the example's kernels match a full shape, such as m4096_n4096_k2048, the variant is in the
+  problem of that shape. No problem crosses partitions. The split is stratified by dominant_l1,
+  with 3/1/1 folds and seed 42. softmax has only two problems and has no validation snapshot.
+  Each record's metadata keeps the authors' split memberships under release_splits (train, val,
+  test, iid, param_ood, composed, length_ood), so the released benchmark stays reproducible.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/williamhtan/kernelsight
 citation: >-

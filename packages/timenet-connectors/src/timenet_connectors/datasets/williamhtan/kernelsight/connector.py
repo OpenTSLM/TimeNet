@@ -195,6 +195,26 @@ _LAUNCH_OPTIONS = re.compile(r"_(?:r[A-Z]|s\d+|sw\d+|b\d+)(?=_|$)|_T\d+")
 # shape of the two motifs gives near-identical traces, so it is one Problem.
 _SAME_KERNEL = {"cutlass_ws_overlap": "cutlass_gemm"}
 
+# NOTE: A short ex48 Variant name leaves the other sizes at a default, and the two motifs have different
+# defaults. Each alias below runs the same shape as its target: the launch times of the CUTLASS GEMM kernel
+# and of the example's reference GEMM kernel agree within about 1%. The sw4 run of cutlass_ws_overlap/m1024
+# agrees on the reference GEMM only, because its swizzle changes the CUTLASS kernel.
+# No full shape has the times of cutlass_gemm/m8192_k1024, so its n is not its m.
+_ALIASES = {
+    "cutlass_gemm/baseline": "m4096",
+    "cutlass_gemm/kheavy": "m1024_n1024_k8192",
+    "cutlass_gemm/m1024": "m1024_n1024_k1024",
+    "cutlass_gemm/m2048": "m2048_n2048_k2048",
+    "cutlass_ws_overlap/baseline": "k2048",
+    "cutlass_ws_overlap/k4096": "m512_n512_k4096",
+    "cutlass_ws_overlap/m1024": "m1024_n1024_k2048",
+    "cutlass_ws_overlap/m1024_k2048": "m1024_n1024_k2048",
+    "cutlass_ws_overlap/m2048": "m2048_n2048_k2048",
+    "cutlass_ws_overlap/m2048_k2048": "m2048_n2048_k2048",
+    "cutlass_ws_overlap/m4096": "m4096_n4096_k2048",
+    "cutlass_ws_overlap/m4096_k2048": "m4096_n4096_k2048",
+}
+
 
 def _slug(name: str) -> str:
     """Turn a counter name such as ``"SMs Active [Throughput %]"`` into ``"sms_active_throughput"``.
@@ -288,10 +308,12 @@ class Snapshot:
 
     @property
     def problem(self) -> str:
-        """The leakage group: the motif of its kernel, and the Variant without dtype, seed and launch options."""
+        """The leakage group: the kernel's motif and the Variant's shape, without dtype, seed and launch options."""
         if self.motif == "kernelbench":
             return f"{self.motif}/{self.variant.split('/')[0]}"
-        return f"{_SAME_KERNEL.get(self.motif, self.motif)}/{_LAUNCH_OPTIONS.sub('', self.variant)}"
+        variant = _LAUNCH_OPTIONS.sub("", self.variant)
+        shape = _ALIASES.get(f"{self.motif}/{variant}", variant)
+        return f"{_SAME_KERNEL.get(self.motif, self.motif)}/{shape}"
 
     @property
     def labels_path(self) -> str:
@@ -467,7 +489,7 @@ def assign_splits(snapshots: list[Snapshot]) -> DatasetSplits[Snapshot]:
         The train, validation and test Snapshots.
     """
     # NOTE: 3/1/1, not the 8/1/1 of docs/connectors.md. Several classes have only 6 to 8 Problems, and with
-    # 8/1/1 loss gets no validation or test Snapshot.
+    # 8/1/1 loss, pooling and elementwise each lose the validation or the test partition.
     splitter = StratifiedSplitter(
         train_folds=3,
         validation_folds=1,

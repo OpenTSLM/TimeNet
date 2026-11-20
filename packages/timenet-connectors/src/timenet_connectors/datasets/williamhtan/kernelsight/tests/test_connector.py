@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import shutil
 import struct
+from typing import Any
 import zipfile
 
 import numpy as np
@@ -108,18 +109,28 @@ def _gemm_path(index: int) -> str:
     return f"kernels/cutlass_gemm/_out/m{index}{INPUT_SUFFIX}"
 
 
+_DOMINANT = {_gemm_path(index): "matmul" if index < 5 else "conv" for index in range(10)}
+"""Five Problems of each class, the fewest that the 3/1/1 split accepts."""
+_TRACE = _trace(_gemm_path(0), "cutlass_gemm", "matmul")
+
+
 def _convert(root: Path) -> tuple[TimeFDataset, dict[str, np.ndarray]]:
-    # Five Problems, the fewest that the 3/1/1 split accepts.
     values = {}
-    traces = []
-    for index in range(5):
-        path = _gemm_path(index)
+    for index, path in enumerate(_DOMINANT):
         values[path] = _write_snapshot(
             root, path, seed=index, segments=[(100, 200, _MATMUL, _GEMM)], overlap=index == 0
         )
-        traces.append(_trace(path, "cutlass_gemm", "matmul"))
-    _write_splits(root, {"train": traces[:3], "val": traces[3:4], "test": traces[4:]}, {"param_ood": traces[:1]})
+    traces = [_trace(path, "cutlass_gemm", dominant) for path, dominant in _DOMINANT.items()]
+    _write_splits(root, {"train": traces[:6], "val": traces[6:8], "test": traces[8:]}, {"param_ood": traces[:1]})
     return KernelSightConnector().convert(_files(root)), values
+
+
+def _replace_arrays(path: Path, **arrays: np.ndarray) -> None:
+    # The file is one that the test wrote, so its object arrays are safe to unpickle.
+    with np.load(path, allow_pickle=True) as archive:
+        kept: dict[str, Any] = {name: archive[name] for name in archive.files}
+    kept.update(arrays)
+    np.savez(path, **kept)
 
 
 def _found(annotations) -> set:
@@ -135,7 +146,7 @@ def test_each_snapshot_becomes_a_record_and_a_classification_task(tmp_path):
         (record,) = task.inputs
         assert task.label_set == WORKLOAD_L1
         assert task.targets is not None
-        assert read_value(task.targets[0]) == "matmul"
+        assert read_value(task.targets[0]) == _DOMINANT[str(record.metadata["path"])]
         assert [source.name for source in record.sources] == [group for group, _ in CHANNEL_GROUPS]
         signals = [signal for source in record.sources for signal in source.signals]
         assert [signal.metadata["counter"] for signal in signals] == list(COUNTER_NAMES)
@@ -216,34 +227,61 @@ def test_variants_of_one_kernelbench_problem_share_a_partition():
     [
         ("cutlass_gemm", "m1024_n1024_k8192_rH_s8_b1", "cutlass_gemm/m1024_n1024_k8192"),
         ("cutlass_gemm", "m4096_rM", "cutlass_gemm/m4096"),
-        ("cutlass_gemm", "m2048_rN_b1", "cutlass_gemm/m2048"),
-        # cutlass_ws_overlap runs the kernel of cutlass_gemm.
+        ("cutlass_gemm", "", "cutlass_gemm/m4096"),
+        ("cutlass_gemm", "m2048_rN_b1", "cutlass_gemm/m2048_n2048_k2048"),
+        ("cutlass_gemm", "kheavy", "cutlass_gemm/m1024_n1024_k8192"),
+        ("cutlass_gemm", "m8192_k1024", "cutlass_gemm/m8192_k1024"),
+        # cutlass_ws_overlap runs the kernel of cutlass_gemm, but a short name has the defaults of its own motif.
         ("cutlass_ws_overlap", "m512_n512_k8192_rM_s1_b0", "cutlass_gemm/m512_n512_k8192"),
-        ("cutlass_ws_overlap", "m2048_sw4", "cutlass_gemm/m2048"),
-        ("cutlass_ws_overlap", "m1024_k2048", "cutlass_gemm/m1024_k2048"),
+        ("cutlass_ws_overlap", "m4096_rN", "cutlass_gemm/m4096_n4096_k2048"),
+        ("cutlass_ws_overlap", "m2048_sw4", "cutlass_gemm/m2048_n2048_k2048"),
+        ("cutlass_ws_overlap", "m1024_k2048", "cutlass_gemm/m1024_n1024_k2048"),
+        ("cutlass_ws_overlap", "", "cutlass_gemm/k2048"),
         ("vector_add", "N16M_T1024", "vector_add/N16M"),
         ("reduction", "N16M_T256_I4", "reduction/N16M_I4"),
         ("scatter", "N1M_B16_T512", "scatter/N1M_B16"),
         ("cutlass_fmha", "b2h16_q1024_d64_causal", "cutlass_fmha/b2h16_q1024_d64_causal"),
-        ("cutlass_ws_overlap", "", "cutlass_gemm/baseline"),
     ],
 )
-def test_the_problem_of_a_variant_drops_its_launch_options(motif, variant, problem):
+def test_the_problem_of_a_variant_is_its_shape_without_launch_options(motif, variant, problem):
     directory = f"{variant}/" if variant else ""
     assert _snapshot(f"kernels/{motif}/_out/{directory}{INPUT_SUFFIX.lstrip('/')}", motif).problem == problem
 
 
-def test_a_snapshot_in_two_official_partitions_raises(tmp_path):
-    trace = _trace(_gemm_path(0), "cutlass_gemm", "matmul")
-    _write_splits(tmp_path, {"train": [trace], "test": [trace]})
-    with pytest.raises(TimeNetConnectorError, match="more than one official partition"):
+@pytest.mark.parametrize(
+    ("official", "extra", "message"),
+    [
+        ({"train": [_TRACE], "test": [_TRACE]}, {}, "more than one official partition"),
+        ({}, {"iid": [_TRACE]}, "in no official partition"),
+        ({"train": [{"path": _gemm_path(0)}]}, {}, r"train\.json is not a KernelSight split file"),
+        ({"train": [_trace(_gemm_path(0), "cutlass_fmha", "matmul")]}, {}, "is not under kernels/cutlass_fmha/_out/"),
+        ({"train": [_trace(_gemm_path(0), "cutlass_gemm", "gemm")]}, {}, "'gemm' is not an L1 class"),
+    ],
+)
+def test_a_malformed_split_index_raises(tmp_path, official, extra, message):
+    _write_splits(tmp_path, official, extra)
+    with pytest.raises(TimeNetConnectorError, match=message):
         read_snapshots(tmp_path / "splits")
 
 
-def test_a_malformed_split_file_raises(tmp_path):
-    _write_splits(tmp_path, {"train": [{"path": _gemm_path(0)}]})
-    with pytest.raises(TimeNetConnectorError, match=r"train\.json is not a KernelSight split file"):
-        read_snapshots(tmp_path / "splits")
+@pytest.mark.parametrize(
+    ("suffix", "arrays", "message"),
+    [
+        (LABELS_SUFFIX, {"segment_ends": np.array([10, 20])}, "different lengths"),
+        (LABELS_SUFFIX, {"segment_ends": np.array([N_BINS + 1])}, "outside the 512 bins"),
+        (LABELS_SUFFIX, {"segment_label_l1": np.array([-1]), "segment_label_l2": np.array([-1])}, "out of range"),
+        (LABELS_SUFFIX, {"workload_l2_multihot": np.zeros((N_BINS, 3), np.uint8)}, "workload_l2_multihot has shape"),
+        (INPUT_SUFFIX, {"time_edges_ns": np.arange(N_BINS)}, "time_edges_ns has shape"),
+        (INPUT_SUFFIX, {"data": np.zeros((len(COUNTER_NAMES), N_BINS - 1), np.float32)}, "data has shape"),
+    ],
+)
+def test_a_malformed_array_raises(tmp_path, suffix, arrays, message):
+    _write_snapshot(tmp_path, _gemm_path(0), seed=0, segments=[(0, 10, _MATMUL, _GEMM)])
+    _replace_arrays(tmp_path / (_gemm_path(0).removesuffix(INPUT_SUFFIX) + suffix), **arrays)
+    with pytest.raises(TimeNetConnectorError, match=message):
+        record = _snapshot(_gemm_path(0), "cutlass_gemm").create_record(tmp_path)
+        # The data shape is checked only when a value is read.
+        record.sources[0].signals[0].to_numpy()
 
 
 def test_a_corrupt_labels_file_raises(tmp_path):
