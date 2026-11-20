@@ -135,13 +135,12 @@ class M4CaptionSeries:
             The Record and the task, not yet added to a dataset.
         """
         signal = Signal.from_values(self.values, spec=M4_SERIES, name="value", time_axis=OrdinalAxis())
-        frequency = Annotation(key="frequency", value=self.frequency.value)
         record = Record(
-            sources=(Source(name="M4", signals=(signal,)),),
-            annotations=(frequency,),
+            sources=[Source(name="M4", signals=[signal])],
+            annotations=[Annotation("frequency", value=self.frequency.value)],
             metadata={"m4_id": self.m4_id},
         )
-        task = AnswerTask(inputs=(record,), prompt=CAPTION_PROMPT, targets=(self.caption,), split=self.split)
+        task = AnswerTask(inputs=[record], prompt=CAPTION_PROMPT, targets=self.caption, split=self.split)
         return record, task
 
 
@@ -288,7 +287,7 @@ class M4CaptionReader:
                 raise TimeNetConnectorError(f"{series_path.name} data row {number}: {exc}") from exc
 
 
-class M4CaptionConnector(BaseConnector[M4CaptionReader]):
+class M4CaptionConnector(BaseConnector[list[M4CaptionReader]]):
     """Connector for the M4-Caption release of OpenTSLM."""
 
     async def download_async(self, cache_dir: Path) -> list[M4CaptionReader]:  # ruff: ignore[no-self-use]
@@ -303,21 +302,21 @@ class M4CaptionConnector(BaseConnector[M4CaptionReader]):
         root = await ensure_archive(M4_CAPTION_URL, cache_dir, filename="m4_caption.zip", sha256=M4_CAPTION_SHA256)
         return [M4CaptionReader(directory=root / RELEASE_FOLDER, splits_path=SPLITS_PATH)]
 
-    def convert(self, raw_refs: list[M4CaptionReader]) -> TimeFDataset:
+    def convert(self, releases: list[M4CaptionReader]) -> TimeFDataset:
         """Create one Record and one AnswerTask for each series.
 
         Args:
-            raw_refs: The reader from :meth:`download_async`.
+            releases: The reader from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
-        (release,) = raw_refs
+        (release,) = releases
         dataset = TimeFDataset(metadata=self.metadata())
         for series in release.read_series():
             record, task = series.create_record_and_caption_task()
-            dataset.add_record(record=record)
-            dataset.add_task(task=task)
+            dataset.add_record(record)
+            dataset.add_task(task)
         return dataset
 
 
