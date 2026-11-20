@@ -93,8 +93,8 @@ GRID_SIGNALS = {
 """Column -> signal name of the Swissgrid source. Every value is an hourly mean in MW."""
 WEATHER_SIGNALS = {"temp_c": ("Temperature", TEMPERATURE), "radiation_wm2": ("Global radiation", RADIATION)}
 CAUSE = LabelSet(
-    name="anomaly_cause",
-    labels=tuple(Label(name=name, description=causes.CAUSE_DESCRIPTIONS[name]) for name in causes.CAUSES),
+    [Label(name=name, description=causes.CAUSE_DESCRIPTIONS[name]) for name in causes.CAUSES],
+    annotations=[Annotation("name", value="anomaly_cause")],
 )
 SPLITS = {"train": Split.TRAIN, "validation": Split.VALIDATION, "test": Split.TEST}
 
@@ -118,14 +118,14 @@ class RawFiles:
 
 
 def _signals(window: pd.DataFrame) -> tuple[Source, Source]:
-    grid = tuple(
+    grid = [
         Signal.from_values(window[column].to_numpy(), spec=POWER, name=name, time_axis=HOURLY)
         for column, name in GRID_SIGNALS.items()
-    )
-    weather = tuple(
+    ]
+    weather = [
         Signal.from_values(window[column].to_numpy(), spec=spec, name=name, time_axis=HOURLY)
         for column, (name, spec) in WEATHER_SIGNALS.items()
-    )
+    ]
     return (
         Source(name="Swissgrid, Swiss control block", signals=grid),
         Source(name="MeteoSwiss SwissMetNet, population-weighted mean of 12 stations", signals=weather),
@@ -149,56 +149,54 @@ def add_window(dataset: TimeFDataset, window: pd.DataFrame, item: dict) -> None:
     facts = item["facts"]
     grid, weather = _signals(window)
     record = dataset.add_record(
-        record=Record(
-            sources=(grid, weather),
+        Record(
+            sources=[grid, weather],
             start_time=TimeOrigin(window.index[0].to_pydatetime()),
             metadata={"window_id": item["window_id"]},
+            annotations=[
+                Annotation("window_id", value=item["window_id"]),
+                Annotation("facts", value=json.dumps(facts, ensure_ascii=False)),
+                *(
+                    Annotation("public_holiday", value=day["holiday"], span=_day_interval(window, day["date"], None))
+                    for day in facts["days"]
+                    if "holiday" in day
+                ),
+            ],
         )
     )
     load = grid.signals[0]
     anomaly_inputs = (load, *weather.signals)
     exchange_inputs = (*grid.signals[3:], grid.signals[2], grid.signals[1])
-    record.add_annotations(
-        [
-            Annotation(key="window_id", value=item["window_id"]),
-            Annotation(key="facts", value=json.dumps(facts, ensure_ascii=False)),
-            *(
-                Annotation(key="public_holiday", value=day["holiday"], span=_day_interval(window, day["date"], None))
-                for day in facts["days"]
-                if "holiday" in day
-            ),
-        ]
-    )
     # An anomaly concerns the consumption, so it is attached to that signal.
     for day in facts["anomalous_days"]:
-        load.annotate(Annotation(key="anomaly", value=day["cause"], span=_day_interval(window, day["date"], None)))
+        load.annotate(Annotation("anomaly", value=day["cause"], span=_day_interval(window, day["date"], None)))
     whole = len(window) * US_PER_HOUR
     split = SPLITS[item["split"]]
     dataset.add_tasks(
-        tasks=[
+        [
             ClassificationTask(
-                inputs=(record,),
+                inputs=[record],
                 scope=TimeInterval.micros(0, whole, time_series=anomaly_inputs),
                 prompt=item["prompts"]["anomaly_cause"],
-                targets=(item["label"],),
+                targets=item["label"],
                 label_set=CAUSE,
                 rationale=item["rationales"]["anomaly_cause"],
                 split=split,
             ),
             TemporalLocalizationTask(
-                inputs=(record,),
+                inputs=[record],
                 scope=TimeInterval.micros(0, whole, time_series=anomaly_inputs),
                 prompt=item["prompts"]["anomaly_days"],
-                targets=tuple(_day_interval(window, date, (load,)) for date in item["anomalous_dates"]),
+                targets=[_day_interval(window, date, (load,)) for date in item["anomalous_dates"]],
                 mode=LocalizationMode.EXHAUSTIVE,
                 rationale=item["rationales"]["anomaly_days"],
                 split=split,
             ),
             AnswerTask(
-                inputs=(record,),
+                inputs=[record],
                 scope=TimeInterval.micros(0, whole, time_series=exchange_inputs),
                 prompt=item["prompts"]["exchange"],
-                targets=(item["exchange_answer"],),
+                targets=item["exchange_answer"],
                 rationale=item["rationales"]["exchange"],
                 split=split,
             ),
@@ -226,14 +224,14 @@ def build_dataset(dataset: TimeFDataset, hourly: pd.DataFrame) -> TimeFDataset:
 class SwissGridAnomalyCotConnector(BaseConnector[RawFiles]):
     """Connector for the Swiss Grid Anomaly-CoT dataset."""
 
-    async def download_async(self, cache_dir: Path) -> list[RawFiles]:  # ruff: ignore[no-self-use]
+    async def download_async(self, cache_dir: Path) -> RawFiles:  # ruff: ignore[no-self-use]
         """Download the six Swissgrid workbooks and the twelve station files, checking each digest.
 
         Args:
             cache_dir: Directory for the downloaded files.
 
         Returns:
-            One reference holding every path.
+            The paths of every downloaded file.
         """
         grid = {
             year: Artifact(
@@ -253,23 +251,20 @@ class SwissGridAnomalyCotConnector(BaseConnector[RawFiles]):
         }
         paths = await download_files([*grid.values(), *stations.values()])
         n_grid = len(grid)
-        return [
-            RawFiles(
-                swissgrid=dict(zip(grid, paths[:n_grid], strict=True)),
-                stations=dict(zip(stations, paths[n_grid:], strict=True)),
-            )
-        ]
+        return RawFiles(
+            swissgrid=dict(zip(grid, paths[:n_grid], strict=True)),
+            stations=dict(zip(stations, paths[n_grid:], strict=True)),
+        )
 
-    def convert(self, raw_refs: list[RawFiles]) -> TimeFDataset:
+    def convert(self, files: RawFiles) -> TimeFDataset:
         """Parse the sources, recompute every label and build one Record and three tasks per week.
 
         Args:
-            raw_refs: The reference from :meth:`download_async`.
+            files: The paths from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
-        (files,) = raw_refs
         return build_dataset(TimeFDataset(metadata=self.metadata()), files.read_hourly())
 
 
