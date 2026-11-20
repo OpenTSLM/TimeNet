@@ -3,7 +3,7 @@
 The SQL table definitions and the writer's Arrow batch schemas come from :data:`CONTROL_TABLES`.
 The audit also uses it to examine keys and references. Define schema changes there.
 
-This is version 2 of the control schema. Every table uses ids as keys.
+This is version 3 of the control schema. Every table uses ids as keys.
 Records, Signals, and Tasks use the public ids that the caller sees. All other objects, label sets
 included, use the writer's storage ids. A foreign key stores the key of the row that it refers to.
 
