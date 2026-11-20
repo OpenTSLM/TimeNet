@@ -665,7 +665,9 @@ def test_a_gated_release_with_an_open_card_raises_the_refusal_of_the_service(ver
     remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
 
     # The card is open, so it has no access level or page to show.
-    with pytest.raises(TimeNetRegistryError, match=r"\(403\): dataset is gated; a token grant is required$"):
+    with pytest.raises(
+        TimeNetRegistryError, match=r"\(403\): dataset is gated; a token grant is required\. Set TIMENET_TOKEN"
+    ):
         remote.resolve(manifest.dataset_id, None)
 
 
