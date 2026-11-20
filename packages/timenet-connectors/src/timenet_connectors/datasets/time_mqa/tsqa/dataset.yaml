@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: time-mqa/tsqa
+dataset_version: 1.0.0
+name: Time-MQA TSQA
+description: >-
+  The Time Series Question Answering dataset of the Time-MQA paper: question-and-answer pairs about
+  time series from twelve application areas, in five task families: anomaly detection,
+  classification, forecasting, imputation, and open-ended reasoning. The release prints each series
+  in the text of its question as a list of decimal numbers. The dataset keeps each printed series as
+  a Record of its own, with float64 values on an ordinal axis, because the release states no unit
+  and no sampling rate. The prompt of a task is the question with a placeholder, such as
+  "<series 1>", in place of each printed series. The release has no split, so no task has one. It
+  repeats some question-and-answer pairs, and the dataset keeps each repeat as released. The Hub
+  repo is gated with automatic approval, so a build needs HF_TOKEN for a Hub account that accepted
+  its terms; the data itself is under Apache-2.0.
+
+  The anomaly detection file has 37,000 questions, each about one series of 8 to 64 values from
+  environmental sensors, ECG, cloud monitoring, web servers, machine sensors, and traffic. Each
+  question becomes a classification task whose target is the released label, "Normal Point" or
+  "Anomaly Point". The file repeats 1,146 question-and-answer pairs.
+license: Apache-2.0
+source_url: https://huggingface.co/datasets/Time-MQA/TSQA
+citation: >-
+  Kong, Y., Yang, Y., Hwang, Y., Du, W., Zohren, S., Wang, Z., Jin, M., & Wen, Q. (2025). Time-MQA:
+  Time Series Multi-Task Question Answering with Context Enhancement. Proceedings of the 63rd Annual
+  Meeting of the Association for Computational Linguistics. https://doi.org/10.48550/arXiv.2503.01875
+domains:
+  - general
+  - health
+  - environment
+  - energy
+  - finance
+  - transport
+  - observability
+  - industrial
+  - activity
+tags:
+  - qa
+  - anomaly-detection
+  - classification
+  - forecasting
+  - imputation
+  - generated-supervision
+  - huggingface
