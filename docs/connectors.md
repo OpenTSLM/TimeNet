@@ -237,8 +237,8 @@ and an `access_url` on its card. The hosted registry does not serve such data, s
 build-your-own: get access at the `access_url`, set the provider credential in
 the environment (the way `HF_TOKEN` already works), and run `timenet-build build <id>` yourself.
 If no other source of the client provides a credentialed dataset, an `open`, `load`, or
-`download` from a hosted registry raises `TimeNetAccessError` instead of serving bytes. The error
-gives the reason of the registry service. The `access_url` is on the card of the connector.
+`download` from a hosted registry raises `TimeNetAccessError` instead of serving bytes. The
+`access_url` is on the card of the connector.
 
 ## Downloading artifacts
 

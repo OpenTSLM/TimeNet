@@ -249,8 +249,7 @@ information. It returns the directory that a `file://` URI or a plain path names
 The data does not pass through the API. The service gives a presigned URL for each file, and the SDK
 uploads the file to the object store directly. You need a writer token in `$TIMENET_TOKEN`. The
 service refuses an anonymous or read-only caller. The service also decides which releases it
-accepts. A refused publish raises `TimeNetRegistryError` with the reason that the service gives.
-`RemoteRegistry.put_release` runs steps 2 to 4 for a release directory that already exists.
+accepts. `RemoteRegistry.put_release` runs steps 2 to 4 for a release directory that already exists.
 
 1. Compile into a temporary staging directory with a [`TimeFWriter`](timef-writer.md), deriving the
    schema first if the dataset has none. An already-committed version returns early. The writer

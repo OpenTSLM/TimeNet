@@ -130,9 +130,8 @@ nothing.
 
 
 A remote registry service decides which releases it accepts. The hosted registry accepts only
-releases with access declared `open`. If the service refuses a release, `timenet.publish()` raises
-`TimeNetRegistryError` with the reason that the service gives. An `s3://` registry has no service.
-The owner of the bucket decides through the bucket permissions who can publish to it.
+releases with access declared `open`. An `s3://` registry has no service. The owner of the
+bucket decides through the bucket permissions who can publish to it.
 
 ## Clean code provenance for remote registries
 
