@@ -1,0 +1,2 @@
+# zstandard decompresses the Lichess dump, which ships as .pgn.zst.
+zstandard>=0.22

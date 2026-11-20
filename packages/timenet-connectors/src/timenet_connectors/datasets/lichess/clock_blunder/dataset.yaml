@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: lichess/clock-blunder
+dataset_version: 1.0.0
+name: Lichess Clock-Blunder
+description: >-
+  60,358 windows from 15,205 real rated Lichess games (48,055 train, 6,136 validation, 6,167
+  test), each holding three per-ply series: White's clock and Black's clock in seconds, and the
+  Stockfish evaluation in pawns from White's view, as recorded by Lichess in the game's PGN. Each
+  window ends just before one player's move, and the task asks whether that player blunders within
+  their next three moves. A blunder uses Lichess's own rule: a move that drops the player's
+  winning chances by 0.3 or more on the -1 to +1 scale, with winning chances 2 / (1 +
+  exp(-0.00368208 * centipawns)) - 1 and a forced mate counted as +1 or -1. The answer is computed
+  from the recorded evaluations, not read from the ?? marks of the PGN, which do not always agree
+  with it. The answer is yes in 13,761 windows (22.8%). The games are the complete games with an
+  evaluation and a clock on every ply among the first 64 MiB of the April 2017 standard rated dump
+  (a fixed byte range, so every build sees the same games). Lichess records no evaluation for a
+  checkmating move, so no kept game ends in checkmate, and 7,273 of the kept games end on time. Up
+  to four windows are drawn from each game at a seeded random ply, so the share of yes answers
+  matches real play. The split is by game, so no game appears in two splits. The rationale of each
+  task is written from a template that reads the window's own numbers and the answer; it is
+  generated supervision, not expert commentary. Player names are not kept.
+license: CC0-1.0
+source_url: https://database.lichess.org/
+domains:
+  - general
+tags:
+  - chess
+  - games
+  - human-behavior
+  - lichess
+  - clock
+  - classification
+  - cot
+  - generated-supervision
