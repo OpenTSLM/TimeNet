@@ -203,9 +203,11 @@ have a checkpoint.
 - **Use measures that do not reward the majority class:** AUROC, the precision-recall curve of `resolved` (its baseline is the resolved rate), balanced accuracy, and calibration (Brier score) for a health score.
 - **Count each run once.** A long run gives up to four checkpoints, and long runs fail more often. When training, weight a checkpoint by 1 / (checkpoints of its run), or sample one checkpoint per run.
 - **Compare against simple baselines:** always `unresolved`; the numeric signals alone; the thoughts alone.
-- **Score the status report by its last sentence.** The first three restate counts the inputs show,
-  so text overlap (ROUGE, BLEU) on the whole answer stays high even when the prediction is wrong. The
-  last sentence starts with "The run will go on for"; score its step count, ending and outcome apart.
+- **Score only the prediction in the status report.** Its first three sentences count what happened
+  so far, which the model can read off its input. Only the last sentence predicts: how many more
+  steps, how the run will end, and whether it will resolve the issue. A word-overlap score (ROUGE,
+  BLEU) on the whole answer therefore stays high even when that prediction is wrong. Score the last
+  sentence, which starts with "The run will go on for", and check its three facts one by one.
 
 ## Release details a user should know
 
