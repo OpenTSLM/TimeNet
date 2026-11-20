@@ -44,6 +44,10 @@ def test_uv_command_runs_without_the_project_environment():
     assert "--no-project" in command
 
 
+def test_uv_command_ignores_the_uv_sources_of_the_packages_it_installs():
+    assert "--no-sources" in uv_command(_spec(), ["timenet-build"])
+
+
 def test_uv_command_pins_the_parent_interpreter():
     command = uv_command(_spec(), ["timenet-build"])
     assert command[command.index("--python") + 1] == "/usr/bin/python3"
@@ -109,6 +113,33 @@ def test_base_args_uses_editable_for_a_local_path_install(monkeypatch, tmp_path)
 def test_base_args_pins_a_version_for_an_index_install(monkeypatch):
     # An index or wheel install has no direct_url.json, so pin the exact version.
     assert _base_args_for(monkeypatch, _FakeDist(version="9.9.9", direct_url=None)) == ("--with", "timenet==9.9.9")
+
+
+_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.mark.parametrize(
+    ("subdirectory", "expected"),
+    [
+        (None, f"timenet @ git+https://github.com/o/r.git@{_COMMIT}"),
+        ("packages/timenet", f"timenet @ git+https://github.com/o/r.git@{_COMMIT}#subdirectory=packages/timenet"),
+    ],
+)
+def test_base_args_pins_the_commit_for_a_git_install(monkeypatch, subdirectory, expected):
+    record = {"url": "https://github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+    if subdirectory is not None:
+        record["subdirectory"] = subdirectory
+
+    assert _base_args_for(monkeypatch, _FakeDist(direct_url=json.dumps(record))) == ("--with", expected)
+
+
+def test_base_args_pins_a_version_for_a_non_git_vcs_install(monkeypatch):
+    record = {"url": "https://example.org/r", "vcs_info": {"vcs": "hg", "commit_id": _COMMIT}}
+
+    assert _base_args_for(monkeypatch, _FakeDist(version="9.9.9", direct_url=json.dumps(record))) == (
+        "--with",
+        "timenet==9.9.9",
+    )
 
 
 @pytest.mark.parametrize("editable", [False, True])

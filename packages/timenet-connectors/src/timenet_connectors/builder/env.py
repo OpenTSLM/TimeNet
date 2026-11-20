@@ -68,6 +68,9 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
     syncing whatever project the parent runs in. ``spec.python`` points outside any virtualenv,
     so uv has nothing to layer the environment over.
 
+    ``--no-sources`` makes uv ignore the ``tool.uv.sources`` of each package it installs. A source
+    that points ``timenet`` at a git branch would conflict with the pin in ``spec.base``.
+
     Args:
         spec: The environment specification.
         argv: The command to run inside the environment.
@@ -82,7 +85,7 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
         uv = find_uv_bin()
     except FileNotFoundError as exc:
         raise TimeNetIsolationError("cannot run an isolated build: no uv executable found.") from exc
-    command = [uv, "run", "--no-project", "--python", spec.python, *spec.base]
+    command = [uv, "run", "--no-project", "--no-sources", "--python", spec.python, *spec.base]
     if spec.requirements is not None:
         command += ["--with-requirements", str(spec.requirements)]
     return [*command, *argv]
@@ -209,8 +212,10 @@ def _base_args() -> tuple[str, ...]:
             raise TimeNetIsolationError(
                 f"cannot make a build environment: {name} is not installed in {sys.executable}."
             ) from exc
-        source = installed.path_to_ondisk_project_directory()
-        if source is not None:
+        git_url = installed.git_requirement_url()
+        if git_url is not None:
+            args += ["--with", f"{name} @ {git_url}"]
+        elif (source := installed.path_to_ondisk_project_directory()) is not None:
             args += ["--with-editable", str(source)]
         else:
             args += ["--with", f"{name}=={installed.version}"]

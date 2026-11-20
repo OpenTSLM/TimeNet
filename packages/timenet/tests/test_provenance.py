@@ -156,6 +156,34 @@ def test_a_git_install_records_the_commit_that_pip_installed(installed):
     assert PackageSnapshot.read("timenet").source == GitSource(sha=sha, contains_local_changes=False)
 
 
+_SHA = "c" * 40
+
+
+@pytest.mark.parametrize(
+    ("direct_url", "expected"),
+    [
+        (
+            {"url": "https://h/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}},
+            f"git+https://h/o/r.git@{_SHA}",
+        ),
+        (
+            {"url": "git+ssh://git@h/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}},
+            f"git+ssh://git@h/o/r.git@{_SHA}",
+        ),
+        (
+            {"url": "https://h/o/r.git", "vcs_info": {"vcs": "git", "commit_id": _SHA}, "subdirectory": "packages/x"},
+            f"git+https://h/o/r.git@{_SHA}#subdirectory=packages/x",
+        ),
+        ({"url": "https://h/o/r", "vcs_info": {"vcs": "hg", "commit_id": _SHA}}, None),
+        ({"url": "file:///tmp/timenet", "dir_info": {"editable": True}}, None),
+        (None, None),
+    ],
+)
+def test_git_requirement_url_pins_only_a_git_install(installed, direct_url, expected):
+    installed(direct_url=direct_url)
+    assert InstalledDistribution.from_name("timenet").git_requirement_url() == expected
+
+
 @pytest.mark.real_provenance
 def test_a_wheel_reads_its_commit_from_the_build_info(installed):
     info = GitSource(sha="a" * 40, contains_local_changes=True)

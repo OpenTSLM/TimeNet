@@ -157,6 +157,11 @@ class InstalledDistribution:
         """Return the commit of the code that this distribution runs. Raises ``TimeNetBuildError`` if it is unknown."""
         return self.install_source().read_git_source()
 
+    def git_requirement_url(self) -> str | None:
+        """Return the requirement URL of a git install, pinned to its commit, else ``None``."""
+        direct_url = self._read_direct_url()
+        return None if direct_url is None else direct_url.git_requirement_url()
+
     def path_to_ondisk_project_directory(self) -> Path | None:
         """Return the project directory of an editable or local path install, else ``None``."""
         direct_url = self._read_direct_url()
@@ -302,6 +307,14 @@ class _DirectUrl(BaseModel):
         if self.vcs_info is None or self.vcs_info.vcs != "git":
             return None
         return self.vcs_info.commit_id
+
+    def git_requirement_url(self) -> str | None:
+        """Return ``git+<url>@<commit>`` for a git install, with any subdirectory, else ``None``."""
+        commit_id = self.installed_git_commit()
+        if commit_id is None:
+            return None
+        url = f"git+{self.url.removeprefix('git+')}@{commit_id}"
+        return url if self.subdirectory is None else f"{url}#subdirectory={self.subdirectory}"
 
     def is_editable(self) -> bool:
         """Whether the distribution was installed editable."""
