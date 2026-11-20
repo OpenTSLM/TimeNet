@@ -7,8 +7,7 @@ from pathlib import Path
 
 from pydantic import ConfigDict
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
@@ -158,7 +157,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                 if header.fs != _SAMPLING_RATE_HZ or len(header.sig_name) != _LEAD_COUNT:
                     raise TimeNetConnectorError("PTB-XL requires twelve leads at 500 Hz")
                 axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
-                signals = tuple(
+                signals = [
                     Signal.from_loader(
                         spec=_ECG,
                         name=name,
@@ -167,12 +166,9 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                         n_values=int(header.sig_len),
                     )
                     for position, name in enumerate(header.sig_name)
-                )
+                ]
                 record = dataset.add_record(
-                    record=Record(
-                        metadata={"ecg_id": identity},
-                        sources=(Source(name="PTB-XL ECG", signals=signals),),
-                    )
+                    Record(metadata={"ecg_id": identity}, sources=[Source("PTB-XL ECG", signals=signals)])
                 )
                 record.add_annotations(annotations)
             except (KeyError, ValueError, SyntaxError, OSError, TimeNetConnectorError) as exc:
@@ -200,37 +196,37 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
             raise TimeNetConnectorError(
                 f"required column {names} is empty" if len(empty) == 1 else f"required columns {names} are empty"
             )
-        result = [Annotation(key="age", value=_age_in_years(cells), unit="year", description=_AGE_DESCRIPTION)]
+        result = [Annotation("age", value=_age_in_years(cells), unit="year", description=_AGE_DESCRIPTION)]
         for key, unit in (("height", "centimeter"), ("weight", "kilogram")):
             if cells.get(key, "") not in _EMPTY_CELLS:
-                result.append(Annotation(key=key, value=float(cells[key]), unit=unit))
+                result.append(Annotation(key, value=float(cells[key]), unit=unit))
         for key in ("report", "heart_axis"):
             if cells.get(key):
-                result.append(Annotation(key=key, value=row[key]))
+                result.append(Annotation(key, value=row[key]))
         result.extend(
             (
-                Annotation(key="device", value=row["device"]),
-                Annotation(key="recording_date", value=cells["recording_date"]),
+                Annotation("device", value=row["device"]),
+                Annotation("recording_date", value=cells["recording_date"]),
             )
         )
         # The cell of a finding can name the leads that the finding affects. The annotation gets the
         # cell value without its surrounding whitespace.
         for key in _FINDINGS:
             if value := cells.get(key):
-                result.append(Annotation(key=key, value=value))
-        result.append(Annotation(key="subject_ids", value=[_parse_patient_id(cells)]))
+                result.append(Annotation(key, value=value))
+        result.append(Annotation("subject_ids", value=[_parse_patient_id(cells)]))
         sex = _SEX.get(cells["sex"])
         if sex is None:
             raise TimeNetConnectorError(f"sex {row['sex']!r} is not 0 or 1")
-        result.append(Annotation(key="sex", value=sex, description=_SEX_DESCRIPTION))
+        result.append(Annotation("sex", value=sex, description=_SEX_DESCRIPTION))
         codes = ast.literal_eval(cells["scp_codes"])
-        result.append(Annotation(key="scp_codes", value=sorted(codes), metadata={"likelihoods": codes}))
+        result.append(Annotation("scp_codes", value=sorted(codes), metadata={"likelihoods": codes}))
         fold = int(cells["strat_fold"])
         split = Split.TEST if fold == _TEST_FOLD else Split.VALIDATION if fold == _VALIDATION_FOLD else Split.TRAIN
         result.extend(
             (
-                Annotation(key="strat_fold", value=fold),
-                Annotation(key="split", value=split.value),
+                Annotation("strat_fold", value=fold),
+                Annotation("split", value=split.value),
             )
         )
         return result

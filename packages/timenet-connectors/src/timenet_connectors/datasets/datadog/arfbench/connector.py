@@ -8,7 +8,7 @@ charts are in ``datadog/arfbench-charts``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 from timenet.dataset import TimeFDataset
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
@@ -25,15 +25,16 @@ QA_CSV = "arfbench-qa.csv"
 SERIES_DIR = "arfbench-ts-data"  # {metric}_{interval}.parquet: one metric at one rollup interval, in seconds
 
 
-class ARFBenchConnector(BaseHuggingFaceConnector):
+class ARFBenchConnector(
+    BaseHuggingFaceConnector,
+    hf_repo=REPO,
+    source_revision=REVISION,
+    source_files={"questions": QA_CSV, "series": f"{SERIES_DIR}/*.parquet"},
+):
     """Connector for the ARFBench questions about the metric series (Hub repo ``Datadog/ARFBench``).
 
     The values are plain series, so the dataset uses the default Parquet backend.
     """
-
-    HF_REPO = REPO
-    SOURCE_REVISION = REVISION
-    SOURCE_FILES: ClassVar = {"questions": QA_CSV, "series": f"{SERIES_DIR}/*.parquet"}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Create a Record for each metric and a series task for each question.
@@ -47,11 +48,11 @@ class ARFBenchConnector(BaseHuggingFaceConnector):
         paths = self.ref_paths(raw_refs, "questions", "series")
         dataset = TimeFDataset(metadata=self.metadata())
         metric_records = {
-            files.metric: dataset.add_record(record=files.create_record())
+            files.metric: dataset.add_record(files.create_record())
             for files in MetricSeriesFiles.from_series_dir(paths["series"])
         }
         for question in read_questions(paths["questions"]):
-            dataset.add_task(task=question.create_series_task(metric_records))
+            dataset.add_task(question.create_series_task(metric_records))
         return dataset
 
 

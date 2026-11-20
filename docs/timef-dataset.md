@@ -34,8 +34,7 @@ A `Signal` is one named stream. Pass `data` to the constructor for eager values.
 `Signal.from_loader()` with `loader` and `n_values` for lazy values.
 
 ```python
-from timenet.dataset import Signal
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import RegularAxis, Signal
 
 axis = RegularAxis.from_rate_hz(500)
 
@@ -56,7 +55,7 @@ lead_i = Signal(
 | `data` | array-like | Eager values. Mutually exclusive with `loader`. |
 | `loader` | `ArrayHandle` or callable | Lazy values, passed to `Signal.from_loader()`. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
-| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
+| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. The constructors accept any iterable. |
 | `metadata` | `JsonMapping` | Optional JSON-compatible metadata. |
 
 Read values through `to_arrow()`, `to_numpy()`, and `read_steps()`. These accessors apply the
@@ -88,12 +87,12 @@ Sources. [Sources](data-model/sources.md) describes the concept in full.
 from timenet.dataset import Source
 
 accelerometer = Source(
-    name="Accelerometer",
+    "Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 
 imu = Source(
-    name="IMU",
+    "IMU",
     sources=(accelerometer, gyroscope, magnetometer),
 )
 ```
@@ -101,9 +100,9 @@ imu = Source(
 | Field | Type | Description |
 | --- | --- | --- |
 | `name` | `str` | Human-readable Source name. |
-| `sources` | `tuple[Source, ...]` | Direct child Sources. |
-| `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
-| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Source. |
+| `sources` | `Iterable[Source]`, stored as a tuple | Direct child Sources. |
+| `signals` | `Iterable[Signal]`, stored as a tuple | Signals produced directly by this Source. |
+| `annotations` | `Iterable[Annotation]`, stored as a tuple | Annotation occurrences attached to this Source. |
 | `metadata` | `JsonMapping` | Optional device, sensor, or subsystem metadata. |
 
 `walk_sources()` and `walk_signals()` traverse a complete subtree. TimeNet rejects cycles, a Source
@@ -139,8 +138,8 @@ record = Record(
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | `int` | Read-only identity. Set when the Record joins a dataset. |
-| `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
-| `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
+| `sources` | `Iterable[Source]`, stored as a tuple | Root Sources in the recording hierarchy. |
+| `annotations` | `Iterable[Annotation]`, stored as a tuple | Annotation occurrences attached to this Record. |
 | `metadata` | `JsonMapping` | Optional session metadata. |
 | `start_time` | `TimeOrigin` | Common relative zero with an optional absolute timestamp. |
 | `time_span` | `TimeInterval \| None` | Optional overall session interval. |
@@ -157,7 +156,7 @@ Store subject identifiers as a list-valued record annotation. Omit it for a reco
 from timenet.types import Annotation
 
 record.annotate(
-    Annotation(key="subject_ids", value=["patient-1", "patient-2"])
+    Annotation("subject_ids", value=["patient-1", "patient-2"])
 )
 ```
 
@@ -173,7 +172,7 @@ from timenet.types import AnswerTask
 task = AnswerTask(
     inputs=(record,),
     prompt="Diagnose this patient.",
-    targets=("The recording shows no cardiac activity.",),
+    targets="The recording shows no cardiac activity.",
 )
 ```
 
@@ -200,8 +199,8 @@ Register complete Records independently of Tasks. This supports datasets with or
 from timenet.dataset import TimeFDataset
 
 dataset = TimeFDataset(metadata=metadata)
-dataset.add_record(record=record)
-dataset.add_task(task=task)
+dataset.add_record(record)
+dataset.add_task(task)
 ```
 
 `add_record()` validates hierarchy ownership. It rejects a Record that is already in a dataset,
@@ -223,7 +222,7 @@ content that varies, as [Annotations](data-model/annotations.md#reuse-content) s
 ```python
 from timenet.types import Annotation, TimePoint
 
-male = Annotation(key="patient_sex", value="male")
+male = Annotation("patient_sex", value="male")
 record.annotate(male)
 
 lead_i.annotate(

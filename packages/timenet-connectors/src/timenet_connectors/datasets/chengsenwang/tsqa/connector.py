@@ -6,15 +6,10 @@ to, pinned to one commit. Each row has the columns ``Task, Size, Question, Answe
 lists. Each row becomes one record that carries the series and an :class:`~timenet.types.AnswerTask`.
 """
 
-from collections.abc import Mapping
-from typing import ClassVar
-
 from pydantic import ConfigDict, Field
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
-from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
-from timenet.types.splits import Split
+from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
+from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.datasets.chengsenwang.tsqa.sample import TSQASample, get_category, get_signal_id
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
@@ -40,14 +35,15 @@ class _SourceRow(DataRow):
     series: str = Field(alias="Series")
 
 
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
-
-    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
+class TSQAConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="ChengsenWang/TSQA",  # the external Hub repo id (keeps its own casing)
     # The commit refs/convert/parquet pointed to when this was pinned. The Hub rewrites that ref
     # whenever it reconverts the dataset, so a rebuild reads this commit instead of the ref.
-    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
+    source_revision="22518209e3ee6302be4b4957f2692b3e8de849c3",
+    source_files={"train": "default/train/0000.parquet"},
+):
+    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,9 +75,9 @@ class TSQAConnector(BaseHuggingFaceConnector):
         for split_name, samples_in_split in splits.items():
             for sample in samples_in_split:
                 record = self._make_record(sample)
-                dataset.add_record(record=record)
+                dataset.add_record(record)
                 task = self._make_task(sample, record, split=split_name)
-                dataset.add_task(task=task)
+                dataset.add_task(task)
         return dataset
 
     @staticmethod
@@ -95,10 +91,10 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 time_axis=OrdinalAxis(),
             )
             signals.append(signal)
-        record = Record(sources=(Source(name="TSQA series", signals=tuple(signals)),))
-        record.annotate(Annotation(key="task", value=sample.category))
+        record = Record(sources=[Source("TSQA series", signals=signals)])
+        record.annotate(Annotation("task", value=sample.category))
         if sample.label:
-            record.annotate(Annotation(key="label", value=sample.label))
+            record.annotate(Annotation("label", value=sample.label))
         return record
 
     @staticmethod
@@ -106,7 +102,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
         return AnswerTask(
             inputs=(record,),
             prompt=sample.question,
-            targets=(sample.answer,),
+            targets=sample.answer,
             split=split,
         )
 

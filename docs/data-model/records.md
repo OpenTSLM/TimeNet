@@ -39,18 +39,18 @@ Build the hierarchy from the leaves upward:
 from timenet.dataset import Record, Source
 
 accelerometer = Source(
-    name="Accelerometer",
+    "Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 imu = Source(
-    name="IMU",
+    "IMU",
     sources=(accelerometer,),
 )
 record = Record(
     sources=(imu,),
     metadata={"site": "lab-a", "run": "run-001"},
 )
-dataset.add_record(record=record)
+dataset.add_record(record)
 ```
 
 `dataset.add_record()` gives the Record and each of its Signals a read-only int64 `id`. A Source
@@ -76,7 +76,7 @@ firmware version, or an event on the timeline.
 ```python
 from timenet.types import Annotation
 
-record.annotate(Annotation(key="condition", value="healthy"))
+record.annotate(Annotation("condition", value="healthy"))
 ```
 
 Sources and Signals also support `metadata` and `annotate()`.
@@ -95,8 +95,8 @@ origin = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
 record = Record(
     start_time=origin,
     sources=(
-        Source(name="sensor A", signals=(signal_a,)),
-        Source(name="sensor B", signals=(signal_b,)),
+        Source("sensor A", signals=[signal_a]),
+        Source("sensor B", signals=[signal_b]),
     ),
 )
 ```
@@ -128,10 +128,10 @@ CONDITION = LabelSet(
 
 task = ClassificationTask(
     inputs=(record,),
-    targets=("healthy",),
+    targets="healthy",
     label_set=CONDITION,
 )
-dataset.add_task(task=task)
+dataset.add_task(task)
 ```
 
 Use `dataset.tasks_for(record)` to resolve the Task objects for one Record.

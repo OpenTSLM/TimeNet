@@ -1,7 +1,7 @@
 """A reusable base for connectors that read files from a pinned HuggingFace Hub dataset revision.
 
-Subclasses set ``HF_REPO``, ``SOURCE_REVISION``, and ``SOURCE_FILES``, ship a ``dataset.yaml`` card
-beside the connector, and implement ``convert()`` over the :class:`HubFileRef` list ``download()``
+Subclasses pass ``hf_repo``, ``source_revision``, and ``source_files`` as class keywords, ship a
+``dataset.yaml`` card beside the connector, and implement ``convert()`` over the :class:`HubFileRef` list ``download()``
 returns. The base checks that list before the subclass's ``convert()`` runs. It also fills
 ``source_url`` and ``source_revision`` in the dataset metadata from ``HF_REPO`` and ``SOURCE_REVISION``.
 :mod:`timenet_connectors.sources.huggingface_hub` describes how the files download. For the Hub's
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import functools
 from pathlib import Path
 import re
+from types import MappingProxyType
 from typing import Any, ClassVar
 
 from timenet.connectors import BaseConnector
@@ -39,9 +40,11 @@ class HubFileRef:
 class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
     """Base class for connectors that read files from a pinned Hub dataset revision.
 
-    Subclasses set :attr:`HF_REPO`, :attr:`SOURCE_REVISION`, and :attr:`SOURCE_FILES`, and implement
-    ``convert()`` over the returned :class:`HubFileRef` list. The base wraps each subclass's ``convert()``
-    to run :meth:`check_refs` first.
+    Subclasses pass ``hf_repo``, ``source_revision``, and ``source_files`` as class keywords, and
+    implement ``convert()`` over the returned :class:`HubFileRef` list. The base stores the keywords as
+    :attr:`HF_REPO`, :attr:`SOURCE_REVISION`, and :attr:`SOURCE_FILES`. A subclass that passes no
+    keywords keeps the values of its parent. The base wraps each subclass's ``convert()`` to run
+    :meth:`check_refs` first.
     """
 
     HF_REPO: ClassVar[str]
@@ -51,16 +54,30 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
     """The repo-relative filename of each part, in download-order. A filename can end
     in a glob like ``data/*.parquet``; the part's path is then the directory of the matching files."""
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(
+        cls,
+        *,
+        hf_repo: str | None = None,
+        source_revision: str | None = None,
+        source_files: Mapping[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init_subclass__(**kwargs)
-        # Check the declaration when the class is defined
+        if hf_repo is not None:
+            cls.HF_REPO = hf_repo
+        if source_revision is not None:
+            cls.SOURCE_REVISION = source_revision
+        if source_files is not None:
+            cls.SOURCE_FILES = MappingProxyType(dict(source_files))
+        if not getattr(cls, "HF_REPO", None):
+            raise TimeFValidationError(f"{cls.__name__} must pass hf_repo")
         revision = getattr(cls, "SOURCE_REVISION", None)
         if not isinstance(revision, str) or not _COMMIT_SHA.fullmatch(revision):
             raise TimeFValidationError(
-                f"{cls.__name__}.SOURCE_REVISION must be a 40-character commit, got {revision!r}"
+                f"{cls.__name__} source_revision must be a 40-character commit, got {revision!r}"
             )
         if not getattr(cls, "SOURCE_FILES", None):
-            raise TimeFValidationError(f"{cls.__name__}.SOURCE_FILES must declare at least one file")
+            raise TimeFValidationError(f"{cls.__name__} source_files must declare at least one file")
         # Every subclass's convert() checks its refs first, so no connector has to call check_refs itself
         convert = cls.__dict__.get("convert")
         if convert is not None:

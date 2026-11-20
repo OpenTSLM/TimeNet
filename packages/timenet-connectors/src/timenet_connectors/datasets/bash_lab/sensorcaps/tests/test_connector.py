@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from timenet.config import settings
-from timenet.dataset.axis import IrregularAxis
+from timenet.dataset import IrregularAxis
 from timenet.engine import run_pipeline
 from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.format import control_writer

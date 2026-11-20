@@ -1065,3 +1065,12 @@ def test_to_features_and_targets_can_take_one_split(make_series):
     assert y_test.tolist() == ["c"]
     with pytest.raises(TimeFValidationError, match="features of the validation split"):
         dataset.to_features_and_targets(task=ClassificationTask, split=Split.VALIDATION)
+
+
+def test_add_methods_take_their_argument_positionally(make_series):
+    ds = _dataset()
+    record = ds.add_record(Record(sources=[Source("Source", signals=[make_series()])]))
+    task = ds.add_task(_classification_task(record, "afib"))
+    more = ds.add_tasks([AnswerTask(inputs=[record], prompt="Alive?", targets="Yes")])
+    assert ds.records == (record,)
+    assert ds.tasks == (task, *more)

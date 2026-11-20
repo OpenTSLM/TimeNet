@@ -14,8 +14,7 @@ from typing import Literal, Self
 import numpy as np
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.types import ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import ensure_archive
@@ -138,7 +137,7 @@ class HarCotRow:
             Signal.from_values(self.y, spec=ACCELERATION, name="accelerometer_y", time_axis=SAMPLED_AT_50_HZ),
             Signal.from_values(self.z, spec=ACCELERATION, name="accelerometer_z", time_axis=SAMPLED_AT_50_HZ),
         )
-        return Record(sources=(Source(name="Accelerometer", signals=signals),))
+        return Record(sources=[Source("Accelerometer", signals=signals)])
 
     def create_classification_task(self, record: Record, *, split: Split) -> ClassificationTask:
         """Create the task that asks for the activity of the window.
@@ -148,7 +147,7 @@ class HarCotRow:
         """
         return ClassificationTask(
             inputs=(record,),
-            targets=(self.label,),
+            targets=self.label,
             label_set=ACTIVITY,
             rationale=self.rationale,
             split=split,
@@ -212,8 +211,8 @@ class HarCotConnector(BaseConnector[HarCotSplitFile]):
         dataset = TimeFDataset(metadata=self.metadata())
         for split_file in raw_refs:
             for row in split_file.read_rows():
-                record = dataset.add_record(record=row.create_record())
-                dataset.add_task(task=row.create_classification_task(record, split=split_file.split))
+                record = dataset.add_record(row.create_record())
+                dataset.add_task(row.create_classification_task(record, split=split_file.split))
         return dataset
 
 

@@ -22,6 +22,7 @@ from timenet.types import (
     TimeSeriesSpec,
     TimeSpan,
 )
+from timenet.types._fields import as_tuple
 from timenet.types.handles import ArrayHandle, ArrowArray, CallableArray, NumpyArray
 from timenet.types.ids import EntityId, assigned_id
 
@@ -267,7 +268,7 @@ class Signal(SupportsAnnotate):
         time_axis: TimeAxis,
         name: str,
         data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
-        annotations: tuple[Annotation, ...] = (),
+        annotations: Iterable[Annotation] = (),
         metadata: JsonMapping | None = None,
     ) -> None:
         """Build a signal from values that are already in memory."""
@@ -294,7 +295,7 @@ class Signal(SupportsAnnotate):
         n_values: int,
         null_count: int | None = None,
         time_offsets_loader: ArrayHandle | Callable[[], pa.Array] | None = None,
-        annotations: tuple[Annotation, ...] = (),
+        annotations: Iterable[Annotation] = (),
         metadata: JsonMapping | None = None,
     ) -> "Signal":
         """Build a signal whose values are loaded only when they are read.
@@ -332,7 +333,7 @@ class Signal(SupportsAnnotate):
         n_values: int,
         null_count: int | None,
         time_offsets: ArrayHandle | None = None,
-        annotations: tuple[Annotation, ...] = (),
+        annotations: Iterable[Annotation] = (),
         metadata: JsonMapping | None = None,
     ) -> None:
         """Set and validate fields shared by eager and lazy construction."""
@@ -345,7 +346,7 @@ class Signal(SupportsAnnotate):
         set_field(self, "_id", None)
         set_field(self, "n_values", n_values)
         set_field(self, "null_count", null_count)
-        set_field(self, "annotations", tuple(annotations))
+        set_field(self, "annotations", as_tuple(annotations))
         set_field(self, "metadata", {} if metadata is None else metadata)
         self.__post_init__()
 

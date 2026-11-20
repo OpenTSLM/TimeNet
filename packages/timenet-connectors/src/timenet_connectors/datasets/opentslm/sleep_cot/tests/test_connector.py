@@ -9,8 +9,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal
-from timenet.types import ClassificationTask, Split
-from timenet.types.text import read_value
+from timenet.types import ClassificationTask, Split, read_value
 from timenet_connectors.datasets.opentslm.sleep_cot.connector import (
     COLUMNS,
     SAMPLES_PER_WINDOW,

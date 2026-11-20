@@ -98,12 +98,12 @@ Preserve official partitions when the source provides them by setting `split` on
 directly. No splitter is needed:
 
 ```python
-from timenet.types.splits import Split
+from timenet.types import Split
 
 record = make_record(sample)
-dataset.add_record(record=record)
+dataset.add_record(record)
 task = make_task(sample, record, split=Split.TRAIN)
-dataset.add_task(task=task)
+dataset.add_task(task)
 ```
 
 Translate source-specific partition names into `Split` values in the connector.
@@ -112,7 +112,7 @@ For a dataset without official partitions, explicitly choose a category to balan
 key that prevents related samples from crossing partitions:
 
 ```python
-from timenet.types.splits import Split
+from timenet.types import Split
 from timenet_connectors.splitting import StratifiedSplitter
 
 def get_category(sample):
@@ -175,9 +175,9 @@ When constructing TimeNet tasks, copy the partition name onto each task:
 for split_name, samples_in_split in splits.items():
     for sample in samples_in_split:
         record = make_record(sample)
-        dataset.add_record(record=record)
+        dataset.add_record(record)
         task = make_task(sample, record, split=split_name)
-        dataset.add_task(task=task)
+        dataset.add_task(task)
 ```
 
 Here `make_record` and `make_task` are the connector's own construction functions. A task refers to

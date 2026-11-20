@@ -14,8 +14,7 @@ A `Signal` is one named stream of values. Its `TimeSeriesSpec` describes each va
 ```python
 import numpy as np
 
-from timenet.dataset import Signal
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset import RegularAxis, Signal
 from timenet.types import TimeSeriesSpec
 
 temperature = Signal(

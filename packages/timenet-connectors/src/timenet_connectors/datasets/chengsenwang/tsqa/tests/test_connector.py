@@ -9,9 +9,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.types import AnswerTask
-from timenet.types.splits import Split
-from timenet.types.text import read_value
+from timenet.types import AnswerTask, Split, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 

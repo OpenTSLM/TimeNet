@@ -5,8 +5,7 @@ from typing import cast
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.testing import assert_datasets_equal
-from timenet.types import ClassificationTask
-from timenet.types.text import read_value
+from timenet.types import ClassificationTask, read_value
 from timenet_connectors.datasets.timenet.test_mean import TestMeanConnector
 
 

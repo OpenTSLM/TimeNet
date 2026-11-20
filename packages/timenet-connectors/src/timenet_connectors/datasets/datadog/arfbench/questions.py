@@ -192,7 +192,7 @@ class ARFBenchQuestion:
         missing = [metric for metric in self.cited_metrics if metric not in metric_records]
         if missing:
             raise TimeNetConnectorError(f"question {self.index}: no series file for cited metric {', '.join(missing)}")
-        inputs = tuple(metric_records[metric] for metric in self.cited_metrics)
+        inputs = [metric_records[metric] for metric in self.cited_metrics]
         return self._create_task(inputs, InputModality.TIME_SERIES)
 
     def create_chart_task(self, chart_records: Mapping[str, Record]) -> ClassificationTask:
@@ -210,10 +210,10 @@ class ARFBenchQuestion:
         missing = [stem for stem in self.chart_stems() if stem not in chart_records]
         if missing:
             raise TimeNetConnectorError(f"question {self.index}: no chart for {', '.join(missing)}")
-        inputs = tuple(chart_records[stem] for stem in self.chart_stems())
+        inputs = [chart_records[stem] for stem in self.chart_stems()]
         return self._create_task(inputs, InputModality.IMAGE)
 
-    def _create_task(self, inputs: tuple[Record, ...], modality: InputModality) -> ClassificationTask:
+    def _create_task(self, inputs: list[Record], modality: InputModality) -> ClassificationTask:
         """Create a test task that asks for the correct answer from the options of the question.
 
         The options are the label set of the task. The set is named after a hash of the options, so
@@ -227,7 +227,7 @@ class ARFBenchQuestion:
         task = ClassificationTask(
             inputs=inputs,
             prompt=self.question,
-            targets=(self.correct_answer,),
+            targets=self.correct_answer,
             input_modalities=frozenset({InputModality.TEXT, modality}),
             split=Split.TEST,
             metadata={"question_index": self.index},
@@ -236,10 +236,10 @@ class ARFBenchQuestion:
                 labels=tuple(Label(name=option) for option in self.answer_options),
             ),
         )
-        task.annotate(Annotation(key="task_category", value=self.task_category.value))
-        task.annotate(Annotation(key="difficulty", value=self.difficulty.value))
-        task.annotate(Annotation(key="interpolate_1", value=self.interpolate_1))
-        task.annotate(Annotation(key="interpolate_2", value=self.interpolate_2))
+        task.annotate(Annotation("task_category", value=self.task_category.value))
+        task.annotate(Annotation("difficulty", value=self.difficulty.value))
+        task.annotate(Annotation("interpolate_1", value=self.interpolate_1))
+        task.annotate(Annotation("interpolate_2", value=self.interpolate_2))
         return task
 
 

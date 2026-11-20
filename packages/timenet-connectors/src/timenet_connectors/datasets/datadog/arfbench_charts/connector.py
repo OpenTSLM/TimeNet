@@ -6,7 +6,7 @@ tensors, so the dataset uses the Zarr backend.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 from timenet.dataset import Record, Source, TimeFDataset
 from timenet.values_backends import ValuesBackend
@@ -32,17 +32,19 @@ def _create_chart_record(path: Path) -> Record:
     """
     return Record(
         metadata={"source_record_id": f"arfbench-chart-{path.stem}"},
-        sources=(Source(name="ARFBench chart", signals=(image_signal(path, name="chart"),)),),
+        sources=[Source("ARFBench chart", signals=[image_signal(path, name="chart")])],
     )
 
 
-class ARFBenchChartsConnector(BaseHuggingFaceConnector):
+class ARFBenchChartsConnector(
+    BaseHuggingFaceConnector,
+    hf_repo=REPO,
+    source_revision=REVISION,
+    source_files={"questions": QA_CSV, "charts": f"{CHART_DIR}/*.png"},
+):
     """Connector for the ARFBench charts (Hub repo ``Datadog/ARFBench``)."""
 
     values_backend = ValuesBackend.ZARR  # the chart tensors need the Zarr backend
-    HF_REPO = REPO
-    SOURCE_REVISION = REVISION
-    SOURCE_FILES: ClassVar = {"questions": QA_CSV, "charts": f"{CHART_DIR}/*.png"}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Create a Record for each chart and a chart task for each question.
@@ -56,11 +58,10 @@ class ARFBenchChartsConnector(BaseHuggingFaceConnector):
         paths = self.ref_paths(raw_refs, "questions", "charts")
         dataset = TimeFDataset(metadata=self.metadata())
         chart_records = {
-            path.stem: dataset.add_record(record=_create_chart_record(path))
-            for path in sorted(paths["charts"].glob("*.png"))
+            path.stem: dataset.add_record(_create_chart_record(path)) for path in sorted(paths["charts"].glob("*.png"))
         }
         for question in read_questions(paths["questions"]):
-            dataset.add_task(task=question.create_chart_task(chart_records))
+            dataset.add_task(question.create_chart_task(chart_records))
         return dataset
 
 

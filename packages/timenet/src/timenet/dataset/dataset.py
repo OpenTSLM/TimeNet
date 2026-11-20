@@ -172,7 +172,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         finally:
             self._schema = None
 
-    def add_record(self, *, record: Record) -> Record:
+    def add_record(self, record: Record) -> Record:
         """Register and return a complete record.
 
         The record and each of its signals get the next id of their kind.
@@ -329,7 +329,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             writer.write()
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
 
-    def add_task(self, *, task: Task) -> Task:
+    def add_task(self, task: Task) -> Task:
         """Validate and register one fully constructed task.
 
         The Task owns its input and target object references. Registration verifies those objects
@@ -345,7 +345,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         """
         return self._register_batch((task,))[0]
 
-    def add_tasks(self, *, tasks: Iterable[Task]) -> tuple[Task, ...]:
+    def add_tasks(self, tasks: Iterable[Task]) -> tuple[Task, ...]:
         """Register several complete tasks, all together or not at all.
 
         The method validates the whole batch before it attaches any task. If one task fails a

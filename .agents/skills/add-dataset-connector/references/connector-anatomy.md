@@ -71,11 +71,14 @@ tags:
 
 ### `BaseHuggingFaceConnector` (`bases/huggingface.py`)
 `BaseHuggingFaceConnector(BaseConnector[HubFileRef])` downloads files from a Hub dataset at a pinned
-commit. Set:
+commit. Pass these class keywords:
 
-- `HF_REPO`: the Hub repo id.
-- `SOURCE_REVISION`: a 40-character commit, not a branch, so every rebuild reads the same files.
-- `SOURCE_FILES`: part name -> file path in the repo.
+- `hf_repo`: the Hub repo id.
+- `source_revision`: a 40-character commit, not a branch, so every rebuild reads the same files.
+- `source_files`: part name -> file path in the repo.
+
+The base stores them as `HF_REPO`, `SOURCE_REVISION`, and `SOURCE_FILES`. A missing keyword or a
+bad revision fails when Python defines the class.
 
 The base fills `source_url` and `source_revision` in the dataset metadata from `HF_REPO` and
 `SOURCE_REVISION`. The card can omit both fields. Keep `source_url` in the card. The docs catalog,
@@ -123,11 +126,12 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   has gaps, say why on the spec: `missing=MissingValues(reason=MissingReason.SENSOR_GAP)`. The
   writer records how many timesteps each signal misses, as `Signal.null_count`. Keep a null a
   null: never fill a gap.
-- Group signals under a `Source(name=..., signals=...)`. Then
-  `dataset.add_record(record=Record(sources=(source,)))` registers the record and returns it. A
+- Group signals under a `Source("name", signals=[...])`. Then
+  `dataset.add_record(Record(sources=[source]))` registers the record and returns it. A collection
+  field such as `sources`, `signals`, or `inputs` takes any iterable and stores a tuple. A
   windowed record says so through its axis: `RegularAxis.at_index(...)` moves the origin into the
   recording.
-- `record.annotate(Annotation(key=..., value=...))` attaches one annotation and returns it.
+- `record.annotate(Annotation("key", value=value))` attaches one annotation and returns it.
   `record.add_annotations([...])` takes an iterable and returns a tuple. There is one annotation
   class, and its `span` gives its shape. No span means the whole record.
   `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
@@ -136,8 +140,9 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   its number of characters, pass it as `length=n` and every read checks the result against it.
   The writer stores this text in a separate payload file so readers can load it on request. For a
   list of strings, use `LazyTextList`, with the number of strings as `length` if you know it.
-- `dataset.add_task(task=<Task>(inputs=(record,), ...))` registers one task and returns it.
-  `dataset.add_tasks(tasks=[...])` takes an iterable and registers the batch all-or-nothing. The task
+- `dataset.add_task(<Task>(inputs=[record], ...))` registers one task and returns it. Pass one
+  target as a bare value: `targets="walking"`.
+  `dataset.add_tasks([...])` takes an iterable and registers the batch all-or-nothing. The task
   names its input records itself. Set `scope` and `from_tasks` on the task too. A batch can derive
   from its own members in any order.
 - You cannot pass ids. The dataset gives every record, signal, and task a read-only int `id` when
@@ -178,12 +183,9 @@ the bounds of every `Span` the task carries.
 
 ```python
 import json
-from collections.abc import Mapping
-from typing import ClassVar
 
 from pydantic import ConfigDict, Field
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
+from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
@@ -205,13 +207,14 @@ class TSQARow(DataRow):
     answer: str = Field(alias="Answer")
 
 
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
-
-    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
+class TSQAConnector(
+    BaseHuggingFaceConnector,
+    hf_repo="ChengsenWang/TSQA",  # the external Hub repo id (keeps its own casing)
     # The commit refs/convert/parquet pointed to: the Hub's parquet conversion of the CSV.
-    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
+    source_revision="22518209e3ee6302be4b4957f2692b3e8de849c3",
+    source_files={"train": "default/train/0000.parquet"},
+):
+    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Build one record per row: the parsed series plus its question-and-answer task.
@@ -227,7 +230,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
             for row in ParquetDataReader(ref.path, TSQARow).iter_rows():
                 series = json.loads(row.series)
                 signals = series if series and isinstance(series[0], list) else [series]
-                time_series = tuple(
+                time_series = [
                     Signal.from_values(
                         values,
                         spec=_SPEC,
@@ -235,19 +238,13 @@ class TSQAConnector(BaseHuggingFaceConnector):
                         time_axis=OrdinalAxis(),
                     )
                     for signal, values in enumerate(signals)
-                )
-                record = Record(sources=(Source(name="TSQA series", signals=time_series),))
-                dataset.add_record(record=record)
-                record.annotate(Annotation(key="task", value=row.task))
+                ]
+                record = Record(sources=[Source("TSQA series", signals=time_series)])
+                dataset.add_record(record)
+                record.annotate(Annotation("task", value=row.task))
                 if row.label:
-                    record.annotate(Annotation(key="label", value=row.label))
-                dataset.add_task(
-                    task=AnswerTask(
-                        inputs=(record,),
-                        prompt=row.question,
-                        targets=(row.answer,),
-                    )
-                )
+                    record.annotate(Annotation("label", value=row.label))
+                dataset.add_task(AnswerTask(inputs=[record], prompt=row.question, targets=row.answer))
         return dataset
 
 
@@ -273,7 +270,7 @@ a local dict keyed by the PTB-XL `ecg_id`. It stores the `ecg_id` and the PTB-XL
 come from `ptbxl_database.csv`. Per-question metadata (question_type, template_id, answer_options,
 clinical_context) are value-deduped dataset annotations that the tasks reference. The connector
 builds the clinical context from `ptbxl_database.csv`. It streams one
-`AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))` per question.
+`AnswerTask(inputs=[record], prompt=..., rationale=<CoT>, targets=<label>)` per question.
 `_leads_for` reads the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per
 lead. All tasks for a recording point at its one record. Records do not share a series. See its
 `connector.py` for the full pattern.
