@@ -8,7 +8,7 @@ phase. Events 3 (severe slugging) and 4 (flow instability) have no transient pha
 from dataclasses import dataclass
 from enum import StrEnum
 
-from timenet.types import Label, LabelSet
+from timenet.types import Annotation, LabelSet
 
 
 TRANSIENT_OFFSET = 100
@@ -42,8 +42,8 @@ EVENTS: tuple[Event, ...] = (
 EVENTS_BY_CODE = {event.code: event for event in EVENTS}
 
 EVENT_TYPES = LabelSet(
-    name="event_type",
-    labels=tuple(Label(name=event.name) for event in EVENTS),
+    [event.name for event in EVENTS],
+    annotations=[Annotation("name", value="event_type")],
 )
 """The closed set of event types a classification task can answer."""
 

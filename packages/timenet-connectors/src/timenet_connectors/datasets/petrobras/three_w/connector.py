@@ -52,7 +52,7 @@ _SAMPLING_RATE_HZ = 1
 _TIMESTAMP = "timestamp"
 _LABEL = "class"
 _CONSTANT = Annotation(
-    key="constant_value",
+    "constant_value",
     value=True,
     description="The variable holds one value for the whole instance, which usually means a stuck sensor.",
 )
@@ -137,7 +137,7 @@ def _label_runs(labels: list[int | None]) -> Iterator[tuple[int | None, int, int
             start = index
 
 
-def _signals(file: InstanceFile, metadata: pq.FileMetaData) -> list[tuple[Variable, Signal, bool]]:
+def _signals(file: InstanceFile, metadata: pq.FileMetaData) -> list[tuple[Variable, Signal]]:
     """Build the signals of one instance from the Parquet column statistics.
 
     The statistics give each column's null count and range, so no value is read here.
@@ -147,15 +147,15 @@ def _signals(file: InstanceFile, metadata: pq.FileMetaData) -> list[tuple[Variab
         metadata: Its Parquet metadata.
 
     Returns:
-        One ``(variable, signal, is_constant)`` triple per variable the instance records, in
-        variable order.
+        One ``(variable, signal)`` pair per variable the instance records, in variable order. A
+        signal that holds one value for the whole instance carries the ``constant_value`` annotation.
 
     Raises:
         TimeNetConnectorError: If a column is missing or has no statistics.
     """
     n_rows = metadata.num_rows
     columns = {metadata.schema.column(j).name: j for j in range(metadata.num_columns)}
-    built: list[tuple[Variable, Signal, bool]] = []
+    built: list[tuple[Variable, Signal]] = []
     for variable in VARIABLES:
         if variable.column not in columns:
             raise TimeNetConnectorError(f"{file.instance}: has no column {variable.column!r}")
@@ -177,9 +177,10 @@ def _signals(file: InstanceFile, metadata: pq.FileMetaData) -> list[tuple[Variab
             loader=_column_loader(file.path, variable.column),
             n_values=n_rows,
             null_count=nulls,
+            annotations=[_CONSTANT] if lowest == highest else [],
             metadata={"description": variable.description},
         )
-        built.append((variable, signal, lowest == highest))
+        built.append((variable, signal))
     return built
 
 
@@ -238,30 +239,17 @@ def _build_record(dataset: TimeFDataset, file: InstanceFile) -> _Built:
     table = pq.read_table(file.path, columns=[_TIMESTAMP, _LABEL])
     start = _start(table, file)
 
-    sources = tuple(
-        Source(name=name, signals=tuple(signal for variable, signal, _ in signals if variable.source == name))
+    sources = [
+        Source(name, signals=[signal for variable, signal in signals if variable.source == name])
         for name in SOURCE_ORDER
-        if any(variable.source == name for variable, _, _ in signals)
-    )
-    record = Record(
-        sources=sources,
-        time_span=TimeInterval.micros(0, metadata.num_rows * US_PER_S),
-        metadata={
-            "instance": file.instance,
-            "well": file.well,
-            "provenance": file.provenance,
-            "event_code": event.code,
-            "start": start,
-        },
-    )
-    dataset.add_record(record=record)
-    for _, signal, is_constant in signals:
-        if is_constant:
-            signal.annotate(_CONSTANT)
-    record.annotate(Annotation(key="provenance", value=file.provenance))
-    record.annotate(Annotation(key="event_type", value=event.name))
+        if any(variable.source == name for variable, _ in signals)
+    ]
+    annotations = [
+        Annotation("provenance", value=file.provenance),
+        Annotation("event_type", value=event.name),
+    ]
     if file.well is not None:
-        record.annotate(Annotation(key="well", value=file.well))
+        annotations.append(Annotation("well", value=file.well))
 
     transients: list[TimeInterval] = []
     labels = table.column(_LABEL).to_pylist()
@@ -272,13 +260,27 @@ def _build_record(dataset: TimeFDataset, file: InstanceFile) -> _Built:
         if phase is None:
             raise TimeNetConnectorError(f"{file.instance}: label {label} at {begin} s is not part of {event.name!r}")
         span = TimeInterval.micros(begin * US_PER_S, end * US_PER_S)
-        record.annotate(Annotation(key="event_phase", value=str(phase), span=span))
+        annotations.append(Annotation("event_phase", value=str(phase), span=span))
         if phase is Phase.TRANSIENT:
             transients.append(span)
+
+    record = Record(
+        sources=sources,
+        time_span=TimeInterval.micros(0, metadata.num_rows * US_PER_S),
+        metadata={
+            "instance": file.instance,
+            "well": file.well,
+            "provenance": file.provenance,
+            "event_code": event.code,
+            "start": start,
+        },
+        annotations=annotations,
+    )
+    dataset.add_record(record)
     return _Built(record=record, file=file, event=event, transients=tuple(transients))
 
 
-class ThreeWConnector(BaseConnector[InstanceFile]):
+class ThreeWConnector(BaseConnector[list[InstanceFile]]):
     """Connector for Petrobras 3W v2.0.0 (``petrobras/three-w``)."""
 
     # ruff: ignore[no-self-use] (overrides the instance method BaseConnector.download_async)
@@ -303,19 +305,19 @@ class ThreeWConnector(BaseConnector[InstanceFile]):
         paths = await download_files(artifacts)
         return [InstanceFile(path=path, event_code=int(path.parent.name)) for path in paths]
 
-    def convert(self, raw_refs: list[InstanceFile]) -> TimeFDataset:
+    def convert(self, instances: list[InstanceFile]) -> TimeFDataset:
         """Build one record per instance, then its classification and localization tasks.
 
         Args:
-            raw_refs: The instances from :meth:`download_async`.
+            instances: The instances from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        built = [_build_record(dataset, file) for file in raw_refs]
+        built = [_build_record(dataset, file) for file in instances]
         splits = _assign_splits(built)
-        dataset.add_tasks(tasks=list(_tasks(built, splits)))
+        dataset.add_tasks(list(_tasks(built, splits)))
         return dataset
 
 
@@ -360,15 +362,15 @@ def _tasks(built: list[_Built], splits: dict[str, Split]) -> Iterator[Task]:
     for item in built:
         split = splits[item.file.instance]
         yield ClassificationTask(
-            inputs=(item.record,),
-            targets=(item.event.name,),
+            inputs=[item.record],
+            targets=item.event.name,
             label_set=EVENT_TYPES,
             split=split,
         )
         if item.transients:
             yield TemporalLocalizationTask(
-                inputs=(item.record,),
-                targets=item.transients,
+                inputs=[item.record],
+                targets=list(item.transients),
                 mode=LocalizationMode.EXHAUSTIVE,
                 split=split,
             )
