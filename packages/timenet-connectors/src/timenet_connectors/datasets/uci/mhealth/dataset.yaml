@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: uci/mhealth
+dataset_version: 1.0.0
+name: MHEALTH
+description: >-
+  Fifty-hertz body-motion and ECG recordings from ten participants, represented as one native
+  subject log per record with all source activity intervals.
+license: CC-BY-4.0
+license_url: https://archive.ics.uci.edu/dataset/319/mhealth+dataset
+domains:
+  - activity
+  - health
+  - motion
+tags:
+  - activity-recognition
+  - accelerometer
+  - ecg
+  - gyroscope
+  - wearable
+source_url: https://archive.ics.uci.edu/dataset/319/mhealth+dataset
