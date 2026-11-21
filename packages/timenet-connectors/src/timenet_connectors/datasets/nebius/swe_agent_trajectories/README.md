@@ -77,23 +77,24 @@ A model that sees whole runs can learn "long, or cut off, means failure". That i
 a live monitor never sees the end before it happens.
 
 **So the connector only cuts checkpoints.** A checkpoint is the first *k* steps of a run, for
-*k* = 5, 10, 20 and 30, and only if the run has more than *k* steps. Its last visible step is
+*k* = 5, 10, 15, 20 and 30, and only if the run has more than *k* steps. Its last visible step is
 therefore never the run's final action.
 - **What no input holds:** the outcome, the exit status, the run's length, the patch and the test log.
 - **What the inputs do hold:** a growing conversation, which is real information a monitor has. The longest checkpoint ends at 30 steps.
 
 ## Records
 
-Each checkpoint is **one Record**: 192,428 in all *(measured)*.
+Each checkpoint is **one Record**: 235,978 in all *(measured)*.
 
 | Checkpoint | Runs still going | Resolved among them |
 | --- | --- | --- |
 | 5 steps | 76,182 | 16.6 % |
 | 10 steps | 59,708 | 13.8 % |
+| 15 steps | 43,550 | 9.2 % |
 | 20 steps | 34,059 | 6.4 % |
 | 30 steps | 22,479 | 4.2 % |
 
-**Signals.** The Record has one source, `agent_steps`, with seven signals of *k* values each, one per
+**Signals.** The Record has one source, `agent_steps`, with nine signals of *k* values each, one per
 step, on an ordinal axis. The steps have an order but no timestamps: the release records none.
 
 | Signal | dtype | Value at each step |
@@ -105,6 +106,8 @@ step, on an ordinal axis. The steps have an order but no timestamps: the release
 | `repeated_action` | bool | the command equals an earlier command of the run, character for character |
 | `action_kind` | enum | `edit`, `create`, `run`, `read`, `search`, `submit`, `other`, by the command's first word |
 | `observation_kind` | enum | `edit_rejected`, `timeout`, `traceback`, `command_error`, `silent_success`, `output` |
+| `same_file_edit` | bool | the step is an `edit` of the same file as the run's previous edit |
+| `edit_target` | enum | for an `edit`, the kind of file it changes: `source`, `test` or `own_script`; `none` for every other step |
 
 **`action_kind` rules**, by the command's first word:
 - `edit`: `edit`;
@@ -125,9 +128,24 @@ step, on an ordinal axis. The steps have an order but no timestamps: the release
 5. `silent_success`: it starts with SWE-agent's message for a command that printed nothing.
 6. `output`: anything else.
 
+**File rules.** An `edit` command names no file: SWE-agent applies it to the file open at that
+moment. Every reply ends with that file, `(Open file: <absolute path>)`, or `n/a`, so the connector
+follows it. An `edit` changes the file the reply before it names, and its `edit_target` is:
+- `own_script`: the agent created that file earlier in the run. A `create` opens the new file, so the reply after it names the file. Reproduction scripts are the usual case.
+- `test`: otherwise, if a folder of the path below the repository's folder is `test`, `tests` or `testing`, or the file is `conftest.py`, `test_*` or `*_test.py`. The repository's folder is skipped, so the files of a repository called `pytest` are not all tests.
+- `source`: any other file.
+- `none`: the step is not an `edit`, or no file is open (326 of 406,189 edits *(measured)*).
+
+`same_file_edit` compares an edit's file with the file of the run's previous edit, so the first edit
+of a run is never a same-file edit.
+
 Over the first 30 steps of every run *(measured)*:
 - **Replies:** plain output 1,030,976; linter rejections 179,147; tracebacks 114,145; silent successes 55,182; command errors 49,989; timeouts 6,235.
 - **Repeats:** 28 % of steps repeat an earlier command. Rerunning a script counts as a repeat.
+
+Over the steps the checkpoints show (each run's longest checkpoint, 1,292,285 steps) *(measured)*:
+- **Edits:** 406,189. Of these, 235,311 change source files, 163,682 files the agent created and 6,870 test files.
+- **Same file:** 67 % of edits change the file the edit before changed.
 
 **Text.** The agent's thoughts for the *k* steps are the record annotation `agent_thoughts`, a list
 of *k* strings in step order, kept exactly as written. They are text, not a signal, because a text
@@ -146,7 +164,7 @@ issue has many runs. Its text is the issue message's `ISSUE:` section, and its m
 ## Tasks
 
 Each checkpoint gives three tasks. All take the Record as input and name the issue and the thoughts
-in `input_annotations`. That makes 577,284 tasks *(measured)*.
+in `input_annotations`. That makes 707,934 tasks *(measured)*.
 
 | Task | Target | Source of the answer |
 | --- | --- | --- |
@@ -159,8 +177,9 @@ in `input_annotations`. That makes 577,284 tasks *(measured)*.
 > In its first {k} steps the agent edited files {n} times, created {n} files, ran code {n} times,
 > read or searched the repository {n} times and repeated an earlier command {n} times. The linter
 > rejected {n} edits, {n} replies showed a Python traceback, {n} replies a command error and {n}
-> commands timed out. The conversation holds {context} characters. The run will go on for {m} more
-> steps, then {ending}, and the agent will {resolve | not resolve} the issue.
+> commands timed out. {n} edits changed the same file as the edit before, and {n} edits changed a
+> file the agent had created. The conversation holds {context} characters. The run will go on for
+> {m} more steps, then {ending}, and the agent will {resolve | not resolve} the issue.
 
 "Read or searched" adds the `read` and `search` steps. {ending} is one fixed phrase per `exit_status`,
 e.g. "it will reach the context limit and SWE-agent will submit its changes". The prompt asks for
@@ -171,9 +190,11 @@ the same three things in the same tense.
 
 > In its first 5 steps the agent edited files 0 times, created 0 files, ran code 0 times, read or
 > searched the repository 4 times and repeated an earlier command 0 times. The linter rejected 0
-> edits, 1 reply showed a Python traceback, 1 reply a command error and 0 commands timed out. The
-> conversation holds 12,857 characters. The run will go on for 41 more steps, then it will reach
-> the context limit and SWE-agent will submit its changes, and the agent will not resolve the issue.
+> edits, 1 reply showed a Python traceback, 1 reply a command error and 0 commands timed out. 0
+> edits changed the same file as the edit before, and 0 edits changed a file the agent had created.
+> The conversation holds 12,857 characters. The run will go on for 41 more steps, then it will
+> reach the context limit and SWE-agent will submit its changes, and the agent will not resolve the
+> issue.
 
 **Task metadata:** the Record's metadata.
 
@@ -186,11 +207,11 @@ seed 42) assigns whole repositories, and each checkpoint takes its run's partiti
 
 **Result** *(measured)*:
 
-| Partition | Repositories | Runs with a checkpoint | Tasks | Resolved at 5 / 10 / 20 / 30 steps |
+| Partition | Repositories | Runs with a checkpoint | Tasks | Resolved at 5 / 10 / 15 / 20 / 30 steps |
 | --- | --- | --- | --- | --- |
-| train | 993 | 60,985 | 464,748 | 16.6 / 13.7 / 6.2 / 3.9 % |
-| validation | 139 | 7,557 | 55,029 | 16.8 / 14.6 / 6.8 / 4.4 % |
-| test | 143 | 7,640 | 57,507 | 16.4 / 14.1 / 7.1 / 5.9 % |
+| train | 993 | 60,985 | 570,120 | 16.6 / 13.7 / 9.1 / 6.2 / 3.9 % |
+| validation | 139 | 7,557 | 67,254 | 16.8 / 14.6 / 9.9 / 6.8 / 4.4 % |
+| test | 143 | 7,640 | 70,560 | 16.4 / 14.1 / 9.4 / 7.1 / 5.9 % |
 
 No repository and no issue is in two partitions. The checks count only the 1,275 repositories that
 have a checkpoint.
@@ -199,15 +220,29 @@ have a checkpoint.
 
 **Most runs fail.** A model that always answers `unresolved` is right 83 % of the time at 5 steps and
 96 % at 30 steps. Accuracy therefore says little. We suggest:
-- **Report each checkpoint separately.** The base rate changes with *k*, so pooled results mix four problems.
+- **Report each checkpoint separately.** The base rate changes with *k*, so pooled results mix five problems.
 - **Use measures that do not reward the majority class:** AUROC, the precision-recall curve of `resolved` (its baseline is the resolved rate), balanced accuracy, and calibration (Brier score) for a health score.
-- **Count each run once.** A long run gives up to four checkpoints, and long runs fail more often. When training, weight a checkpoint by 1 / (checkpoints of its run), or sample one checkpoint per run.
-- **Compare against simple baselines:** always `unresolved`; the numeric signals alone; the thoughts alone.
-- **Score only the prediction in the status report.** Its first three sentences count what happened
+- **Count each run once.** A long run gives up to five checkpoints, and long runs fail more often. When training, weight a checkpoint by 1 / (checkpoints of its run), or sample one checkpoint per run.
+- **Compare against simple baselines:** always `unresolved`; the numeric signals alone; the thoughts alone; the issue text alone, which never sees the agent.
+- **Compare runs on the same issue.** AUROC over all runs also rewards telling easy issues from hard
+  ones. 807 issues have both resolved and unresolved runs: the share of such pairs where the
+  resolved run scores higher measures only what a model reads from the run itself.
+- **Score only the prediction in the status report.** Its first four sentences count what happened
   so far, which the model can read off its input. Only the last sentence predicts: how many more
   steps, how the run will end, and whether it will resolve the issue. A word-overlap score (ROUGE,
   BLEU) on the whole answer therefore stays high even when that prediction is wrong. Score the last
   sentence, which starts with "The run will go on for", and check its three facts one by one.
+
+## Signals considered and left out
+
+Three more channels can be read from the same text. None improved a gradient-boosted model on the
+signals under 5-fold cross-validation by repository. Without them it scores AUROC 0.676 / 0.705 /
+0.688 at 5 / 10 / 20 steps; the change each brings is:
+- **Repeated error** (an error line equal to an earlier one in the run): +0.001 / +0.002 / −0.007.
+- **Tests or own script** (whether a run command runs the test suite or a script the agent wrote): −0.003 / +0.002 / −0.006.
+- **Thought phrases** (changing approach, doubt, success, finding the cause, apologising): −0.003 / +0.002 / −0.002.
+
+File identity, kept as `same_file_edit` and `edit_target`, brought −0.001 / +0.006 / +0.010.
 
 ## Release details a user should know
 

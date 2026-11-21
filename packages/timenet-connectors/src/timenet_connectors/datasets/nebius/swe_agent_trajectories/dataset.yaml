@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
-# Each Record is one checkpoint of one run: the run's first 5, 10, 20 or 30 steps, kept only if the run
-# goes on after them. It holds seven per-step signals and the agent's thoughts for those steps. No input
+# Each Record is one checkpoint of one run: the run's first 5, 10, 15, 20 or 30 steps, kept only if the
+# run goes on after them. It holds nine per-step signals and the agent's thoughts for those steps. No input
 # holds the run's outcome, its ending or its length. The split groups runs by repository.
 yaml_schema_version: 1
 dataset_id: nebius/swe_agent_trajectories
@@ -9,9 +9,10 @@ name: SWE-agent trajectories (early warning)
 description: >-
   80,036 SWE-agent runs that try to resolve real GitHub issues, released by Nebius, each labelled
   with whether its final patch passed the tests of the issue's pull request. Each run is cut into
-  checkpoints after 5, 10, 20 and 30 steps while it is still going: 192,428 Records of per-step
+  checkpoints after 5, 10, 15, 20 and 30 steps while it is still going: 235,978 Records of per-step
   signals (thought, command and reply lengths, conversation length, repeated commands, command
-  kind, reply kind) with the agent's thoughts as text and the issue as context. Each checkpoint asks
+  kind, reply kind, edits of the same file, kind of file edited) with the agent's thoughts as text
+  and the issue as context. Each checkpoint asks
   whether the run will resolve its issue, how it will end, and for a rule-made status report.
 license: CC-BY-4.0
 source_url: https://huggingface.co/datasets/nebius/SWE-agent-trajectories
