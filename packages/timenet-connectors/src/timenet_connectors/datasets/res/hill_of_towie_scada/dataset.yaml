@@ -1,16 +1,16 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 yaml_schema_version: 1
 dataset_id: res/hill-of-towie-scada
-dataset_version: 1.0.0
+dataset_version: 2.0.0
 name: Hill of Towie SCADA
 description: >-
-  Ten-minute SCADA means for the Hill of Towie wind farm from January through April 2026.
-  Forecast six active-power readings from the preceding 36 readings of active power, active
-  wind speed, and generator speed. Forecasts start at hourly UTC cutoffs. Each example uses one
-  turbine and one source month and excludes windows with missing required readings. Timestamps
-  label the end of each ten-minute measurement interval. January and February are for training,
-  March for validation, and April for testing. This subset uses the 2026 SCADA archive and static
-  turbine metadata from source release 2.1.0.
+  Ten-minute SCADA for 21 Hill of Towie wind turbines from January 2016 through April 2026.
+  Forecast six observed active-power readings from the preceding 36 readings of active power,
+  wind speed, and generator speed. Task scopes select history on shared turbine records, and
+  target spans select only future power. Hourly UTC cutoffs stay within a calendar month and
+  an evaluation cohort, and every required reading must be available. Training ends September
+  2024 and validation covers October through December 2024. The 2025 to April 2026 test split
+  distinguishes pre-commissioning, commissioning, and the two Dynamic Yaw trial periods.
 license: CC-BY-4.0
 access: open
 source_url: https://zenodo.org/records/22662930
