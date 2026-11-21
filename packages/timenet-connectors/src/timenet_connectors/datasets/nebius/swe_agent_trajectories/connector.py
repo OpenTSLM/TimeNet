@@ -2,7 +2,7 @@
 
 Nebius released the trajectories of SWE-agent runs that try to resolve GitHub issues, each with
 whether its final patch passed the tests of the issue's pull request. Each checkpoint of a run (its
-first 5, 10, 20 or 30 steps, if the run is still going) becomes one Record of per-step signals, with
+first 5, 10, 15, 20 or 30 steps, if the run is still going) becomes one Record of per-step signals, with
 the agent's thoughts for those steps as text. The issue text is a dataset annotation, stored once per
 instance. :mod:`~timenet_connectors.datasets.nebius.swe_agent_trajectories.tasks` describes the
 three tasks of each checkpoint.
@@ -24,6 +24,7 @@ from timenet.types.text import LazyTextList
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     ActionKind,
+    EditTarget,
     ObservationKind,
     Run,
     read_runs,
@@ -79,13 +80,27 @@ SPECS = {
         dtype="enum",
         categories=tuple(ObservationKind),
     ),
+    "same_file_edit": TimeSeriesSpec(
+        spec_type="agent_same_file_edit",
+        name="Edit changes the same file as the edit before",
+        unit_value=ureg.dimensionless,
+        dtype="bool",
+    ),
+    "edit_target": TimeSeriesSpec(
+        spec_type="agent_edit_target",
+        name="Kind of file an edit changes",
+        unit_value=ureg.dimensionless,
+        dtype="enum",
+        categories=tuple(EditTarget),
+    ),
 }
+ENUM_SIGNALS = frozenset(name for name, spec in SPECS.items() if spec.dtype == "enum")
 
 
 def _values(run: Run, name: str, steps: int) -> pa.Array:
     """The first ``steps`` values of one step signal of a run."""
     values = getattr(run.steps, name)[:steps]
-    if name in {"action_kind", "observation_kind"}:
+    if name in ENUM_SIGNALS:
         # An enum series loads as dictionary-encoded labels.
         return pa.array([str(value) for value in values], type=pa.string()).dictionary_encode()
     return pa.array(values)

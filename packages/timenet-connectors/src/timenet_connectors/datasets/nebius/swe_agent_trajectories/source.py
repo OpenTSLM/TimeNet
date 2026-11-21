@@ -13,7 +13,7 @@ from collections.abc import Iterator
 import dataclasses
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import zlib
 
@@ -146,6 +146,24 @@ _SILENT_SUCCESS = "Your command ran successfully and did not produce any output"
 _COMMAND_ERRORS = ("command not found", "No such file or directory", "syntax error near unexpected token")
 
 
+@unique
+class EditTarget(StrEnum):
+    """Which kind of file an ``edit`` step changes, by :func:`edit_target`."""
+
+    NONE = "none"
+    """Not an edit, or an edit with no file open."""
+    SOURCE = "source"
+    TEST = "test"
+    OWN_SCRIPT = "own_script"
+    """A file the agent created earlier in the run, such as a reproduction script."""
+
+
+# Every reply of SWE-agent ends with the file it has open, "(Open file: <absolute path>)", or "n/a".
+_OPEN_FILE = re.compile(r"\(Open file: ([^)\n]*)\)")
+_NO_FILE = "n/a"
+_TEST_DIRS = frozenset({"test", "tests", "testing"})
+
+
 def split_message(text: str) -> tuple[str, str]:
     """Split an agent message into its thought and its command, as SWE-agent's ThoughtActionParser does.
 
@@ -209,6 +227,77 @@ def observation_kind(text: str) -> ObservationKind:
     return ObservationKind.OUTPUT
 
 
+def open_file(reply: str) -> str | None:
+    """The file a reply says is open, from SWE-agent's ``(Open file: ...)`` footer.
+
+    Returns:
+        The footer's value (an absolute path, or ``n/a`` when no file is open), or ``None`` when the
+        reply has no footer.
+    """
+    found = _OPEN_FILE.findall(reply)
+    return found[-1].strip() if found else None
+
+
+def is_test_path(path: str) -> bool:
+    """Whether a path names a test file of the repository.
+
+    SWE-agent paths start with the repository's folder (``/pytest/src/...``), so that first part is
+    skipped: a repository called ``pytest`` does not make all its files tests. A test file sits in a
+    ``test``, ``tests`` or ``testing`` folder, or is named ``test_*``, ``*_test.py`` or ``conftest.py``.
+
+    Returns:
+        ``True`` for a test file.
+    """
+    parts = PurePosixPath(path).parts
+    inside = parts[2:] if parts[:1] == ("/",) else parts[1:]
+    if not inside:
+        return False
+    name = inside[-1].lower()
+    folders = {part.lower() for part in inside[:-1]}
+    return bool(folders & _TEST_DIRS) or name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
+
+
+def edit_target(path: str, created: set[str]) -> EditTarget:
+    """Classify the file an edit changes: one the agent created in this run, a test file, or source.
+
+    Returns:
+        The target; the agent's own file wins over a test-like name.
+    """
+    if path in created:
+        return EditTarget.OWN_SCRIPT
+    return EditTarget.TEST if is_test_path(path) else EditTarget.SOURCE
+
+
+class _EditFiles:
+    """Follow the open file and the files the agent created, to classify each step's edit.
+
+    An ``edit`` command names no file: it changes the file that is open before it, which the previous
+    reply's footer names.
+    """
+
+    def __init__(self) -> None:
+        self.current: str | None = None
+        self.created: set[str] = set()
+        self.last_edited: str | None = None
+        self.targets: list[EditTarget] = []
+        self.same_file: list[bool] = []
+
+    def observe(self, kind: ActionKind, reply: str) -> None:
+        """Classify one step's edit by the file open before it, then read the reply's footer."""
+        target, same = EditTarget.NONE, False
+        if kind == ActionKind.EDIT and self.current is not None:
+            target, same = edit_target(self.current, self.created), self.current == self.last_edited
+            self.last_edited = self.current
+        self.targets.append(target)
+        self.same_file.append(same)
+        footer = open_file(reply)
+        if footer is not None:
+            self.current = None if footer == _NO_FILE else footer
+            # A create opens the new file, so the footer after it names the file the agent made.
+            if kind == ActionKind.CREATE and self.current is not None:
+                self.created.add(self.current)
+
+
 @dataclass(frozen=True)
 class Steps:
     """The per-step signals of a run's first steps, one entry per step."""
@@ -222,6 +311,10 @@ class Steps:
     """Whether the step's command equals an earlier command of the run, character for character."""
     action_kind: tuple[ActionKind, ...]
     observation_kind: tuple[ObservationKind, ...]
+    same_file_edit: np.ndarray
+    """Whether the step is an edit of the same file as the run's edit before it."""
+    edit_target: tuple[EditTarget, ...]
+    """Which kind of file the step's edit changes: the file open before the step, by its footer."""
     thoughts: bytes
     """The thoughts, concatenated and compressed, because the release holds about 0.7 GB of them.
     ``thought_chars`` holds where each one ends."""
@@ -315,6 +408,7 @@ def _steps(messages: list[Message], opening: int, context: str) -> tuple[int, St
     numbers = np.zeros((4, kept), dtype=np.int32)
     repeated = np.zeros(kept, dtype=bool)
     actions, observations, thoughts, seen = [], [], [], set()
+    files = _EditFiles()
     for step in range(kept):
         thought, command = split_message(texts[2 * step])
         # The final step has no reply; every kept step of a checkpoint does.
@@ -323,7 +417,9 @@ def _steps(messages: list[Message], opening: int, context: str) -> tuple[int, St
         numbers[3, step] = len(texts[2 * step]) + len(reply)
         repeated[step] = command in seen
         seen.add(command)
-        actions.append(action_kind(command))
+        kind = action_kind(command)
+        files.observe(kind, reply)
+        actions.append(kind)
         observations.append(observation_kind(reply))
         thoughts.append(thought)
     return n_steps, Steps(
@@ -334,6 +430,8 @@ def _steps(messages: list[Message], opening: int, context: str) -> tuple[int, St
         repeated_action=repeated,
         action_kind=tuple(actions),
         observation_kind=tuple(observations),
+        same_file_edit=np.array(files.same_file, dtype=bool),
+        edit_target=tuple(files.targets),
         thoughts=zlib.compress("".join(thoughts).encode()),
     )
 

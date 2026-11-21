@@ -18,6 +18,7 @@ from timenet.types.splits import Split
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     EXIT_STATUSES,
     ActionKind,
+    EditTarget,
     Ending,
     ObservationKind,
     Run,
@@ -25,7 +26,9 @@ from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
 from timenet_connectors.splitting import StratifiedSplitter
 
 
-CHECKPOINTS = (5, 10, 20, 30)
+# Step 15 sits in the middle of a typical run (the median run has 17 steps), where a live monitor
+# still has most of the run ahead of it.
+CHECKPOINTS = (5, 10, 15, 20, 30)
 
 RESOLVED = "resolved"
 UNRESOLVED = "unresolved"
@@ -111,13 +114,15 @@ def status(checkpoint: Checkpoint) -> str:
     """Write the status report of a checkpoint from its steps' signals and the run's outcome.
 
     Returns:
-        Three sentences on the steps so far, then one on how many more steps the run will take, how it
+        Four sentences on the steps so far, then one on how many more steps the run will take, how it
         will end and whether the agent will resolve the issue.
     """
     k, run = checkpoint.steps, checkpoint.run
     actions = Counter(run.steps.action_kind[:k])
     replies = Counter(run.steps.observation_kind[:k])
     repeats = int(run.steps.repeated_action[:k].sum())
+    same_file = int(run.steps.same_file_edit[:k].sum())
+    own = Counter(run.steps.edit_target[:k])[EditTarget.OWN_SCRIPT]
     looked = actions[ActionKind.READ] + actions[ActionKind.SEARCH]
     rest = run.n_steps - k
     return (
@@ -129,6 +134,8 @@ def status(checkpoint: Checkpoint) -> str:
         f"{_count(replies[ObservationKind.TRACEBACK], 'reply', 'replies')} showed a Python traceback, "
         f"{_count(replies[ObservationKind.COMMAND_ERROR], 'reply', 'replies')} a command error "
         f"and {_count(replies[ObservationKind.TIMEOUT], 'command')} timed out. "
+        f"{_count(same_file, 'edit')} changed the same file as the edit before, "
+        f"and {_count(own, 'edit')} changed a file the agent had created. "
         f"The conversation holds {int(run.steps.context_chars[k - 1]):,} characters. "
         f"The run will go on for {_count(rest, 'more step')}, then {EXIT_STATUSES[run.exit_status].phrase}, "
         f"and the agent will {'resolve' if run.resolved else 'not resolve'} the issue."

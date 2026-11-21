@@ -14,11 +14,14 @@ from timenet.types.text import read_value
 from timenet_connectors.datasets.nebius.swe_agent_trajectories import SWEAgentTrajectoriesConnector, source
 from timenet_connectors.datasets.nebius.swe_agent_trajectories.source import (
     ActionKind,
+    EditTarget,
     ObservationKind,
     Run,
     SourceRow,
     action_kind,
+    is_test_path,
     observation_kind,
+    open_file,
     parse_run,
     read_runs,
     split_message,
@@ -41,16 +44,30 @@ def _agent(thought: str, command: str) -> str:
     return f"{thought}\n\n```\n{command}\n```"
 
 
+def _reply(text: str, opened: str) -> str:
+    # Every SWE-agent reply ends with the file it has open and the working directory.
+    return f"{text}\n(Open file: {opened})\n(Current directory: /repo)\nbash-$"
+
+
 # One cycle of steps; a run of n steps repeats it and ends on a submit.
 CYCLE = (
-    (_agent("Let's reproduce the bug first.", "create reproduce.py"), "[File: /repo/reproduce.py (1 lines total)]"),
+    (
+        _agent("Let's reproduce the bug first.", "create reproduce.py"),
+        _reply("[File: /repo/reproduce.py (1 lines total)]", "/repo/reproduce.py"),
+    ),
     (
         _agent("Write the script.", "edit 1:1\nprint(parse(''))\nend_of_edit"),
-        "Your proposed edit has introduced new syntax error(s).",
+        _reply("Your proposed edit has introduced new syntax error(s).", "/repo/reproduce.py"),
     ),
-    (_agent("Run it.", "python reproduce.py"), "Traceback (most recent call last):\n  File ...\nIndexError"),
-    (_agent("Look at the parser.", "open src/parser.py"), "[File: /repo/src/parser.py (120 lines total)]"),
-    (_agent("Search for the call.", "search_dir parse"), 'Found 3 matches for "parse"'),
+    (
+        _agent("Run it.", "python reproduce.py"),
+        _reply("Traceback (most recent call last):\n  File ...\nIndexError", "/repo/reproduce.py"),
+    ),
+    (
+        _agent("Look at the parser.", "open src/parser.py"),
+        _reply("[File: /repo/src/parser.py (120 lines total)]", "/repo/src/parser.py"),
+    ),
+    (_agent("Search for the call.", "search_dir parse"), _reply('Found 3 matches for "parse"', "/repo/src/parser.py")),
 )
 
 
@@ -171,6 +188,9 @@ def test_a_run_keeps_its_first_steps_and_its_outcome_apart() -> None:
     # The final step has no reply.
     assert run.steps.observation_chars[-1] == 0
     assert list(run.steps.repeated_action) == [False, False, False, False, False, True, False]
+    # The one edit changes reproduce.py, which the agent created at the step before.
+    assert list(run.steps.edit_target) == ["none", "own_script", "none", "none", "none", "none", "none"]
+    assert not run.steps.same_file_edit.any()
     opening = len(SYSTEM) + len(f"ISSUE:\n{ISSUE}\n\nINSTRUCTIONS:\nFix it.")
     first = len(CYCLE[0][0]) + len(CYCLE[0][1])
     assert run.steps.context_chars[0] == opening + first
@@ -186,16 +206,87 @@ def test_a_thought_is_kept_as_written() -> None:
     assert run.steps.thought_chars[0] == len(run.steps.thought_texts(1)[0])
 
 
+def _steps_row(steps: list[tuple[str, str]]) -> dict:
+    """A row whose run takes the given (agent message, reply) steps, then submits."""
+    row = _row(0, 1, 2, resolved=False)
+    opening, final = row["trajectory"][:2], row["trajectory"][-1]
+    middle = [message for agent, reply in steps for message in (_message("ai", agent), _message("user", reply))]
+    row["trajectory"] = [*opening, *middle, final]
+    return row
+
+
+def test_an_edit_is_classified_by_the_file_open_before_it() -> None:
+    run = _parse(
+        _steps_row(
+            [
+                (_agent("Open the parser.", "open src/parser.py"), _reply("[File: ...]", "/repo/src/parser.py")),
+                (_agent("Fix it.", "edit 1:2\nx\nend_of_edit"), _reply("[File: ...]", "/repo/src/parser.py")),
+                (_agent("Fix it again.", "edit 3:4\ny\nend_of_edit"), _reply("[File: ...]", "/repo/src/parser.py")),
+                (
+                    _agent("Open a test.", "open tests/test_parser.py"),
+                    _reply("[File: ...]", "/repo/tests/test_parser.py"),
+                ),
+                (
+                    _agent("Change the test.", "edit 1:1\nz\nend_of_edit"),
+                    _reply("[File: ...]", "/repo/tests/test_parser.py"),
+                ),
+                (_agent("Write a check.", "create check_fix.py"), _reply("[File: ...]", "/repo/check_fix.py")),
+                (_agent("Fill it.", "edit 1:1\nprint(1)\nend_of_edit"), _reply("[File: ...]", "/repo/check_fix.py")),
+                (_agent("Open a typo.", "open missing.py"), _reply("File missing.py not found", "n/a")),
+                (_agent("Edit blind.", "edit 1:1\nw\nend_of_edit"), _reply("No file open.", "n/a")),
+            ]
+        )
+    )
+    assert list(run.steps.edit_target) == [
+        EditTarget.NONE,
+        EditTarget.SOURCE,
+        EditTarget.SOURCE,
+        EditTarget.NONE,
+        EditTarget.TEST,
+        EditTarget.NONE,
+        EditTarget.OWN_SCRIPT,
+        EditTarget.NONE,
+        EditTarget.NONE,
+        EditTarget.NONE,
+    ]
+    # Only the second edit of parser.py follows an edit of the same file; the blind edit has no file.
+    assert list(run.steps.same_file_edit) == [False, False, True, False, False, False, False, False, False, False]
+
+
+@pytest.mark.parametrize(
+    ("path", "test"),
+    [
+        ("/repo/tests/a.py", True),
+        ("/repo/src/test_a.py", True),
+        ("/repo/src/a_test.py", True),
+        ("/repo/conftest.py", True),
+        ("/repo/testing/util.py", True),
+        # The first part is the repository's folder, so a repository called pytest is not all tests.
+        ("/pytest/src/_pytest/main.py", False),
+        ("/repo/src/latest.py", False),
+        ("/repo/contest/x.py", False),
+    ],
+)
+def test_a_test_file_is_recognised_by_its_folders_and_name(path: str, test: bool) -> None:
+    assert is_test_path(path) is test
+
+
+def test_the_open_file_comes_from_the_footer() -> None:
+    assert open_file(_reply("output", "/repo/a.py")) == "/repo/a.py"
+    assert open_file(_reply("output", "n/a")) == "n/a"
+    assert open_file("no footer") is None
+
+
 def test_only_a_run_that_goes_on_gets_a_checkpoint() -> None:
     assert [c.steps for c in checkpoints(_parse(_row(0, 1, 5, resolved=False)))] == []
     assert [c.steps for c in checkpoints(_parse(_row(0, 1, 6, resolved=False)))] == [5]
-    assert [c.steps for c in checkpoints(_parse(_row(0, 1, 33, resolved=False)))] == [5, 10, 20, 30]
+    assert [c.steps for c in checkpoints(_parse(_row(0, 1, 33, resolved=False)))] == [5, 10, 15, 20, 30]
 
 
 def test_records_hold_the_steps_so_far_and_nothing_about_the_outcome(dataset) -> None:
     records = list(dataset.records)
-    # Per repository: the 4-step run gives none, the 12-step run 2, the 33-step run 4.
-    assert len(records) == 12 * 6
+    # Per repository: the 4-step run gives none, the 12-step run 2, the 33-step run 5.
+    assert len(records) == 12 * 7
     for record in records:
         k = record.metadata["checkpoint_steps"]
         assert set(record.metadata) == {"run_id", "instance_id", "repository", "model_name", "checkpoint_steps"}
@@ -209,8 +300,8 @@ def test_records_hold_the_steps_so_far_and_nothing_about_the_outcome(dataset) ->
 
 def test_each_checkpoint_gives_three_tasks_with_the_issue_and_thoughts_as_input(dataset) -> None:
     tasks = list(dataset.iter_tasks())
-    assert len(tasks) == 3 * 12 * 6
-    assert Counter(type(task) for task in tasks) == {ClassificationTask: 2 * 72, AnswerTask: 72}
+    assert len(tasks) == 3 * 12 * 7
+    assert Counter(type(task) for task in tasks) == {ClassificationTask: 2 * 84, AnswerTask: 84}
     # One issue annotation per instance with a checkpoint: instances 1 and 2 of each repository.
     issues = [a for a in dataset.annotations if a.key == "issue"]
     assert len(issues) == 24
@@ -232,10 +323,13 @@ def test_the_status_report_states_the_steps_so_far_and_what_comes() -> None:
         "In its first 5 steps the agent edited files 1 time, created 1 file, ran code 1 time, "
         "read or searched the repository 2 times and repeated an earlier command 0 times. "
         "The linter rejected 1 edit, 1 reply showed a Python traceback, 0 replies a command error "
-        f"and 0 commands timed out. The conversation holds {int(run.steps.context_chars[4]):,} characters. "
+        "and 0 commands timed out. 0 edits changed the same file as the edit before, and 1 edit changed "
+        f"a file the agent had created. The conversation holds {int(run.steps.context_chars[4]):,} characters. "
         "The run will go on for 7 more steps, then the agent will submit its changes, and the agent will "
         "resolve the issue."
     )
+    # By step 10 the cycle has edited reproduce.py twice in a row.
+    assert "1 edit changed the same file as the edit before, and 2 edits changed a file" in status(checkpoints(run)[1])
 
 
 def test_no_repository_is_in_two_partitions(dataset) -> None:
@@ -255,6 +349,8 @@ def test_dataset_survives_storage_round_trip(dataset, tmp_path: Path) -> None:
         signals = {signal.name: signal for signal in record.sources[0].signals}
         assert signals["action_kind"].to_arrow().to_pylist() == ["create", "edit", "run", "read", "search"]
         assert signals["observation_kind"].to_arrow().to_pylist()[1] == "edit_rejected"
+        assert signals["edit_target"].to_arrow().to_pylist() == ["none", "own_script", "none", "none", "none"]
+        assert signals["same_file_edit"].to_arrow().to_pylist() == [False] * 5
         assert _thoughts(record)[0] == "Let's reproduce the bug first."
         restored_tasks = list(restored.iter_tasks())
         original = list(dataset.iter_tasks())
