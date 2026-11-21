@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: res/hill-of-towie-scada
+dataset_version: 2.0.0
+name: Hill of Towie SCADA
+description: >-
+  Ten-minute SCADA for 21 Hill of Towie wind turbines from January 2016 through April 2026.
+  Forecast six observed active-power readings from the preceding 36 readings of active power,
+  wind speed, and generator speed. Task scopes select history on shared turbine records, and
+  target spans select only future power. Hourly UTC cutoffs stay within a calendar month and
+  an evaluation cohort, and every required reading must be available. Training ends September
+  2024 and validation covers October through December 2024. The 2025 to April 2026 test split
+  distinguishes pre-commissioning, commissioning, and the two Dynamic Yaw trial periods.
+license: CC-BY-4.0
+access: open
+source_url: https://zenodo.org/records/22662930
+citation: >-
+  Clerc, A., and Lingkan, E. (2026). Hill of Towie wind farm open dataset (Version 2.1.0).
+  Zenodo. https://doi.org/10.5281/zenodo.22662930. Released by RES on behalf of TRIG.
+domains:
+  - energy
+tags:
+  - wind-energy
+  - scada
+  - forecasting
