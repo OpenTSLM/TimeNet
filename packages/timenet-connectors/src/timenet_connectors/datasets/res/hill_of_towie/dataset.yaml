@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: res/hill_of_towie
+dataset_version: 1.1.0
+name: Hill of Towie wind farm
+description: >-
+  Ten-minute SCADA data of the 21 Siemens SWT-2.3-VS-82 turbines (2,300 kW each) of the Hill of
+  Towie wind farm in the United Kingdom, for January 2016 to August 2024. One Record is one
+  turbine for one UTC day, with 144 steps of six signals: active power, wind speed, blade pitch
+  angle, rotor speed, nacelle direction, and ambient temperature. Each value is the mean of a
+  ten-minute period. The source states the end of each period. Here a value is at the start of
+  its period. A period that the source leaves empty or has no row for stays missing. A day
+  without a row gets no Record. The labels are the shutdown durations of the release: the
+  seconds of shutdown of each turbine and period, which RES computed from the SCADA data and
+  the logs of its operators. Each run of periods with shutdown time is an annotation with the
+  seconds of shutdown in the run. The tasks ask whether the turbine was shut down on the day,
+  for how many minutes, and in which ten-minute periods.
+  A further task asks whether the turbine had at least 60 minutes of downtime on the day. Only
+  shutdown time in periods with wind of 4 m/s or more counts, because shutdown in lighter wind
+  cannot be told from waiting for wind in the signals. A day with such an hour is downtime. A
+  day with none of it, and less than ten minutes of shutdown in periods without a wind value,
+  is no downtime. Other days get no such task. The metadata of each Record states how many of
+  the 144 steps have no power value, so that a user can keep the days with full coverage. The release gives no reason for a
+  shutdown and no curtailment label. The split follows dates, the same for all
+  turbines: days before 2022 are train, 2022 is validation, and 2023 to August 2024 is test. If
+  a run of shutdown runs across one of the two dates, the days of that turbine that it touches
+  get no task. The power setpoint, the status
+  counters, and the alarm log of the source are not signals, because they state the answer.
+license: CC-BY-4.0
+source_url: https://doi.org/10.5281/zenodo.22662930
+citation: >-
+  Clerc, A., & Lingkan, E. (2026). Hill of Towie wind farm open dataset (2.1.0). Zenodo.
+  https://doi.org/10.5281/zenodo.22662930
+domains:
+  - energy
+  - industrial
+tags:
+  - wind-turbine
+  - scada
+  - classification
+  - temporal-localization
+  - scalar-prediction
