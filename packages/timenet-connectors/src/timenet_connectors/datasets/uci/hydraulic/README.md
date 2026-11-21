@@ -1,0 +1,110 @@
+# Condition Monitoring of Hydraulic Systems
+
+[UCI dataset 447](https://archive.ics.uci.edu/dataset/447/condition+monitoring+of+hydraulic+systems)
+holds 2,205 load cycles of a hydraulic test rig that ZeMA gGmbH recorded. The rig has a primary
+working circuit and a secondary cooling-filtration circuit, connected through the oil tank. It
+repeats a constant load cycle of 60 seconds while the condition of four components (cooler, valve,
+pump, accumulator) is varied in grades.
+
+The connector downloads the archive from the UCI repository and checks its SHA-256. It keeps every
+value of the release. It converts each value to float32: every value in the release has at most
+five significant digits, so float32 keeps its decimal reading. Conversion holds all values in
+memory, about 385 MB.
+
+## Records and signals
+
+Each cycle becomes one Record. `record.metadata["cycle"]` is the row number of the release, which
+the release uses as the cycle number. The record has no absolute start time, because the release
+states none. All signals start at the record origin.
+
+Each sensor becomes one Signal on a regular axis at the rate the release states. Nothing is
+resampled.
+
+| Source | Signals | Rate | Values per cycle | Unit |
+| --- | --- | --- | --- | --- |
+| `Pressure` | `PS1` to `PS6` | 100 Hz | 6,000 | bar |
+| `Motor power` | `EPS1` | 100 Hz | 6,000 | W |
+| `Volume flow` | `FS1`, `FS2` | 10 Hz | 600 | l/min |
+| `Temperature` | `TS1` to `TS4` | 1 Hz | 60 | degree Celsius |
+| `Vibration` | `VS1` | 1 Hz | 60 | mm/s |
+| `Efficiency factor` | `SE` | 1 Hz | 60 | % |
+| `Virtual` | `CE` (cooling efficiency), `CP` (cooling power) | 1 Hz | 60 | %, kW |
+
+The release names `CE` and `CP` virtual sensors: they are computed from other process values.
+
+## Tasks
+
+Each cycle has four `ClassificationTask`s, one per component, in this order. Each label set is
+ordered from the healthy grade to the worst, and its `name` annotation is the component key. Each
+label's description states the grade that `profile.txt` writes.
+
+| Component key | Grade: label |
+| --- | --- |
+| `cooler_condition` (%) | 100: full efficiency, 20: reduced efficiency, 3: close to total failure |
+| `valve_condition` (%) | 100: optimal switching behavior, 90: small lag, 80: severe lag, 73: close to total failure |
+| `internal_pump_leakage` | 0: no leakage, 1: weak leakage, 2: severe leakage |
+| `hydraulic_accumulator` (bar) | 130: optimal pressure, 115: slightly reduced pressure, 100: severely reduced pressure, 90: close to total failure |
+
+The release spells the cooler label "reduced effifiency". The label corrects the spelling.
+
+Each record also carries the five values of `profile.txt` as annotations: the four grades under
+the component keys, and `stable_flag` (0: conditions were stable, 1: static conditions might not
+have been reached yet). These annotations hold the answers of the tasks. Do not pass them to a model
+as input. The tasks keep the 756 cycles with `stable_flag` 1; filter on the annotation to drop them.
+
+The connector adds no joint task over the four components. A joint label would have 144 classes.
+To use one, combine the four targets of a cycle.
+
+## Splits
+
+The release has no official partition. The connector generates train, validation, and test
+partitions with `StratifiedSplitter`: ten `StratifiedGroupKFold` folds (8 train, 1 validation,
+1 test), scikit-learn 1.9.1, seed 42. All four tasks of a cycle share its partition.
+
+- Grouped by the four-grade condition. The rig holds one condition for runs of consecutive cycles,
+  and neighboring cycles under one condition are near copies. A random split would put near copies
+  of a test cycle in train. Each of the 144 conditions stays in one partition, so a model is tested
+  on combinations of grades it has not seen.
+- Stratified by the accumulator grade. The release's documentation names the accumulator the
+  hardest of the four targets.
+- The conversion checks that the train partition holds every grade of every component, and
+  raises `TimeNetConnectorError` if it does not.
+
+The conditions hold between 10 and 230 cycles, so the achieved sizes differ from 80/10/10:
+
+| Partition | Cycles | Tasks | Conditions | Cycles with `stable_flag` 1 |
+| --- | --- | --- | --- | --- |
+| train | 1,877 | 7,508 | 114 | 728 |
+| validation | 164 | 656 | 15 | 14 |
+| test | 164 | 656 | 15 | 14 |
+
+Cycles per grade in each partition (train / validation / test):
+
+| Component | Grade | Train | Validation | Test |
+| --- | --- | --- | --- | --- |
+| cooler | 100 | 647 | 42 | 52 |
+| cooler | 20 | 650 | 62 | 20 |
+| cooler | 3 | 580 | 60 | 92 |
+| valve | 100 | 1,017 | 54 | 54 |
+| valve | 90 | 290 | 40 | 30 |
+| valve | 80 | 270 | 40 | 50 |
+| valve | 73 | 300 | 30 | 30 |
+| pump | 0 | 1,099 | 61 | 61 |
+| pump | 1 | 431 | 30 | 31 |
+| pump | 2 | 347 | 73 | 72 |
+| accumulator | 130 | 517 | 41 | 41 |
+| accumulator | 115 | 317 | 41 | 41 |
+| accumulator | 100 | 317 | 41 | 41 |
+| accumulator | 90 | 726 | 41 | 41 |
+
+These partitions are generated by TimeNet, not published by the authors of the data set.
+
+## Limitations
+
+- The validation and test partitions are small (164 cycles each), because whole conditions move
+  between partitions and the large conditions fell into train.
+- Almost all cycles with `stable_flag` 1 (728 of 756) are in train.
+- `CE` is computed from other sensors and follows the cooler grade closely. A model can read the
+  cooler grade from it. Drop the `Virtual` source to measure a model without it.
+- The grades describe degradation, so the release notes that they are steps of continuous values
+  rather than distinct categories.
