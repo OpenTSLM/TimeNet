@@ -233,17 +233,6 @@ have a checkpoint.
   BLEU) on the whole answer therefore stays high even when that prediction is wrong. Score the last
   sentence, which starts with "The run will go on for", and check its three facts one by one.
 
-## Signals considered and left out
-
-Three more channels can be read from the same text. None improved a gradient-boosted model on the
-signals under 5-fold cross-validation by repository. Without them it scores AUROC 0.676 / 0.705 /
-0.688 at 5 / 10 / 20 steps; the change each brings is:
-- **Repeated error** (an error line equal to an earlier one in the run): +0.001 / +0.002 / −0.007.
-- **Tests or own script** (whether a run command runs the test suite or a script the agent wrote): −0.003 / +0.002 / −0.006.
-- **Thought phrases** (changing approach, doubt, success, finding the cause, apologising): −0.003 / +0.002 / −0.002.
-
-File identity, kept as `same_file_edit` and `edit_target`, brought −0.001 / +0.006 / +0.010.
-
 ## Release details a user should know
 
 - **The labels depend on the model as much as the issue.** 93 % of runs come from one model (Llama 70B), and each issue is attempted 22 times on average *(measured)*.
