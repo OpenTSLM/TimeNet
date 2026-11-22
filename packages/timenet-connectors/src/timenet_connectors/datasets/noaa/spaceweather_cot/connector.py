@@ -54,10 +54,10 @@ _OMNI2_SHA256 = "41f3b5891ce3f1220719d5c1ea808f3014f28a1704557d3363eefb5ee7c249b
 _DISCUSSION_BASE = "https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/discussion"
 _FORECAST_BASE = "https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/3day_forecast"
 
-# The date range of this release. Both bounds stay inside the single pinned calendar year above,
-# and the first issuance's 24-hour lookback does too (Apr 30 is still 2024).
-_START_DATE = date(2024, 5, 1)
-_END_DATE = date(2024, 11, 30)
+# The date range of this release spans the whole first year of the Forecast Discussion archive
+# (the product began in March 2024) and stays inside the single pinned calendar year above.
+_START_DATE = date(2024, 3, 1)
+_END_DATE = date(2024, 12, 31)
 _ISSUANCE_HOURS_UTC = (0, 12)  # 0030 and 1230 UTC, named by their announced hour.
 _LOOKBACK = timedelta(hours=24)
 
