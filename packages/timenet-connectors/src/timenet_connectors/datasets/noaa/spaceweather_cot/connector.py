@@ -64,7 +64,9 @@ _LOOKBACK = timedelta(hours=24)
 _SECTIONS = ("Solar Activity", "Energetic Particle", "Solar Wind", "Geospace")
 _SUMMARY_MARKER = re.compile(r"^\s*\.24 hr Summary\.\.\.\s*\n", re.MULTILINE)
 _FORECAST_MARKER = re.compile(r"\.Forecast\.\.\.\s*\n")
-_SECTION_HEADER = re.compile(r"^(" + "|".join(re.escape(s) for s in _SECTIONS) + r")\s*$", re.MULTILINE)
+# NOAA titled the second section "Energetic Particle" in most issues but "Energetic
+# Particles" in others (notably early 2024); both spellings name the same section.
+_SECTION_HEADER = re.compile(r"^(Solar Activity|Energetic Particles?|Solar Wind|Geospace)\s*$", re.MULTILINE)
 
 _KP_RE = re.compile(r"greatest expected 3 hr Kp for [^\n]*? is ([\d.]+)")
 _R1R2_RE = re.compile(r"\nR1-R2\s+(\d+)%")
@@ -317,10 +319,9 @@ def _parse_discussion(text: str) -> tuple[str, str]:
         TimeNetConnectorError: If the text does not have exactly the four expected section headers.
     """
     headers = list(_SECTION_HEADER.finditer(text))
-    if [h.group(1) for h in headers] != list(_SECTIONS):
-        raise TimeNetConnectorError(
-            f"expected section headers {list(_SECTIONS)} in order, found {[h.group(1) for h in headers]}"
-        )
+    names = ["Energetic Particle" if h.group(1) == "Energetic Particles" else h.group(1) for h in headers]
+    if names != list(_SECTIONS):
+        raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
     summaries, forecasts = [], []
     for index, header in enumerate(headers):
         start = header.end()
