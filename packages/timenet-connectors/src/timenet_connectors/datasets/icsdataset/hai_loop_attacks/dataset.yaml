@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: icsdataset/hai-loop-attacks
+dataset_version: 1.0.0
+source_revision: 2a814cebc9a66b06c9e5cd545e2d72e65d383737
+name: HAI loop attacks
+description: >-
+  24,132 windows of 300 seconds from the HAI security dataset, each seen through one control loop
+  and labelled attack or normal. HAI records a hardware-in-the-loop power plant testbed once per
+  second, in four versions (20.07, 21.03, 22.04 and 23.05), with staged attacks on its control
+  loops. Each of the 17 data files that hold examples is one record. Its signals are the loop
+  series that the examples use (setpoint, measurement and command of six loops; 21 to 23 per
+  version), in float64 on a one-second axis, under their column names in that version. Each
+  example is a classification task scoped to its window and to the 1 to 5 series of its loop.
+  Its rationale is a rule-written text that reads the series and ends with the label. Each of the
+  1,458 attack examples also has a localization task for the attack interval inside the window.
+  Splits are by whole file, so no
+  attack crosses splits: train 822 attack and 17,814 normal, validation 144 and 948, test 492 and
+  3,912. A frozen table names the windows, loops, labels and splits. It derives from HAI, so it is
+  published under CC BY-SA 4.0 in its own repository (github.com/vid-t/hai-loop-attacks-data),
+  outside this package, and the connector downloads it pinned by commit and SHA-256; the series
+  come from the pinned HAI files. Task
+  metadata marks the scored window of each attack (`scored`), attack examples whose series show
+  neither a level shift nor a swing change (`no_visible_change`), normal boiler-loop examples that
+  start or stop swinging when a neighbouring loop is attacked (`reacting`), and a class-balanced
+  training sample (`train_use`). See the connector README for the label rule and the limits.
+license: CC-BY-SA-4.0
+license_url: https://creativecommons.org/licenses/by-sa/4.0/
+source_url: https://github.com/icsdataset/hai
+citation: >-
+  Shin, H.-K., Lee, W., Choi, S., Yun, J.-H., & Min, B.-G. (2023). HAI security datasets.
+  https://github.com/icsdataset/hai. For HAI 21.03: Shin, H.-K., Lee, W., Yun, J.-H., & Min, B.-G.
+  (2021). Two ICS Security Datasets and Anomaly Detection Contest on the HIL-Based Augmented ICS
+  Testbed. Cyber Security Experimentation and Test Workshop (CSET '21), 36-40.
+  https://doi.org/10.1145/3474718.3474719. For HAI 20.07: Shin, H.-K., Lee, W., Yun, J.-H., &
+  Kim, H. (2020). HAI 1.0: HIL-Based Augmented ICS Security Dataset. 13th USENIX Workshop on Cyber
+  Security Experimentation and Test (CSET 20).
+domains:
+  - industrial
+  - energy
+tags:
+  - ics-security
+  - anomaly-detection
+  - control-loops
+  - classification
+  - temporal-localization
+  - generated-supervision
