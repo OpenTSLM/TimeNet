@@ -78,7 +78,7 @@ def test_exact_sensor_values_are_past_only(tmp_path):
 
 @pytest.mark.parametrize("field,first,second,expected", [
     ("cycle", 2, 1, "Duplicate"),
-    ("cycle", 2, 9, "Noncontiguous"),
+    ("cycle", 2, 1000, "Noncontiguous"),
     ("unit", 1, 1.5, "positive integers"),
     ("sensor_1", 2, np.nan, "Non-finite"),
 ])
