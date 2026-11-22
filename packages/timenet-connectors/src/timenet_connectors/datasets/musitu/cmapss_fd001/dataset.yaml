@@ -8,10 +8,10 @@ description: >-
   multivariate windows. Each task predicts remaining useful life in cycles.
   Engine IDs do not cross the train/validation partition. NASA official test
   engines are used for test-only endpoint evaluations.
-license: other
+license: OTHER
 source_url: https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/
 domains:
-  - engineering
+  - industrial
 tags:
   - predictive-maintenance
   - time-series
