@@ -154,15 +154,38 @@ def timenet_user_agent() -> str:
     return f"timenet/{version}"
 
 
-def _raise_for_status(response: httpx.Response) -> None:
+class RegistryForbiddenError(TimeNetRegistryError):
+    """The registry service refused the request (403)."""
+
+
+def _refusal_reason(response: httpx.Response) -> str:
+    """Return the reason that the service gives for a 401 or a 403.
+
+    Args:
+        response: The error response.
+
+    Returns:
+        The whole ``detail`` text of a JSON body, otherwise the start of the body.
+    """
+    try:
+        detail = response.json()["detail"]
+    except (ValueError, KeyError, TypeError):
+        detail = None
+    return detail if isinstance(detail, str) else response.text[:200]
+
+
+def _raise_for_status(response: httpx.Response, *, anonymous: bool = False) -> None:
     """Map an error response onto a TimeNet error.
 
     Args:
         response: The response to check.
+        anonymous: The request went to the registry API without a token. Then a 401 or a 403 says how to set one.
 
     Raises:
         TimeNetDatasetNotFoundError: On 404.
-        TimeNetRegistryError: On any other 4xx/5xx, with the status and a body snippet.
+        RegistryForbiddenError: On 403, with the reason that the service gives.
+        TimeNetRegistryError: On any other 4xx/5xx, with the status and a body snippet. A 401 carries the reason
+            that the service gives.
     """
     if not response.is_error:
         return
@@ -172,7 +195,14 @@ def _raise_for_status(response: httpx.Response) -> None:
     if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
         retry = response.headers.get("retry-after", "?")
         raise TimeNetRegistryError(f"registry rate-limited (429), retry after {retry}s: {body}")
-    raise TimeNetRegistryError(f"registry request to {response.request.url} failed ({response.status_code}): {body}")
+    failed = f"registry request to {response.request.url} failed ({response.status_code})"
+    hint = ". Set TIMENET_TOKEN or pass token= to RemoteRegistry." if anonymous else ""
+    refused = f"{failed}: {_refusal_reason(response)}{hint}"
+    if response.status_code == httpx.codes.FORBIDDEN:
+        raise RegistryForbiddenError(refused)
+    if response.status_code == httpx.codes.UNAUTHORIZED:
+        raise TimeNetRegistryError(refused)
+    raise TimeNetRegistryError(f"{failed}: {body}")
 
 
 def _download_path(dataset_id: str, version: str, relpath: str) -> str:
@@ -189,12 +219,13 @@ def _download_path(dataset_id: str, version: str, relpath: str) -> str:
     return f"{API_PREFIX}/datasets/{dataset_id}/{version}/download/{relpath}"
 
 
-def _redirect_target(response: httpx.Response, path: str) -> str:
+def _redirect_target(response: httpx.Response, path: str, *, anonymous: bool) -> str:
     """Return a download response's redirect ``Location``, or raise if it did not redirect.
 
     Args:
         response: The download response fetched with ``follow_redirects=False``.
         path: The requested path, for the error message.
+        anonymous: The request carried no token.
 
     Returns:
         The presigned URL from the ``Location`` header.
@@ -204,7 +235,7 @@ def _redirect_target(response: httpx.Response, path: str) -> str:
     """
     if response.is_redirect:
         return response.headers["location"]
-    _raise_for_status(response)
+    _raise_for_status(response, anonymous=anonymous)
     raise TimeNetRegistryError(f"expected a redirect from {path}, got {response.status_code}")
 
 
@@ -280,7 +311,7 @@ class RegistryHttpClient:
         """
         with _reaching(self._base_url):
             response = _send_with_retry(lambda: self._client.get(f"{API_PREFIX}{path}", headers=self.api_headers()))
-        _raise_for_status(response)
+        _raise_for_status(response, anonymous=not self._token)
         return response.text
 
     def post(self, path: str, *, content: bytes | None = None, json: Any = None) -> httpx.Response:
@@ -298,7 +329,7 @@ class RegistryHttpClient:
             response = _send_with_retry(
                 lambda: self._client.post(f"{API_PREFIX}{path}", content=content, json=json, headers=self.api_headers())
             )
-        _raise_for_status(response)
+        _raise_for_status(response, anonymous=not self._token)
         return response
 
     def resolve_presigned(self, dataset_id: str, version: str, relpath: str) -> str:
@@ -320,7 +351,7 @@ class RegistryHttpClient:
             response = _send_with_retry(
                 lambda: self._client.get(path, headers=self.api_headers(), follow_redirects=False)
             )
-        return _redirect_target(response, path)
+        return _redirect_target(response, path, anonymous=not self._token)
 
     def stream_to(self, url: str, sink: BinaryIO) -> None:
         """Stream a presigned URL's bytes into a binary sink (no auth header).

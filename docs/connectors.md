@@ -167,9 +167,9 @@ samples. It contains no custom allocation or imbalance-scoring algorithm.
 
 Nonempty input needs at least as many distinct groups as folds. Scikit-learn rejects inputs where
 every category has fewer samples than folds; a rare category can produce a warning when other
-categories have enough samples. Invalid inputs raise `TimeFValidationError`. Empty input returns
-empty configured partitions. Sample counts and category proportions remain approximate when groups
-have unequal sizes; inspect `splits.counts` and category distributions before publishing.
+categories have enough samples. The splitter rejects invalid inputs. Empty input returns empty
+configured partitions. Sample counts and category proportions remain approximate when groups have
+unequal sizes; inspect `splits.counts` and category distributions before publishing.
 
 The same ordered input, callbacks, seed, and scikit-learn version reproduce the assignment; changing
 input order or adding samples can change it. No global random state is modified. The connectors
@@ -240,13 +240,12 @@ automatically (needed only for gated or private sources). Downloaded source file
 [Settings](client.md#settings)).
 
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
-and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
-at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
-works), and run `timenet-build build <id>` yourself. If no other source of the client provides a
-credentialed dataset, an `open`, `load`, or `download` from a hosted registry raises
-`TimeNetAccessError` instead of serving bytes.
-The error names each `access_url` that the dataset needs, with the release that sets it. A child
-dataset can need the access pages of its ancestors.
+and an `access_url` on its card. The hosted registry does not serve such data, so it is
+build-your-own: get access at the `access_url`, set the provider credential in
+the environment (the way `HF_TOKEN` already works), and run `timenet-build build <id>` yourself.
+If no other source of the client provides a credentialed dataset, an `open`, `load`, or
+`download` from a hosted registry fails instead of serving bytes. The `access_url` is on the card
+of the connector.
 
 ## Downloading artifacts
 
@@ -268,10 +267,10 @@ atomically, through a `.part` temporary file. S3 downloads use boto3 and stay sy
 already parallelizes the transfer of a single object. Both backends skip an existing destination.
 
 Pin every source file outside the Hub. Use a versioned or commit-pinned URL, never a moving branch
-such as `master`, and pass its `sha256`. A mismatch raises `TimeFFormatError`. A cached file is used
-again only while it matches its pin. `ensure_archive` also takes a `filename` override, for URLs
-whose path has no usable name, for example a trailing slash or a `/download` suffix. Call these
-helpers from `download_async`:
+such as `master`, and pass its `sha256`. A mismatch fails the download. A cached file is used again
+only while it matches its pin. `ensure_archive` also takes a `filename` override, for URLs whose
+path has no usable name, for example a trailing slash or a `/download` suffix. Call these helpers
+from `download_async`:
 
 ```python
 from timenet_connectors.download import Artifact, ensure_archive, download_files

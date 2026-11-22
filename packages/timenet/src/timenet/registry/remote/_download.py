@@ -133,7 +133,7 @@ async def _resolve(client: httpx.AsyncClient, headers: dict, dataset_id: str, ve
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _redirect_target
     path = _download_path(dataset_id, version, relpath)
     response = await _send_with_retry_async(lambda: client.get(path, headers=headers, follow_redirects=False))
-    return _redirect_target(response, path)
+    return _redirect_target(response, path, anonymous="Authorization" not in headers)
 
 
 async def _stream_one(  # ruff: ignore[too-many-arguments]

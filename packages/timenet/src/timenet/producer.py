@@ -27,7 +27,6 @@ def build(  # ruff: ignore[too-many-arguments]
     local_registry: str | Path | LocalRegistry | None = None,
     sources: Sequence[ReleaseSource | str | Path] | None = None,
     force: bool = False,
-    open_access_only: bool = False,
     keep_cache: bool = False,
     progress: ProgressCallback | None = None,
 ) -> Path:
@@ -43,7 +42,6 @@ def build(  # ruff: ignore[too-many-arguments]
         sources: Sources, registry URLs, or paths for missing releases, or ``None`` for
             :func:`~timenet.client.default_sources` with ``local_registry`` first.
         force: Build the release again, even if the local registry holds it.
-        open_access_only: Require open access for every release before running the plan.
         keep_cache: Keep the raw downloads in ``TIMENET_CACHE`` after the build.
         progress: A callback for copy and build progress events.
 
@@ -56,7 +54,7 @@ def build(  # ruff: ignore[too-many-arguments]
         TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
         TimeNetVersionUnavailableError: If the requested version differs from the connector's version.
         TimeNetMissingParentError: If no source provides a required parent or payload source.
-        TimeNetAccessError: If no source grants access to a parent or a release violates ``open_access_only``.
+        TimeNetAccessError: If a source lists a parent but no source serves it.
         TimeNetVersionConflictError: If a release to copy has other files than the same version in the local registry.
         TimeNetFileError: If a stored release is damaged and no registry in ``sources`` provides it.
         TimeNetBuildError: If a build fails.
@@ -72,9 +70,7 @@ def build(  # ruff: ignore[too-many-arguments]
     with explain(Facts([target, *parents], target, request=Operation.BUILD, wanted=wanted)):
         # A connector builds only the version of its card, so "latest" asks for that version.
         builder = declared(wanted.dataset_id, None if is_latest(wanted.version) else wanted.version)
-        release, steps = plan_steps(
-            builder, target, parents_from=parents, force_build=force, open_access_only=open_access_only
-        )
+        release, steps = plan_steps(builder, target, parents_from=parents, force_build=force)
         run_plan(Plan(tuple(steps)), target, options=BuildOptions(keep_cache=keep_cache, progress=progress))
     return release_dir(target.root, release)
 
@@ -104,7 +100,7 @@ def publish(
     Raises:
         TimeNetRegistryError: If ``dest`` or ``source`` fails to open as a registry, or ``dest`` is read-only.
         TimeNetDatasetNotFoundError: If ``source`` lacks the release.
-        TimeNetAccessError: If a registry withholds files or requires open access that a copied release lacks.
+        TimeNetAccessError: If the source registry does not serve a release to this caller.
         TimeNetBuildError: If ``dest`` is not local and a copied release records TimeNet code with local changes.
         TimeNetVersionConflictError: If ``dest`` holds different files for the release or a required payload source.
         TimeNetMissingParentError: If a required payload source is missing from ``source`` and incomplete in ``dest``.
@@ -142,7 +138,7 @@ def _publish_from(
 
     Raises:
         TimeNetDatasetNotFoundError: If ``origin`` lacks the release.
-        TimeNetAccessError: If a registry withholds files or requires open access that a copied release lacks.
+        TimeNetAccessError: If the source registry does not serve a release to this caller.
         TimeNetBuildError: If ``dest`` is not local and a copied release records TimeNet code with local changes.
         TimeNetVersionConflictError: If ``dest`` holds different files for the release or a required payload source.
         TimeNetMissingParentError: If a required payload source is missing from ``origin`` and incomplete in ``dest``.

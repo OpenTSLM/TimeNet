@@ -27,7 +27,6 @@ from timenet.registry._paths import release_dir
 from timenet.sources import InstalledConnectors, ReleaseSource
 from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, TimeSeriesSpec, ureg
-from timenet.types.access import AccessRequirement
 from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
 
@@ -123,10 +122,10 @@ def _child_reading(target_registry, *cards, child_release=CHILD):
 
 
 def _gated_remote(tmp_path) -> RemoteRegistry:
-    """Return a remote registry that lists DEMO as credentialed, so it does not serve its files."""
+    """Return a remote registry whose service lists DEMO as credentialed and refuses to serve it."""
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(_demo(make_dataset().metadata.model_copy(update=_GATED)))
-    transport, _ = build_fake(release_dir(origin.root, DEMO))
+    transport, _ = build_fake(release_dir(origin.root, DEMO), gate=True)
     return RemoteRegistry("http://api.local", transport=transport)
 
 
@@ -286,7 +285,8 @@ def test_pins_that_the_target_registry_copy_of_a_payload_source_breaks_fail_the_
 def test_a_release_that_a_source_lists_without_serving_raises_the_access_error(tmp_path):
     with pytest.raises(TimeNetAccessError) as caught:
         read_release(DEMO.dataset_id, None, sources=[_gated_remote(tmp_path)], target_registry=None)
-    assert caught.value.requirements == (AccessRequirement(DEMO, Access.CREDENTIALED, _GATED["access_url"]),)
+    assert caught.value.dataset == DEMO
+    assert "a token grant is required" in str(caught.value)
 
 
 def test_an_exact_version_that_the_connector_does_not_declare_raises_version_unavailable(tmp_path, monkeypatch):

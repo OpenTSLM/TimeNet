@@ -102,8 +102,7 @@ def build(
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
         TimeNetFileError: If a copy of a parent in the local registry is damaged, or a copied file
             does not match its manifest record. The hint of the error names the flags.
-        TimeNetAccessError: If ``--publish-to`` is remote and gets a release without access declared
-            ``open``.
+        TimeNetAccessError: If a registry lists a parent but does not serve it to this caller.
         TimeNetVersionConflictError: If the copy to ``--publish-to`` finds other files of the
             version, or of a payload source of it, in that registry. Nothing is copied then.
     """  # ruff: ignore[docstring-extraneous-exception, escape-sequence-in-docstring] - raised by the build and the publish; the form feed ends the help text
@@ -127,15 +126,7 @@ def build(
                 if not dry_run:
                     typer.echo(str(wanted.version))
                 return
-            # A destination that requires open access holds open releases only. So for such a destination, the
-            # plan refuses another release before any download.
-            plan = plan_release_build(
-                str(wanted),
-                target_registry=local,
-                parents_from=sources,
-                force=force,
-                open_access_only=dest is not None and dest.requires_open_access,
-            )
+            plan = plan_release_build(str(wanted), target_registry=local, parents_from=sources, force=force)
         if dry_run:
             lines = _plan_lines(plan)
             if dest is not None:

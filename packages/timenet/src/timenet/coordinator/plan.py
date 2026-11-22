@@ -30,13 +30,11 @@ from timenet.sources import (
     FoundInConnector,
     FoundInRegistry,
     InstalledConnectors,
-    NotFound,
     NotServed,
     ReleaseLookup,
     ReleaseSource,
     resolve_release,
 )
-from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef
 from timenet.types.version import Version
 
@@ -180,7 +178,7 @@ class Lookups:
         key = (id(registry), reference)
         if key not in self.manifests:
             answer = self.answers.get(key)
-            if isinstance(answer, FoundInRegistry | NotServed) and answer.manifest is not None:
+            if isinstance(answer, FoundInRegistry) and answer.manifest is not None:
                 validate_manifest_reference(answer.manifest, reference)
                 self.manifests[key] = answer.manifest
             else:
@@ -206,8 +204,6 @@ class _Graph:
     """The local registry for copies and builds, or ``None`` for a read that copies and builds nothing."""
     sources: Sequence[ReleaseSource]
     """The sources in preference order. A read reads the target registry like any other source."""
-    open_only: bool
-    """True if each release that the walk visits must declare ``access: open``."""
     builds: bool = True
     """Whether the plan allows builds from installed connectors."""
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
@@ -337,8 +333,6 @@ class _Graph:
             raise TimeFValidationError(f"{reference} must be in a local registry, but the read has none")
         held, damage = self.in_target(reference)
         if held is not None and not force:
-            if self.open_only:
-                require_open_access(held.metadata, held.lineage)
             sources = list(held.payload_sources.values()) if role == "dataset" else []
             self.releases[reference] = _Release(role, True, None, tuple(source.release for source in sources))
             for source in sources:
@@ -385,20 +379,14 @@ class _Graph:
         manifest = self.lookups.manifest(registry, reference)
         if manifest is None:
             raise TimeNetDatasetNotFoundError(f"{registry} no longer holds {reference}")
-        if self.open_only:
-            require_open_access(manifest.metadata, manifest.lineage)
         sources = CopySources()
         if role == "dataset":
             sources = find_payload_sources(
                 reference,
                 manifest,
-                registry,
-                find=lambda source: self.listed(registry, source),
+                find=lambda source: self.served(registry, source),
                 held=lambda source: self.in_target(source)[0],
             )
-        if self.open_only:
-            for found in (*sources.fetched.values(), *sources.held.values()):
-                require_open_access(found.metadata, found.lineage)
         step = CopyStep(reference, registry, with_payload_sources=role == "dataset", force=force)
         # The node holds its final dependencies before the walk visits them. So a release of the walk
         # that depends on it closes a cycle and does not look it up again.
@@ -415,8 +403,6 @@ class _Graph:
             builder: The installed connector that builds the release.
         """
         card = builder.card
-        if self.open_only:
-            require_open_access(card)
         parents = tuple(card.parents.values())
         self.releases[reference] = _Release(role, True, BuildStep(reference, builder), parents)
         # A build opens each of its parents with the payload sources of that parent.
@@ -444,13 +430,13 @@ class _Graph:
         described = describe_searched_sources(searched, reference)
         return TimeNetMissingParentError(reference, needed_by, described, payload_source=role == "payload-source")
 
-    def listed(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
-        """Get a release's manifest if the registry holds the release, also if it does not serve it.
+    def served(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
+        """Get a release's manifest if the registry serves the release.
 
         Returns:
-            The manifest, or ``None`` if the registry does not hold the release.
+            The manifest, or ``None`` if the registry lacks the release or does not serve it to this caller.
         """
-        if isinstance(self.lookups.ask(registry, reference), NotFound):
+        if not isinstance(self.lookups.ask(registry, reference), FoundInRegistry):
             return None
         return self.lookups.manifest(registry, reference)
 
@@ -598,7 +584,6 @@ def plan_steps(
     *,
     parents_from: Sequence[ReleaseSource],
     force_build: bool,
-    open_access_only: bool,
 ) -> tuple[DatasetRef, list[Step]]:
     """Plan the steps to build a dataset and its dependencies.
 
@@ -609,23 +594,17 @@ def plan_steps(
         target_registry: The destination registry.
         parents_from: The sources to search for missing releases, in order.
         force_build: Rebuild the requested release, even if the target registry holds it.
-        open_access_only: Require open access for every release.
 
     Returns:
         The requested release and its steps, with its own build last if needed.
     """
     card = builder.card
-    if open_access_only:
-        require_open_access(card)
     root = builder.release
     # The graph leaves the target registry out of the sources of its copies and builds.
-    graph = _Graph(target_registry, parents_from, open_only=open_access_only)
+    graph = _Graph(target_registry, parents_from)
     # If the target registry already holds the requested release, a reader needs only its payload sources to
     # open it. Its declared parents matter only to a rebuild.
     held, damage = (None, None) if force_build else graph.in_target(root)
-    if held is not None and open_access_only:
-        # The installed card has no lineage, so the check above does not see an ancestor that is not open.
-        require_open_access(held.metadata, held.lineage)
     # The graph holds the requested release before the walk starts. So a release that depends on it
     # closes a cycle, and the walk does not look it up again.
     if held is None:
@@ -674,7 +653,7 @@ def plan_download(
         TimeFFormatError: If a payload source differs from the files that a release pins.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the walk and as values
     others = [source for source in sources if not is_same_registry(source, target_registry)]
-    graph = _Graph(target_registry, others, open_only=False, builds=False, lookups=lookups or Lookups())
+    graph = _Graph(target_registry, others, builds=False, lookups=lookups or Lookups())
     graph.visit(release, None, needed_in_target=True, force=force)
     graph.check()
     return Plan(tuple(graph.create_ordered_steps()))

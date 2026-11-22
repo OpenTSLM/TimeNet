@@ -13,12 +13,12 @@ import httpx
 import pyarrow.fs as pafs
 
 from timenet.config import settings
-from timenet.errors import TimeNetRegistryError
+from timenet.errors import TimeNetAccessError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.remote._download import ByteCountCallback, download_version_files
-from timenet.registry.remote._http import RegistryHttpClient, _reaching
+from timenet.registry.remote._http import RegistryForbiddenError, RegistryHttpClient, _reaching
 from timenet.registry.remote.filesystem import RegistryFileSystem
 from timenet.registry.remote.models import (
     DatasetDetailModel,
@@ -89,9 +89,14 @@ class RemoteRegistry(LazyReadRegistry):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
             TimeFFormatError: If the served manifest is not valid.
+            TimeNetAccessError: If the service does not serve the release to this caller.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the HTTP client and parse_manifest
         resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
-        text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
+        try:
+            text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
+        except RegistryForbiddenError as refusal:
+            release = DatasetRef.parse(f"{dataset_id}@{resolved}")
+            raise TimeNetAccessError(release, None, reason=str(refusal)) from None
         return parse_manifest(text, f"the manifest of {dataset_id}@{resolved} in {self}")
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:

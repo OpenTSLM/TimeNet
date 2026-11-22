@@ -78,15 +78,6 @@ class LocalRegistry(WritableRegistry):
         """
         return False
 
-    @property
-    def requires_open_access(self) -> bool:
-        """Whether local releases must declare open access.
-
-        Returns:
-            ``False``, since a local registry accepts any access level.
-        """
-        return False
-
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 

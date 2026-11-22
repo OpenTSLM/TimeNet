@@ -68,7 +68,7 @@ nothing. If the local registry holds another release under that version, the com
 the build, and the hint names `--force`, which compares a fresh build with the published release.
 While `--force` builds the release again in the local registry. It cannot overwrite a published
 version. If the new build wrote the same files, the publish copies nothing. If it wrote other files,
-the publish raises `TimeNetVersionConflictError`, and the change needs a new version.
+the publish fails, and the change needs a new version.
 
 A remote destination holds only releases built from committed TimeNet code, as
 [Clean code provenance for remote registries](../build.md#clean-code-provenance-for-remote-registries)
@@ -108,7 +108,7 @@ builds, and publishes nothing.
 | `2` | The command or one of its options is invalid, for example an unknown dataset ID, or a registry flag that names no registry. |
 
 If an isolated build cannot make its environment, for example because `uv` is missing, the command
-raises `TimeNetIsolationError`.
+fails.
 
 Unexpected programming errors keep their traceback.
 

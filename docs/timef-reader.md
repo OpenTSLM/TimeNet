@@ -43,7 +43,7 @@ Catalog connections close before the process forks, because DuckDB cannot share 
 fork. Each one opens again on its next query, in the parent and in a forked data-loader worker
 alike, so a task stream that was in progress when the process forked continues. Forking while other
 threads use readers is not supported: a read that the fork's closing cuts short in another thread
-raises `TimeFReaderError`. Use the `spawn` or `forkserver` start method there.
+fails. Use the `spawn` or `forkserver` start method there.
 
 ## What loads when
 
@@ -198,12 +198,12 @@ The reader translates the parent's ID to the local copy through the catalog, the
 from whichever release stores them.
 
 An ID that names nothing, an unknown alias or parent, and a stored object of another kind, such as
-`get(AnswerTask, ...)` on a classification task, raise `TimeFNotFoundError`, which subclasses both
-`TimeFValidationError` and `LookupError`. An edit such as `remove_records` can remove the copy of a
-parent object. The parent ID of that object then names nothing, because the edit drops that import.
-`get_many` raises it, naming every missing ID, before it returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID
-that is not a positive int64, a single string passed to `get_many`, and a `parent` that is neither a
-`ParentAlias` nor a `DatasetRef` raise `TimeFValidationError`.
+`get(AnswerTask, ...)` on a classification task, fail as not found. An edit such as
+`remove_records` can remove the copy of a parent object. The parent ID of that object then names
+nothing, because the edit drops that import. `get_many` fails before it returns anything, and the
+error names every missing ID. The reader rejects `Source`, `Annotation`, and any other kind not
+listed above, an ID that is not a positive int64, a single string passed to `get_many`, and a
+`parent` that is neither a `ParentAlias` nor a `DatasetRef`.
 
 ## Loading values at read time
 
@@ -345,10 +345,6 @@ releases that source reuses.
 | A payload source differs from its pins | `TimeFFormatError` | The source and the first differing file |
 | A file is missing or has another size | `TimeNetFileError` | The file, its expected size, and its actual size |
 
-An invalid manifest raises `TimeNetManifestError`. A manifest or a `control.duckdb` with a format
-version that this TimeNet does not read raises `TimeFFormatVersionError`. A missing manifest raises
-`FileNotFoundError`.
-
 ### Where payload sources are found
 
 Payload sources resolve relative to a registry root. By default, `open_local_version()` takes the
@@ -359,7 +355,7 @@ sources.
 
 A version without payload sources opens from any directory. A version with payload sources that is
 not stored as `<root>/<org>/<name>/<version>` needs `sources_root=`, and opening it without one
-raises `TimeFValidationError`.
+fails.
 
 ## Errors and integrity
 
@@ -368,19 +364,17 @@ chunk. Opening does not look for remote files. A missing remote `control.duckdb`
 read of Records or tasks. A missing remote values file fails when a Signal reads its chunk. Errors
 include the relevant file or table context.
 
-A catalog query raises `TimeFFormatError` when the catalog lacks a table, column, or type that the
-read expects, and `TimeFReaderError` when the reader's connection closed while the read ran, through
-`close()` or a fork in another thread. Other DuckDB errors, such as I/O failures, running out of
-memory, or an interrupt, propagate unchanged.
+A catalog query fails when the catalog lacks a table, column, or type that the read expects, or
+when the reader's connection closed while the read ran, through `close()` or a fork in another
+thread. Other DuckDB errors, such as I/O failures, running out of memory, or an interrupt,
+propagate unchanged.
 
-A request for an object, ID, or parent alias that the dataset does not have raises
-`TimeFNotFoundError`, a `TimeFValidationError`. A catalog that disagrees with its manifest raises
-`TimeFFormatError`. For example, the catalog names no parent release for a parent alias of the
-manifest, or it names another release.
+A read fails when the catalog disagrees with its manifest. For example, the catalog names no parent
+release for a parent alias of the manifest, or it names another release.
 
 Call `verify()` to hash every file before reading data: the version's own files, and the files it
 pins on each payload source. If a file is missing or does not match its manifest record or pin,
-`verify()` raises `TimeNetFileError`, a `TimeFFormatError`.
+`verify()` fails.
 
 ## Inherited storage
 

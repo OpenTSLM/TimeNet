@@ -20,7 +20,6 @@ def plan_release_build(
     target_registry: LocalRegistry,
     parents_from: Sequence[ReleaseSource] = (),
     force: bool = False,
-    open_access_only: bool = False,
 ) -> Plan:
     """Plan a release build in a local registry.
 
@@ -32,7 +31,6 @@ def plan_release_build(
         target_registry: The local registry to write to.
         parents_from: Sources to copy or build missing dependencies from, in preference order.
         force: Plan a forced rebuild and its parents even if the requested release already exists.
-        open_access_only: Require ``access: open`` for every needed release.
 
     Returns:
         A plan with steps in execution order.
@@ -49,7 +47,6 @@ def plan_release_build(
         target_registry,
         parents_from=parents_from,
         force_build=force,
-        open_access_only=open_access_only,
     )
     return Plan(tuple(steps))
 
