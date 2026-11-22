@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: forecasttrust/india-rainfall-reliability
+dataset_version: 1.0.0
+name: India Rainfall Forecast Reliability
+description: >-
+  Predict whether a day-ahead ECMWF IFS rainfall forecast will fail, before the rain is observed.
+  Each record is one city and one valid day, with a 14-day window of the day-1, day-2 and day-3
+  forecasts as originally issued and the ERA5 rainfall verified through two days before the valid
+  day. The target day's rainfall is never an input. The classification task labels the day-1
+  forecast as a failure when its absolute error exceeds the larger of 5 mm and half the forecast.
+  The scalar task predicts that absolute error in mm. Splits are chronological (train through
+  2024-12-31, validation 2025-01-01 to 2025-05-31, test from 2025-06-01). Weather data by
+  Open-Meteo.com (CC BY 4.0), from ECMWF IFS forecasts and ERA5 reanalysis, which is not a gauge
+  observation.
+license: CC-BY-4.0
+domains:
+  - environment
+tags:
+  - weather
+  - rainfall
+  - forecast-verification
+  - reliability
+  - india
