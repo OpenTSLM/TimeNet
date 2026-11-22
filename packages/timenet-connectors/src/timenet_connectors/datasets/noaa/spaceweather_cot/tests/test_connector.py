@@ -204,7 +204,7 @@ def _build_raw(tmp_path: Path, issued_at: datetime) -> SpaceWeatherRaw:
     omni_path.write_text("\n".join(lines) + "\n")
 
     issuance = _Issuance(issued_at=issued_at, discussion_path=discussion_path, forecast_path=forecast_path)
-    return SpaceWeatherRaw(issuances=(issuance,), xray_path=xray_path, omni_path=omni_path)
+    return SpaceWeatherRaw(issuances=(issuance,), xray_paths=(xray_path,), omni_paths=(omni_path,))
 
 
 def test_metadata():
@@ -253,6 +253,6 @@ def test_convert_raises_when_window_has_no_samples(tmp_path):
     issued_at = datetime(2024, 6, 17, 12, 30, tzinfo=UTC)
     raw = _build_raw(tmp_path, issued_at)
     # Rebuild the GOES file with samples far outside the issuance's lookback window.
-    _write_goes_fixture(raw.xray_path, start=datetime(2020, 1, 1), minutes=[0], flags=[0])
+    _write_goes_fixture(raw.xray_paths[0], start=datetime(2020, 1, 1), minutes=[0], flags=[0])
     with pytest.raises(TimeNetConnectorError, match="no GOES or OMNI2 samples"):
         SpaceWeatherCotConnector().convert(raw)

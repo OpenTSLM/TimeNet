@@ -41,23 +41,39 @@ from timenet_connectors.download import Artifact, download_files
 
 
 # --- Pinned sources -----------------------------------------------------------------------------
-# A single calendar year of each source keeps this first release simple: one GOES science file and
-# one OMNI2 file cover every record's 24-hour lookback window without crossing a year boundary.
-# Later versions can add more years and more satellites.
-_GOES_XRS_URL = (
-    "https://data.ngdc.noaa.gov/platforms/solar-space-observing-satellites/goes/goes16/l2/data/"
-    "xrsf-l2-avg1m_science/sci_xrsf-l2-avg1m_g16_y2024_v2-2-2.nc"
+# One GOES science file and one OMNI2 file per calendar year. Using whole years keeps each file a
+# single versioned, hash-pinned artifact; a lookback window that crosses a year boundary is served
+# by merging the two adjacent years' readers (see _read_goes_xray_years/_read_omni2_years).
+_GOES_XRS_BASE = (
+    "https://data.ngdc.noaa.gov/platforms/solar-space-observing-satellites/goes/goes16/l2/data/xrsf-l2-avg1m_science"
 )
-_GOES_XRS_SHA256 = "f1f3bba66cc64ae3be50417fee3320340b016e76b0e9b3d01486d83e41af9653"
-_OMNI2_URL = "https://spdf.gsfc.nasa.gov/pub/data/omni/low_res_omni/omni2_2024.dat"
-_OMNI2_SHA256 = "41f3b5891ce3f1220719d5c1ea808f3014f28a1704557d3363eefb5ee7c249b1"
+_OMNI2_BASE = "https://spdf.gsfc.nasa.gov/pub/data/omni/low_res_omni"
 _DISCUSSION_BASE = "https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/discussion"
 _FORECAST_BASE = "https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/3day_forecast"
 
-# The date range of this release spans the whole first year of the Forecast Discussion archive
-# (the product began in March 2024) and stays inside the single pinned calendar year above.
+# Pinned per-year sources, in the shape {year: (goes_url, goes_sha256, omni_url, omni_sha256)}.
+# GOES-16 science data for 2025 is published only through 2025-04-06 at build time; _END_DATE
+# below stays inside that coverage.
+_YEAR_SOURCES: dict[int, tuple[str, str, str, str]] = {
+    2024: (
+        f"{_GOES_XRS_BASE}/sci_xrsf-l2-avg1m_g16_y2024_v2-2-2.nc",
+        "f1f3bba66cc64ae3be50417fee3320340b016e76b0e9b3d01486d83e41af9653",
+        f"{_OMNI2_BASE}/omni2_2024.dat",
+        "41f3b5891ce3f1220719d5c1ea808f3014f28a1704557d3363eefb5ee7c249b1",
+    ),
+    2025: (
+        f"{_GOES_XRS_BASE}/sci_xrsf-l2-avg1m_g16_y2025_v2-2-2.nc",
+        "9e2b4b83d898c4322a5c95c68c4325ddcb982b84b71bcd592017c60bfd659fd7",
+        f"{_OMNI2_BASE}/omni2_2025.dat",
+        "0c1cbad73ad812883a4c1ab49fbe30dda842d65efb89f5c0ea9f3447f9f52a5b",
+    ),
+}
+
+# The date range of this release spans the Forecast Discussion archive's start (March 2024) through
+# the latest date covered by the pinned 2025 GOES-16 science file (published through 2025-04-06 at
+# build time). Later versions can extend both as NOAA publishes more science-quality GOES data.
 _START_DATE = date(2024, 3, 1)
-_END_DATE = date(2024, 12, 31)
+_END_DATE = date(2025, 4, 6)
 _ISSUANCE_HOURS_UTC = (0, 12)  # 0030 and 1230 UTC, named by their announced hour.
 _LOOKBACK = timedelta(hours=24)
 
@@ -113,8 +129,8 @@ class SpaceWeatherRaw:
     """Everything :meth:`SpaceWeatherCotConnector.convert` needs, already on local disk."""
 
     issuances: tuple[_Issuance, ...]
-    xray_path: Path
-    omni_path: Path
+    xray_paths: tuple[Path, ...]
+    omni_paths: tuple[Path, ...]
 
 
 def _issuance_times() -> list[datetime]:
@@ -185,7 +201,7 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
 
     @staticmethod
     async def download_async(cache_dir: Path) -> SpaceWeatherRaw:
-        """Fetch the pinned GOES/OMNI2 archives and every issuance's two report texts.
+        """Fetch every pinned year's GOES/OMNI2 archive and every issuance's two report texts.
 
         Args:
             cache_dir: The directory that holds downloaded files.
@@ -196,14 +212,13 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         Raises:
             TimeNetConnectorError: If NOAA's archive has no issuance in the configured date range.
         """
-        xray_path = cache_dir / "goes16_xrs_2024.nc"
-        omni_path = cache_dir / "omni2_2024.dat"
-        await download_files(
-            [
-                Artifact(_GOES_XRS_URL, xray_path, sha256=_GOES_XRS_SHA256),
-                Artifact(_OMNI2_URL, omni_path, sha256=_OMNI2_SHA256),
-            ]
-        )
+        xray_paths = {year: cache_dir / f"goes16_xrs_{year}.nc" for year in _YEAR_SOURCES}
+        omni_paths = {year: cache_dir / f"omni2_{year}.dat" for year in _YEAR_SOURCES}
+        artifacts = []
+        for year, (goes_url, goes_sha256, omni_url, omni_sha256) in _YEAR_SOURCES.items():
+            artifacts.append(Artifact(goes_url, xray_paths[year], sha256=goes_sha256))
+            artifacts.append(Artifact(omni_url, omni_paths[year], sha256=omni_sha256))
+        await download_files(artifacts)
         semaphore = asyncio.Semaphore(8)
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
 
@@ -215,7 +230,11 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         issuances = tuple(issuance for issuance in results if issuance is not None)
         if not issuances:
             raise TimeNetConnectorError(f"no Forecast Discussion issuances found between {_START_DATE} and {_END_DATE}")
-        return SpaceWeatherRaw(issuances=issuances, xray_path=xray_path, omni_path=omni_path)
+        return SpaceWeatherRaw(
+            issuances=issuances,
+            xray_paths=tuple(xray_paths.values()),
+            omni_paths=tuple(omni_paths.values()),
+        )
 
     def convert(self, raw: SpaceWeatherRaw) -> TimeFDataset:
         """Build one record and task set per successfully fetched issuance.
@@ -231,8 +250,8 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
                 Forecast Discussion shape, or the 3-Day Forecast text is missing an expected
                 numeric field.
         """
-        xray = _read_goes_xray(raw.xray_path)
-        omni = _read_omni2(raw.omni_path)
+        xray = _merge_goes_xray([_read_goes_xray(path) for path in raw.xray_paths])
+        omni = _merge_omni2([_read_omni2(path) for path in raw.omni_paths])
         dataset = TimeFDataset(metadata=self.metadata())
         for issuance in raw.issuances:
             try:
@@ -305,6 +324,57 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         )
 
 
+def _section_bounds(text: str, headers: list[re.Match[str]]) -> list[tuple[str, int, int]]:
+    """Resolve each section's ``(name, body_start, body_end)`` span from its header matches.
+
+    Some issues omit the "Solar Activity" header line entirely; the report body still opens
+    directly with its ``.24 hr Summary...`` text, so that case is detected and treated as an
+    implicit first section rather than a malformed report.
+
+    Args:
+        text: The raw Forecast Discussion report text.
+        headers: Every section-header match found in ``text``, in order.
+
+    Returns:
+        One ``(name, body_start, body_end)`` tuple per expected section, in :data:`_SECTIONS` order.
+
+    Raises:
+        TimeNetConnectorError: If the headers found don't match one of the two known shapes.
+    """
+    names = ["Energetic Particle" if h.group(1) == "Energetic Particles" else h.group(1) for h in headers]
+    if names == list(_SECTIONS):
+        bounds = []
+        for index, header in enumerate(headers):
+            end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+            bounds.append((_SECTIONS[index], header.end(), end))
+        return bounds
+    if names == list(_SECTIONS[1:]):
+        summary_match = _SUMMARY_MARKER.search(text)
+        if summary_match is None or summary_match.start() >= headers[0].start():
+            raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
+        bounds = [("Solar Activity", summary_match.start(), headers[0].start())]
+        for index, header in enumerate(headers):
+            end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+            bounds.append((_SECTIONS[index + 1], header.end(), end))
+        return bounds
+    if names == list(_SECTIONS[:3]):
+        # The "Geospace" header is sometimes omitted entirely; its content still follows Solar
+        # Wind's forecast as a second, unlabeled ".24 hr Summary.../.Forecast..." cycle.
+        tail_start = headers[2].end()
+        tail_summaries = list(_SUMMARY_MARKER.finditer(text, tail_start))
+        expected_cycles = 2  # Solar Wind's own summary, plus Geospace's unlabeled one
+        if len(tail_summaries) < expected_cycles:
+            raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
+        split_at = tail_summaries[1].start()
+        bounds = []
+        for index, header in enumerate(headers):
+            end = headers[index + 1].start() if index + 1 < len(headers) else split_at
+            bounds.append((_SECTIONS[index], header.end(), end))
+        bounds.append(("Geospace", split_at, len(text)))
+        return bounds
+    raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
+
+
 def _parse_discussion(text: str) -> tuple[str, str]:
     """Split a Forecast Discussion's four sections into a joined summary and a joined forecast.
 
@@ -314,24 +384,17 @@ def _parse_discussion(text: str) -> tuple[str, str]:
     Returns:
         ``(summary_text, forecast_text)``, each the four sections' matching subsection joined with
         its section name.
-
-    Raises:
-        TimeNetConnectorError: If the text does not have exactly the four expected section headers.
     """
     headers = list(_SECTION_HEADER.finditer(text))
-    names = ["Energetic Particle" if h.group(1) == "Energetic Particles" else h.group(1) for h in headers]
-    if names != list(_SECTIONS):
-        raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
+    bounds = _section_bounds(text, headers)
     summaries, forecasts = [], []
-    for index, header in enumerate(headers):
-        start = header.end()
-        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+    for name, start, end in bounds:
         block = text[start:end]
         forecast_split = _FORECAST_MARKER.split(block, maxsplit=1)
         summary_part = _SUMMARY_MARKER.sub("", forecast_split[0], count=1)
         forecast_part = forecast_split[1] if len(forecast_split) > 1 else ""
-        summaries.append(f"{_SECTIONS[index]}: {summary_part.strip()}")
-        forecasts.append(f"{_SECTIONS[index]}: {forecast_part.strip()}")
+        summaries.append(f"{name}: {summary_part.strip()}")
+        forecasts.append(f"{name}: {forecast_part.strip()}")
     return "\n\n".join(summaries), "\n\n".join(forecasts)
 
 
@@ -409,6 +472,21 @@ def _read_goes_xray(path: Path) -> _GoesXray:
     return _GoesXray(times=times, values=flux)
 
 
+def _merge_goes_xray(readers: list["_GoesXray"]) -> "_GoesXray":
+    """Concatenate one :class:`_GoesXray` per pinned year into one time-sorted series.
+
+    Args:
+        readers: One reader per pinned year, each already sorted by time.
+
+    Returns:
+        The combined series, sorted by time.
+    """
+    times = np.concatenate([reader.times for reader in readers])
+    values = np.concatenate([reader.values for reader in readers])
+    order = np.argsort(times)
+    return _GoesXray(times=times[order], values=values[order])
+
+
 # --- OMNI2 reading ---------------------------------------------------------------------------------
 
 # Column indices (0-based) into a whitespace-split OMNI2_YYYY.DAT row, and each column's fill value.
@@ -482,6 +560,21 @@ def _read_omni2(path: Path) -> _Omni2:
             "density": None if density == _OMNI_DENSITY_FILL else density,
             "kp": _decode_omni_kp(int(fields[_OMNI_KP_COL])),
         }
+    return _Omni2(rows=rows)
+
+
+def _merge_omni2(readers: list["_Omni2"]) -> "_Omni2":
+    """Union one :class:`_Omni2` per pinned year into one reader (years don't overlap in hours).
+
+    Args:
+        readers: One reader per pinned year.
+
+    Returns:
+        The combined reader.
+    """
+    rows: dict[datetime, dict[str, float | None]] = {}
+    for reader in readers:
+        rows.update(reader.rows)
     return _Omni2(rows=rows)
 
 
