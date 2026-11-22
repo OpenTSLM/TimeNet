@@ -9,6 +9,8 @@ description: >-
   Engine IDs do not cross the train/validation partition. NASA official test
   engines are used for test-only endpoint evaluations.
 license: OTHER
+# NASA PCoE source page provides use/citation guidance, not an SPDX license grant.
+license_url: https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/
 source_url: https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/
 domains:
   - industrial
