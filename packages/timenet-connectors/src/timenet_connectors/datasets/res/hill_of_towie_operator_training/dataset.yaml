@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: res/hill-of-towie-operator-training
+dataset_version: 1.0.0
+name: Hill of Towie Operator-Response Training
+description: >-
+  The selected train, validation, and held-out examples for the audited Hill of Towie
+  operator-response run, whose update-1500 checkpoint is recorded in hackathon commit f6e6450.
+  Six-hour and seven-day windows of ten-minute SCADA readings support operator response,
+  classification, and caption tasks. The release preserves the 9,709 training, 172 validation,
+  and 371 test examples, including their channel order, missing readings, and text targets.
+license: CC-BY-4.0
+access: open
+source_url: https://zenodo.org/records/22662930
+citation: >-
+  Clerc, A., and Lingkan, E. (2026). Hill of Towie wind farm open dataset (Version 2.1.0).
+  Zenodo. https://doi.org/10.5281/zenodo.22662930. Released by RES on behalf of TRIG.
+domains:
+  - energy
+tags:
+  - wind-energy
+  - scada
+  - qa
+  - condition-monitoring
