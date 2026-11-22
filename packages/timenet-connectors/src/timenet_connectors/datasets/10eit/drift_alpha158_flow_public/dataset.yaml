@@ -1,0 +1,14 @@
+yaml_schema_version: 1
+dataset_id: 10eit/drift-alpha158-flow-public
+dataset_version: 1.0.0
+name: DRIFT Alpha158 public market replay
+description: >
+  Rebuild historical stock-factor windows directly from a fixed public OHLCV snapshot.
+  The 98 matched observations cover 30 target companies in 11 sectors. Each record has
+  four dated tasks, with categorical supervision from the archived DRIFT model and a
+  pairwise realized-return winner confirmed against the independent price source.
+license: NONE
+source_url: https://www.kaggle.com/datasets/joebeachcapital/s-and-p500-index-stocks-daily-updated/versions/613
+access: open
+domains: [finance]
+tags: [equities, multivariate, question-answering, financial-forecasting]
