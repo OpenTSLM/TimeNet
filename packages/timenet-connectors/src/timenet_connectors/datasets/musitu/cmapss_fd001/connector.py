@@ -49,11 +49,19 @@ def _read(path: Path) -> pd.DataFrame:
     if frame.shape[1] != len(COLS):
         raise ValueError(f"Expected 26 columns at {path}; got {frame.shape[1]}")
     frame.columns = COLS
-    if not np.isfinite(frame.to_numpy(dtype=float)).all():
+    numerical = frame.to_numpy(dtype=float)
+    if not np.isfinite(numerical).all():
         raise ValueError(f"Non-finite value in {path}")
+    ids_and_cycles = frame[["unit", "cycle"]].to_numpy(dtype=float)
+    if np.any(ids_and_cycles < 1) or not np.array_equal(ids_and_cycles, np.floor(ids_and_cycles)):
+        raise ValueError(f"Engine and cycle IDs must be positive integers in {path}")
     frame[["unit", "cycle"]] = frame[["unit", "cycle"]].astype(int)
     if frame.duplicated(["unit", "cycle"]).any():
         raise ValueError(f"Duplicate engine-cycle rows in {path}")
+    for unit, group in frame.groupby("unit", sort=True):
+        expected = np.arange(1, len(group) + 1)
+        if not np.array_equal(group["cycle"].to_numpy(), expected):
+            raise ValueError(f"Noncontiguous or out-of-order cycles for engine {unit} in {path}")
     return frame
 
 
@@ -82,11 +90,16 @@ class CmapssFd001Connector(BaseConnector[Path]):
                 raise ValueError("NASA data archive MD5 mismatch")
             archive.write_bytes(payload)
         with ZipFile(archive) as z:
-            members = {Path(name).name: name for name in z.namelist()}
+            required = [path.name for path in _dataset_files(root)]
+            members = {name: [] for name in required}
+            for item in z.namelist():
+                name = Path(item).name
+                if name in members:
+                    members[name].append(item)
             for path in _dataset_files(root):
-                if path.name not in members:
-                    raise ValueError(f"NASA source archive missing {path.name}")
-                path.write_bytes(z.read(members[path.name]))
+                if len(members[path.name]) != 1:
+                    raise ValueError(f"NASA archive must contain exactly one {path.name}")
+                path.write_bytes(z.read(members[path.name][0]))
         return root
 
     def convert(self, root: Path) -> TimeFDataset:
@@ -97,7 +110,10 @@ class CmapssFd001Connector(BaseConnector[Path]):
         test_ids = sorted(test.unit.unique())
         if len(test_ids) != len(offset_df) or offset_df.shape[1] != 1:
             raise ValueError("NASA official test RUL labels do not match engine count")
-        test_offsets = dict(zip(test_ids, offset_df[0].astype(int).tolist()))
+        offsets = pd.to_numeric(offset_df.iloc[:, 0], errors="raise").to_numpy(dtype=float)
+        if not np.isfinite(offsets).all() or (offsets < 0).any() or not np.array_equal(offsets, np.floor(offsets)):
+            raise ValueError("NASA official test RUL labels must be nonnegative integers")
+        test_offsets = dict(zip(test_ids, offsets.astype(int).tolist(), strict=True))
         dataset = TimeFDataset(metadata=self.metadata())
         train_ids = sorted(train.unit.unique())
         # Deterministic by ENGINE, not by window; no shared engine in train and validation.
