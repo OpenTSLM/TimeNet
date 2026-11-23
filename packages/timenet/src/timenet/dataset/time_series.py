@@ -600,8 +600,7 @@ class Signal(SupportsAnnotate):
         """Read which timesteps of the series have a value.
 
         Returns:
-            One boolean per timestep, which is true where the timestep has a value and false where
-            it is missing.
+            One boolean per timestep, which is true where the timestep has a value.
         """
         return self.to_arrow().is_valid().to_numpy(zero_copy_only=False)
 
@@ -829,13 +828,11 @@ class Signal(SupportsAnnotate):
 
         A timestep is missing in the copy where ``missing_mask`` is true, and where it is already
         missing in this series. The copy keeps the name, time axis, time offsets, metadata, and
-        annotations. The values are read to build the copy, and the copy has a known ``null_count``.
+        annotations.
 
         Args:
             missing_mask: One boolean per timestep, which is true where the timestep becomes missing.
-            missing: The reason for the missing timesteps. The copy's spec records it if this
-                series' spec doesn't allow missing timesteps. Specs that allow missing timesteps
-                don't change.
+            missing: The reason for the missing timesteps.
 
         Returns:
             The copy with the additional missing timesteps.
