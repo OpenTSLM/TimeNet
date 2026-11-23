@@ -826,7 +826,7 @@ class Signal(SupportsAnnotate):
             metadata=self.metadata,
         )
 
-    def with_missing_timesteps(self, missing_mask: np.ndarray, *, missing: MissingValues) -> "Signal":
+    def with_missing_timesteps(self, missing_mask: np.ndarray, *, missing_reason: MissingValues) -> "Signal":
         """Return a copy of the series in which more timesteps are missing.
 
         A timestep is missing in the copy where ``missing_mask`` is true, and where it is already
@@ -835,7 +835,7 @@ class Signal(SupportsAnnotate):
 
         Args:
             missing_mask: One boolean per timestep, which is true where the timestep becomes missing.
-            missing: The reason for the missing timesteps.
+            missing_reason: The reason for the missing timesteps.
 
         Returns:
             The copy with the additional missing timesteps.
@@ -858,7 +858,7 @@ class Signal(SupportsAnnotate):
             values = pa.ExtensionArray.from_storage(values.type, storage)
         else:
             values = _with_nulls(values, mask)
-        spec = self.spec if self.spec.nullable else self.spec.model_copy(update={"missing": missing})
+        spec = self.spec if self.spec.nullable else self.spec.model_copy(update={"missing": missing_reason})
         return Signal.from_loader(
             spec=spec,
             time_axis=self.time_axis,

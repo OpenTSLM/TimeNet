@@ -552,7 +552,7 @@ def test_with_missing_timesteps_adds_missing_timesteps_to_a_copy(irregular, dtyp
         series = Signal(data=observations, spec=spec, name="x", time_axis=axis, metadata={"site": "ward 3"})
 
     copy = series.with_missing_timesteps(
-        np.array([False, False, True, False]), missing=MissingValues(reason=MissingReason.NOT_RECORDED)
+        np.array([False, False, True, False]), missing_reason=MissingValues(reason=MissingReason.NOT_RECORDED)
     )
 
     # The timestep that was already missing stays missing, and the spec keeps its own reason.
@@ -576,7 +576,7 @@ def test_with_missing_timesteps_records_the_reason_when_the_spec_does_not_allow_
     )
     reason = MissingValues(reason=MissingReason.NOT_RECORDED)
 
-    copy = series.with_missing_timesteps(np.array([True, False, False]), missing=reason)
+    copy = series.with_missing_timesteps(np.array([True, False, False]), missing_reason=reason)
 
     assert copy.spec.missing == reason
     assert copy.to_arrow().to_pylist() == [None, [2.0, 3.0], [4.0, 5.0]]
@@ -589,4 +589,4 @@ def test_with_missing_timesteps_records_the_reason_when_the_spec_does_not_allow_
 def test_with_missing_timesteps_rejects_a_mask_that_is_not_one_boolean_per_timestep(missing_mask):
     series = Signal(data=[1.0, 2.0, 3.0], spec=_spec(), name="x", time_axis=OrdinalAxis())
     with pytest.raises(TimeFValidationError, match="one boolean per timestep"):
-        series.with_missing_timesteps(missing_mask, missing=_MISSING)
+        series.with_missing_timesteps(missing_mask, missing_reason=_MISSING)
