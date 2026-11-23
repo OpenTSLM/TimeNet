@@ -579,3 +579,63 @@ def test_bool_constructors_preserve_none_separately_from_false(irregular, contai
     else:
         with pytest.raises(TimeFValidationError, match="null"):
             construct()
+
+
+@pytest.mark.parametrize("irregular", [False, True])
+@pytest.mark.parametrize(
+    ("dtype", "observations", "categories"),
+    [
+        ("float32", [1.0, None, 3.0, 4.0], ()),
+        ("int16", [1, None, 3, 4], ()),
+        ("bool", [True, None, False, True], ()),
+        ("str", ["a", None, "b", "a"], ()),
+        ("enum", ["a", None, "b", "a"], ("a", "b")),
+    ],
+)
+def test_with_missing_timesteps_adds_missing_timesteps_to_a_copy(irregular, dtype, observations, categories):
+    spec = _spec(dtype, categories=categories, missing=_MISSING)
+    if irregular:
+        series = Signal.from_irregular(observations, time_offsets_us=[0, 2, 4, 9], spec=spec, name="x")
+    else:
+        axis = RegularAxis.from_rate_hz(2)
+        series = Signal(data=observations, spec=spec, name="x", time_axis=axis, metadata={"site": "ward 3"})
+
+    copy = series.with_missing_timesteps(
+        np.array([False, False, True, False]), missing=MissingValues(reason=MissingReason.NOT_RECORDED)
+    )
+
+    # The timestep that was already missing stays missing, and the spec keeps its own reason.
+    assert copy.to_arrow().to_pylist() == [observations[0], None, None, observations[3]]
+    assert copy.to_arrow().type == series.to_arrow().type
+    assert copy.observed_mask().tolist() == [True, False, False, True]
+    assert copy.null_count == 2
+    assert (copy.spec, copy.name, copy.time_axis) == (series.spec, series.name, series.time_axis)
+    assert copy.metadata == series.metadata
+    if irregular:
+        assert copy.time_offsets_us().tolist() == [0, 2, 4, 9]
+    assert series.observed_mask().tolist() == [True, False, True, True]
+
+
+def test_with_missing_timesteps_records_the_reason_when_the_spec_does_not_allow_missing_timesteps():
+    series = Signal(
+        data=np.arange(6, dtype=np.float32).reshape(3, 2),
+        spec=_spec(value_shape=(2,)),
+        name="x",
+        time_axis=OrdinalAxis(),
+    )
+    reason = MissingValues(reason=MissingReason.NOT_RECORDED)
+
+    copy = series.with_missing_timesteps(np.array([True, False, False]), missing=reason)
+
+    assert copy.spec.missing == reason
+    assert copy.to_arrow().to_pylist() == [None, [2.0, 3.0], [4.0, 5.0]]
+    # The original series is unchanged.
+    assert series.spec.missing is None
+    assert series.to_numpy().tolist() == [[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]]
+
+
+@pytest.mark.parametrize("missing_mask", [np.array([True, False]), np.array([1, 0, 0])])
+def test_with_missing_timesteps_rejects_a_mask_that_is_not_one_boolean_per_timestep(missing_mask):
+    series = Signal(data=[1.0, 2.0, 3.0], spec=_spec(), name="x", time_axis=OrdinalAxis())
+    with pytest.raises(TimeFValidationError, match="one boolean per timestep"):
+        series.with_missing_timesteps(missing_mask, missing=_MISSING)
