@@ -44,15 +44,16 @@ def main() -> None:
     seed = 42
     train_val_df, test_df = train_test_split(df, test_size=test_frac, random_state=seed, stratify=df["label"])
     val_frac_adj = val_frac / (1.0 - test_frac)
-    _, val_df = train_test_split(
+    train_df, val_df = train_test_split(
         train_val_df, test_size=val_frac_adj, random_state=seed + 1, stratify=train_val_df["label"]
     )
 
     # read_csv numbers the rows from 0 in file order, so an index label is a row position.
     splits = {
         "source_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
-        "validation": sorted(int(position) for position in val_df.index),
-        "test": sorted(int(position) for position in test_df.index),
+        "train_keys": sorted(int(position) for position in train_df.index),
+        "validation_keys": sorted(int(position) for position in val_df.index),
+        "test_keys": sorted(int(position) for position in test_df.index),
     }
     # One position per line, so a diff of a regenerated file shows each row that changed split.
     SPLITS_PATH.write_text(json.dumps(splits, indent=2) + "\n", encoding="utf-8")

@@ -50,6 +50,7 @@ _ROWS = [
     _row("sc4102e0", "REM", start=2.0),
     _row("st7022j0", "N4", start=3.0),
 ]
+_TRAIN_POSITIONS = [0, 2]
 _VALIDATION_POSITIONS = [1]
 _TEST_POSITIONS = [3]
 
@@ -66,7 +67,12 @@ def _write_release(
         writer.writeheader()
         writer.writerows(rows)
     splits_path = directory / "splits.json"
-    splits = {"source_sha256": source_sha256, "validation": _VALIDATION_POSITIONS, "test": _TEST_POSITIONS}
+    splits = {
+        "source_sha256": source_sha256,
+        "train_keys": _TRAIN_POSITIONS,
+        "validation_keys": _VALIDATION_POSITIONS,
+        "test_keys": _TEST_POSITIONS,
+    }
     splits_path.write_text(json.dumps(splits), encoding="utf-8")
     return SleepCotReader(csv_path=csv_path, splits_path=splits_path)
 

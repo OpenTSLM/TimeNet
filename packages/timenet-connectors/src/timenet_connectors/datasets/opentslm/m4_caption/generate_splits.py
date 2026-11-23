@@ -80,8 +80,9 @@ def main() -> None:
     splits = splitter.split(captioned)
     content = {
         "source_sha256": source_sha256,
-        "validation": sorted((series.m4_id for series in splits[Split.VALIDATION]), key=m4_id_order),
-        "test": sorted((series.m4_id for series in splits[Split.TEST]), key=m4_id_order),
+        "train_keys": sorted((series.m4_id for series in splits[Split.TRAIN]), key=m4_id_order),
+        "validation_keys": sorted((series.m4_id for series in splits[Split.VALIDATION]), key=m4_id_order),
+        "test_keys": sorted((series.m4_id for series in splits[Split.TEST]), key=m4_id_order),
     }
     SPLITS_PATH.write_bytes(lzma.compress((json.dumps(content, indent=2) + "\n").encode()))
 
