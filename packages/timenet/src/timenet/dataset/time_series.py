@@ -7,6 +7,7 @@ from typing import NamedTuple, TypeGuard, assert_never
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.dataset.span_validation import check_span_within_window
@@ -14,6 +15,7 @@ from timenet.errors import TimeFNullValuesError, TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import (
     Annotation,
+    MissingValues,
     Span,
     StepInterval,
     StepSpan,
@@ -141,6 +143,12 @@ def _array_handle(values: ArrayHandle | Callable[[], pa.Array]) -> ArrayHandle:
             f"{type(values).__name__} has its own read_steps(); subclass ArrayHandle to keep its range reads"
         )
     return CallableArray(values)
+
+
+def _with_nulls(values: pa.Array, null_mask: np.ndarray) -> pa.Array:
+    """Return the values with a null where ``null_mask`` is true. Existing nulls are kept."""
+    nulls = pa.nulls(len(values), values.type)
+    return pc.if_else(pa.array(null_mask), nulls, values)  # ty: ignore[unresolved-attribute]
 
 
 @dataclass(frozen=True, eq=False, slots=True)
@@ -591,6 +599,15 @@ class Signal(SupportsAnnotate):
                 f"series contains null values. {detail[:1].upper()}{detail[1:]}. Use to_arrow() to preserve missingness"
             ) from error
 
+    def observed_mask(self) -> np.ndarray:
+        """Read which timesteps of the series have a value.
+
+        Returns:
+            One boolean per timestep, which is true where the timestep has a value and false where
+            it is missing.
+        """
+        return self.to_arrow().is_valid().to_numpy(zero_copy_only=False)
+
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a half-open temporal step range as Arrow without forcing a NumPy conversion.
 
@@ -807,6 +824,53 @@ class Signal(SupportsAnnotate):
             loader=_SlicedArray.from_handle(self._values, steps.start, steps.stop),
             n_values=steps.stop - steps.start,
             time_offsets_loader=time_offsets,
+            metadata=self.metadata,
+        )
+
+    def with_missing_timesteps(self, missing_mask: np.ndarray, *, missing: MissingValues) -> "Signal":
+        """Return a copy of the series in which more timesteps are missing.
+
+        A timestep is missing in the copy where ``missing_mask`` is true, and where it is already
+        missing in this series. The copy keeps the name, time axis, time offsets, metadata, and
+        annotations. The values are read to build the copy, and the copy has a known ``null_count``.
+
+        Args:
+            missing_mask: One boolean per timestep, which is true where the timestep becomes missing.
+            missing: The reason for the missing timesteps. It is recorded in the copy's spec if
+                missing timesteps are not allowed by this series' spec. A spec that allows them is
+                kept unchanged.
+
+        Returns:
+            The copy with the additional missing timesteps.
+
+        Raises:
+            TimeFValidationError: If ``missing_mask`` is not a boolean array with one entry per
+                timestep.
+        """
+        mask = np.asarray(missing_mask)
+        if mask.dtype != np.bool_ or mask.shape != (self.n_values,):
+            raise TimeFValidationError(
+                f"the missing mask needs one boolean per timestep, so shape ({self.n_values},), "
+                f"but it has dtype {mask.dtype} and shape {mask.shape}"
+            )
+        values = self.to_arrow()
+        if isinstance(values, pa.ExtensionArray):
+            # if_else doesn't have a kernel for the tensor extension type, so the nulls are set in
+            # its storage.
+            storage = _with_nulls(values.storage, mask)
+            values = pa.ExtensionArray.from_storage(values.type, storage)
+        else:
+            values = _with_nulls(values, mask)
+        spec = self.spec if self.spec.nullable else self.spec.model_copy(update={"missing": missing})
+        return Signal.from_loader(
+            spec=spec,
+            time_axis=self.time_axis,
+            name=self.name,
+            loader=ArrowArray(values),
+            n_values=self.n_values,
+            null_count=values.null_count,
+            time_offsets_loader=self._time_offsets,
+            annotations=self.annotations,
             metadata=self.metadata,
         )
 
