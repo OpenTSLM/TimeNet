@@ -1,63 +1,37 @@
 # M4-Caption
 
-M4-Caption pairs each of the 100,000 series of the M4 forecasting competition with one caption that
-GPT-4o wrote. OpenTSLM publishes it as a zip archive of CSV files, one series file and one caption
-file for each M4 frequency.
+M4-Caption pairs the 100,000 M4 competition series with captions written by GPT-4o. The connector
+leaves out 706 series whose captions are API errors (253 daily, 57 monthly, 396 quarterly), leaving
+99,294 series.
 
-For 706 series, the release has an error message of the caption API instead of a caption. There are
-three messages, each after the prefix "Error generating caption: ": "Connection error." (630
-series), "Error code: 404" (75) and "Request timed out." (1). The connector leaves out these 253
-daily, 57 monthly and 396 quarterly series, so the dataset has 99,294 series.
-
-The connector converts each series into one Record and one `AnswerTask`. The Record holds the
-series as one float32 Signal on an ordinal axis, the M4 id in its metadata, and the M4 frequency as
-an annotation. The task target is the caption. The task prompt is the prompt of the OpenTSLM loader
-(the post-prompt of `M4QADataset`), the same for every series.
+Each series becomes a `Record` with a float32 `Signal` on an ordinal axis, M4 id metadata and a
+frequency annotation. An `AnswerTask` targets the caption and uses the OpenTSLM loader's prompt.
 
 ## Split
 
-The release archive stores no split. `generate_splits.py` makes an 80/10/10 split with
-`StratifiedSplitter`, stratified by M4 frequency. Validation and test each hold a tenth of every
-frequency, so the small hourly and weekly frequencies keep their share in each split. The result
-depends on the version of scikit-learn, so the script ran once. It wrote the 9,929 validation and
-9,929 test series, by M4 id, to `splits.json.xz`. The connector reads that file and puts every
-other series in the train split.
+The OpenTSLM release has no split. We ran `generate_splits.py` once to make an 80/10/10 split with
+`StratifiedSplitter`, stratified by M4 frequency. Its `group_by` option keeps the 90 pairs of series
+with equal values in one split, preventing identical inputs from crossing splits. This is not the
+OpenTSLM paper's random split.
 
-M4 has 90 pairs of series whose histories are equal value for value: 19 monthly, 35 quarterly and
-36 yearly pairs. The two series of a pair have different M4 ids and different M4 test horizons. All
-pairs but one also have different captions. A model that trains on one series of a pair sees the
-exact input of the other. So the script groups the series by their values with the `group_by`
-option of `StratifiedSplitter`, and each pair stays in one split.
-
-This split is not the split of the OpenTSLM paper. The OpenTSLM loader makes a random split of all
-frequencies together, so its share of the small frequencies drifts. For example, its test split
-holds 6.5% of the hourly series.
-
-The file is JSON compressed with xz, about 19 KB. Python reads it with the `lzma` module of the
-standard library. To read it yourself, run `xz -dc splits.json.xz`. The file also states the SHA-256
-of the release archive. If it does not match the pinned archive, the build stops with an error.
+`splits.json.xz` stores the validation and test M4 ids (9,929 each) and the release archive's
+SHA-256. All remaining series go into train. The build fails if the SHA-256 does not match the
+pinned release.
 
 ## Relation to the M4 data
 
-Each series of the release is the train part of the M4 series with the same id, from the
-`Dataset/Train` files of the M4-methods repository. The release does not hold the test horizon or
-the series information of `M4-info.csv`. Each value is the float32 rounding of the M4 value. The
-largest relative difference is 6e-8.
+Each series contains the train values for the same M4 id in the M4-methods repository's
+`Dataset/Train` files. Each value is the float32 rounding of the M4 train value. The release omits
+the test horizon and the metadata in `M4-info.csv`.
 
-## Future work: an M4 parent dataset
+## Future work
 
-TimeNet can model this relation with a parent dataset. A connector for M4, for example
-`mcompetitions/m4`, can convert the `Dataset/` folder of M4-methods: the train and test files and
-`M4-info.csv`. M4-Caption can then declare that release under `parents` and import its Records.
-The caption task then names the train part of each series with a `StepInterval` scope.
+1. An M4 parent dataset, such as `mcompetitions/m4`, could provide train and test values and
+`M4-info.csv` metadata. M4-Caption could declare it under `parents`, import its `Record`s and scope
+each caption task to the train part with `StepInterval`. This would store the 24 million values
+once and expose M4 categories and forecast horizons. It would also replace the float32 values
+OpenTSLM plotted for GPT-4o with M4's float64 values.
 
-With a parent, the 24 million values exist once, and a reader gets the M4 category, horizon and
-test part. The values become the float64 M4 values, not the float32 values that OpenTSLM plotted
-for GPT-4o.
-
-## Future work: change axis types
-
-We currently use an ordinal axis for consistency, as some of the frequencies are only regular in
-calendar terms, e.g. "monthly". If
-[Proposal: calendar axes, value cells and civil-date origins](https://github.com/OpenTSLM/TimeNet/issues/555)
-lands we can reconsider this choice.
+2. We use ordinal axes because some frequencies, such as monthly, are regular only in calendar terms.
+Revisit this choice if the
+[calendar axes proposal](https://github.com/OpenTSLM/TimeNet/issues/555) lands.
