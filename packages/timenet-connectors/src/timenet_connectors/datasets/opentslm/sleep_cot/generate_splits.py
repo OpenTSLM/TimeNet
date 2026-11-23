@@ -7,12 +7,12 @@
 #     "scikit-learn==1.7.2",
 # ]
 # ///
-"""Write splits.json, the precomputed train, validation and test split of sleep-cot.
+"""Write splits.json.xz, the precomputed train, validation and test split of sleep-cot.
 
 sleep-cot does not store the train/val/test splits explicitly. Rather they give a random seed and
 allow scikit to do the split. This is hard to reproduce, because it means the official split is
 dependent on a particular scikit version. Instead of pinning scikit in the connector, we rather
-generated the split indices once with this script and store them in the accompanying splits.json.
+generated the split indices once with this script and store them in the accompanying splits.json.xz.
 This script is included, but really just for reference, so you get to see how the proverbial
 sausage got made.
 
@@ -23,6 +23,7 @@ Run it once with the release CSV, from this directory::
 
 import hashlib
 import json
+import lzma
 from pathlib import Path
 import sys
 
@@ -30,11 +31,11 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 
-SPLITS_PATH = Path(__file__).with_name("splits.json")
+SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
 
 
 def main() -> None:
-    """Split the CSV that the first argument names, and write splits.json."""
+    """Split the CSV that the first argument names, and write splits.json.xz."""
     csv_path = Path(sys.argv[1])
     df = pd.read_csv(csv_path)
 
@@ -55,8 +56,8 @@ def main() -> None:
         "validation_keys": sorted(int(position) for position in val_df.index),
         "test_keys": sorted(int(position) for position in test_df.index),
     }
-    # One position per line, so a diff of a regenerated file shows each row that changed split.
-    SPLITS_PATH.write_text(json.dumps(splits, indent=2) + "\n", encoding="utf-8")
+    # The file lists every row, so xz keeps it small. Run `xz -dc splits.json.xz` to read it.
+    SPLITS_PATH.write_bytes(lzma.compress((json.dumps(splits, indent=2) + "\n").encode()))
 
 
 if __name__ == "__main__":

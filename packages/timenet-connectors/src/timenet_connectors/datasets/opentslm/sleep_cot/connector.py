@@ -29,7 +29,7 @@ SLEEP_COT_SHA256 = "8c3ecd9b42179ab50d14e30edae87f9c5a0b7acfd4d15598198dfeaaedae
 COLUMNS = ("id", "time_series", "label", "prompt", "rationale")
 SAMPLES_PER_WINDOW = 1500
 """30 seconds at 50 Hz."""
-SPLITS_PATH = Path(__file__).with_name("splits.json")
+SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
 """The split of OpenTSLM's loader for each row of the release, as generate_splits.py wrote it."""
 
 # The release writes the stage codes of the Rechtschaffen and Kales manual. The prompts and the
