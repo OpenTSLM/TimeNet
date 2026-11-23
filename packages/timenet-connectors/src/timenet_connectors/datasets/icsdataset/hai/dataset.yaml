@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: icsdataset/hai
+dataset_version: 1.0.0
+source_revision: 2a814cebc9a66b06c9e5cd545e2d72e65d383737
+name: HAI
+description: >-
+  The HAI security dataset as published: a hardware-in-the-loop power plant testbed (boiler,
+  turbine, water treatment) recorded once per second in four versions (20.07, 21.03, 22.04 and
+  23.05), with staged attacks on its control loops. Each of the 28 data files is one record with
+  every data point as a float64 signal, named as in the file, with the quantity and unit that the
+  HAI manual gives for it (no unit where the manual gives none). HAI's own attack labels are
+  signals too: attack and attack_P1 to attack_P3 (20.07, 21.03), Attack (22.04) and the 23.05
+  label files. No tasks; child datasets add them.
+license: CC-BY-SA-4.0
+license_url: https://creativecommons.org/licenses/by-sa/4.0/
+source_url: https://github.com/icsdataset/hai
+citation: >-
+  Shin, H.-K., Lee, W., Choi, S., Yun, J.-H., & Min, B.-G. (2023). HAI security datasets.
+  https://github.com/icsdataset/hai. For HAI 21.03: Shin, H.-K., Lee, W., Yun, J.-H., & Min, B.-G.
+  (2021). Two ICS Security Datasets and Anomaly Detection Contest on the HIL-Based Augmented ICS
+  Testbed. Cyber Security Experimentation and Test Workshop (CSET '21), 36-40.
+  https://doi.org/10.1145/3474718.3474719. For HAI 20.07: Shin, H.-K., Lee, W., Yun, J.-H., &
+  Kim, H. (2020). HAI 1.0: HIL-Based Augmented ICS Security Dataset. 13th USENIX Workshop on Cyber
+  Security Experimentation and Test (CSET 20).
+domains:
+  - industrial
+  - energy
+tags:
+  - ics-security
+  - anomaly-detection
+  - base-dataset
