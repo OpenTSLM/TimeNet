@@ -27,9 +27,12 @@ description: >-
   with 40 other captions of weekly series. OpenTSLM does not use these two files, and the dataset
   does not include them.
 
-  The M4 organizers at the University of Nicosia state no license for the M4 data. OpenTSLM
-  releases the captions under MIT.
-license: NONE
+  The M4 series are under CC BY 4.0, the license of the copy of the M4 data in the Monash Time
+  Series Forecasting Archive, for example https://zenodo.org/records/4656480. The M4 organizers at
+  the University of Nicosia state no license in their own repository. OpenTSLM releases the captions
+  under MIT.
+license: CC-BY-4.0
+license_url: https://creativecommons.org/licenses/by/4.0/
 source_url: https://polybox.ethz.ch/index.php/s/MT3y9WdEebT8wfj
 citation: >-
   Langer, P., et al. (2025). OpenTSLM: Time-Series Language Models for Reasoning over Multivariate
@@ -37,7 +40,9 @@ citation: >-
   Makridakis, S., Spiliotis, E., & Assimakopoulos, V. (2020). The M4 Competition: 100,000 time series
   and 61 forecasting methods. International Journal of Forecasting, 36(1), 54-74. Makridakis, S.,
   Spiliotis, E., & Assimakopoulos, V. (2018). The M4 Competition: Results, findings, conclusion and
-  way forward. International Journal of Forecasting, 34(4), 802-808.
+  way forward. International Journal of Forecasting, 34(4), 802-808. Monash copy of M4: Godahewa, R.,
+  Bergmeir, C., Webb, G. I., Hyndman, R. J., & Montero-Manso, P. (2021). Monash Time Series
+  Forecasting Archive. Neural Information Processing Systems Track on Datasets and Benchmarks.
 domains:
   - economics
   - finance
