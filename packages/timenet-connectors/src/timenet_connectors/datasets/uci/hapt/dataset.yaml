@@ -14,7 +14,7 @@ description: >-
   ClassificationTask per labeled segment. Splits follow the official UCI subject partition: the
   nine test subjects are Split.TEST, four deterministic train subjects (id divisible by five) are
   Split.VALIDATION, and the remaining seventeen train subjects are Split.TRAIN. Accelerometer
-  values stay in g, the unit the release states, so the accelerometer spec is dimensionless.
+  values stay in g (standard gravity), the unit the release states.
 license: OTHER
 license_url: https://archive.ics.uci.edu/dataset/341/smartphone-based+recognition+of+human+activities+and+postural+transitions
 source_url: https://archive.ics.uci.edu/static/public/341/smartphone+based+recognition+of+human+activities+and+postural+transitions.zip

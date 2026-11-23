@@ -73,12 +73,11 @@ ACTIVITY = LabelSet(
     ],
     annotations=[Annotation("name", value="activity")],
 )
-# The release states accelerations in g and angular velocities in rad/s. A resting accelerometer
-# reads about 1 g, so the accelerometer spec is dimensionless rather than m/s^2.
+# The release states accelerations in g (standard gravity) and angular velocities in rad/s.
 ACCELEROMETER = TimeSeriesSpec(
     spec_type="accelerometer",
     name="Accelerometer",
-    unit_value=ureg.dimensionless,
+    unit_value=ureg.standard_gravity,
     dtype="float64",
 )
 GYROSCOPE = TimeSeriesSpec(
