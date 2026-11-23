@@ -836,15 +836,15 @@ class Signal(SupportsAnnotate):
 
         Args:
             missing_mask: One boolean per timestep, which is true where the timestep becomes missing.
-            missing: The reason for the missing timesteps. It is recorded in the copy's spec if
-                missing timesteps are not allowed by this series' spec. A spec that allows them is
-                kept unchanged.
+            missing: The reason for the missing timesteps. The copy's spec records it if this
+                series' spec doesn't allow missing timesteps. Specs that allow missing timesteps
+                don't change.
 
         Returns:
             The copy with the additional missing timesteps.
 
         Raises:
-            TimeFValidationError: If ``missing_mask`` is not a boolean array with one entry per
+            TimeFValidationError: If ``missing_mask`` isn't a boolean array with one entry per
                 timestep.
         """
         mask = np.asarray(missing_mask)
