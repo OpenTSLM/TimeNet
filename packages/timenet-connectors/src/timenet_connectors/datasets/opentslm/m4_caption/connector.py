@@ -2,8 +2,9 @@
 
 The OpenTSLM release holds the train part of all 100,000 M4 series, one CSV of series and one CSV of
 captions for each of the six M4 frequencies. Each series becomes one Record and one AnswerTask. The
-target is the caption. The connector leaves out the 706 series whose caption is an error message. The release archive stores no split. generate_splits.py made an 80/10/10 split,
-stratified by frequency, and wrote it to splits.json.xz. The connector reads that file.
+target is the caption. The connector leaves out the 706 series whose caption is an error message.
+The release archive stores no split. generate_splits.py made an 80/10/10 split, stratified by
+frequency, and wrote it to splits.json.xz. The connector reads that file.
 """
 
 from collections import Counter
@@ -13,7 +14,7 @@ from enum import StrEnum
 import lzma
 from pathlib import Path
 import re
-from typing import Annotated, Self
+from typing import Annotated, Self, TypeVar
 
 import numpy as np
 from pydantic import AllowInfNan, BaseModel, ConfigDict, Field, Json, StrictFloat, ValidationError, model_validator
@@ -25,6 +26,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
 from timenet_connectors.download import ensure_archive
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
+from timenet_connectors.splitting import DatasetSplits
 
 
 M4_CAPTION_URL = "https://polybox.ethz.ch/index.php/s/MT3y9WdEebT8wfj/download/M4TimeSeriesCaptionDatasetV02.zip"
@@ -105,27 +107,41 @@ class _CaptionRow(DataRow):
     caption: str
 
 
-@dataclass(frozen=True)
-class M4CaptionedSeries:
-    """One M4 series of the release, with its frequency and caption, before the split is known."""
-
-    m4_id: str
-    frequency: M4Frequency
-    values: np.ndarray
-    caption: str
+_RowT = TypeVar("_RowT", bound=DataRow)
 
 
 @dataclass(frozen=True)
 class M4CaptionSeries:
-    """One M4 series of the release, with its frequency, caption and split."""
+    """One M4 series of the release, with its frequency and caption."""
 
     m4_id: str
     frequency: M4Frequency
     values: np.ndarray
     caption: str
-    split: Split
 
-    def create_record_and_caption_task(self) -> tuple[Record, AnswerTask]:
+    @classmethod
+    def from_rows(cls, frequency: M4Frequency, series_row: _SeriesRow, caption_row: _CaptionRow) -> Self:
+        """Pair a row of a series file with the row of its caption file.
+
+        Returns:
+            The series with its caption.
+
+        Raises:
+            TimeNetConnectorError: If the id is not an M4 id of the frequency, or the two rows have
+                different ids.
+        """
+        m4_id = frequency.parse_m4_id(series_row.id)
+        if series_row.id != caption_row.id:
+            raise TimeNetConnectorError(f"series id {series_row.id!r} does not match caption id {caption_row.id!r}")
+        values = np.array(series_row.series, dtype=np.float32)
+        return cls(m4_id=m4_id, frequency=frequency, values=values, caption=caption_row.caption)
+
+    @property
+    def has_error_caption(self) -> bool:
+        """Whether the caption is an error message of the caption API instead of a caption."""
+        return self.caption.startswith(CAPTION_ERROR_PREFIX)
+
+    def create_record_and_caption_task(self, *, split: Split) -> tuple[Record, AnswerTask]:
         """Create the Record of the series and the task that asks for its caption.
 
         The Record holds the values, the M4 id and the frequency. The task names the Record as its
@@ -140,7 +156,7 @@ class M4CaptionSeries:
             annotations=[Annotation("frequency", value=self.frequency.value)],
             metadata={"m4_id": self.m4_id},
         )
-        task = AnswerTask(inputs=[record], prompt=CAPTION_PROMPT, targets=self.caption, split=self.split)
+        task = AnswerTask(inputs=[record], prompt=CAPTION_PROMPT, targets=self.caption, split=split)
         return record, task
 
 
@@ -186,11 +202,11 @@ class M4CaptionSplits(BaseModel):
         except (lzma.LZMAError, ValidationError) as exc:
             raise TimeNetConnectorError(f"{path.name} does not hold a valid split: {exc}") from exc
 
-    def assign_split_to_each_series(self, m4_ids: Sequence[str]) -> list[Split]:
-        """Assign a split to each series of the pinned release.
+    def split(self, series: Sequence[M4CaptionSeries]) -> DatasetSplits[M4CaptionSeries]:
+        """Put each series of the pinned release in its split.
 
         Returns:
-            The split of each series, in the order of ``m4_ids``.
+            The series of each split, in the order of ``series``.
 
         Raises:
             TimeNetConnectorError: If the split was made from another release, or names a series that
@@ -200,11 +216,14 @@ class M4CaptionSplits(BaseModel):
             raise TimeNetConnectorError(
                 f"the split was made from the release {self.source_sha256}, not from the pinned {M4_CAPTION_SHA256}"
             )
-        unknown = sorted(set(self.m4_ids) - set(m4_ids))
+        unknown = sorted(set(self.m4_ids) - {one_series.m4_id for one_series in series})
         if unknown:
             raise TimeNetConnectorError(f"the split names series {unknown} that the release does not have")
         split_of = dict.fromkeys(self.validation, Split.VALIDATION) | dict.fromkeys(self.test, Split.TEST)
-        return [split_of.get(m4_id, Split.TRAIN) for m4_id in m4_ids]
+        partitions: dict[Split, list[M4CaptionSeries]] = {Split.TRAIN: [], Split.VALIDATION: [], Split.TEST: []}
+        for one_series in series:
+            partitions[split_of.get(one_series.m4_id, Split.TRAIN)].append(one_series)
+        return DatasetSplits(partitions)
 
 
 @dataclass(frozen=True)
@@ -215,76 +234,55 @@ class M4CaptionReader:
     splits_path: Path
 
     def read_series(self) -> list[M4CaptionSeries]:
-        """Read every series of the release with its caption and split, in the order of OpenTSLM's loader.
+        """Read every series of the release with its caption, in the order of OpenTSLM's loader.
 
         The loader reads the files of each frequency, and skips ``m4_series.csv`` and ``m4_captions.csv``.
-        A malformed file raises a :class:`~timenet.errors.TimeNetConnectorError` that names the file and
-        its row. The split comes from the split file, which the method checks against every M4 id.
-
-        Returns:
-            Each series with its caption and split.
-        """
-        captioned = self.read_captioned_series()
-        split_file = M4CaptionSplits.read_from_file(self.splits_path)
-        splits = split_file.assign_split_to_each_series([series.m4_id for series in captioned])
-        return [
-            M4CaptionSeries(
-                m4_id=series.m4_id,
-                frequency=series.frequency,
-                values=series.values,
-                caption=series.caption,
-                split=split,
-            )
-            for series, split in zip(captioned, splits, strict=True)
-        ]
-
-    def read_captioned_series(self) -> list[M4CaptionedSeries]:
-        """Read every series of the release with its caption, in the order of :meth:`read_series`.
-
         The method leaves out each series whose caption is an error message of the caption API.
 
         Returns:
-            Each series with its caption, without the split.
+            Each series with its caption.
         """
-        captioned: list[M4CaptionedSeries] = []
-        for frequency in M4Frequency:
-            captioned.extend(self._read_frequency(frequency))
-        return captioned
+        series = [one_series for frequency in M4Frequency for one_series in self._read_frequency(frequency)]
+        return [one_series for one_series in series if not one_series.has_error_caption]
 
-    def _read_frequency(self, frequency: M4Frequency) -> Iterator[M4CaptionedSeries]:
-        """Read the series of one frequency, paired with the caption in the same row of its caption file.
+    def split_series(self, series: Sequence[M4CaptionSeries]) -> DatasetSplits[M4CaptionSeries]:
+        """Put each series in the split that the split file names for its M4 id.
+
+        Returns:
+            The series of each split, in the order of ``series``.
+        """
+        return M4CaptionSplits.read_from_file(self.splits_path).split(series)
+
+    def _read_frequency(self, frequency: M4Frequency) -> Iterator[M4CaptionSeries]:
+        """Read the series of one frequency, each with the caption in the same row of the caption file.
 
         Yields:
-            Each series with its caption, except a series whose caption is an error message.
+            Each series with its caption.
 
         Raises:
-            TimeNetConnectorError: If the files do not pair one to one, or a series row is malformed.
+            TimeNetConnectorError: If the two files do not pair one to one. The message names the file and
+                the row.
         """
-        series_path = self.directory / f"m4_series_{frequency}.csv"
-        captions_path = self.directory / f"m4_captions_{frequency}.csv"
-        series_rows = list(CsvDataReader(series_path, _SeriesRow, expected_columns=("id", "series")).iter_rows())
-        caption_rows = list(CsvDataReader(captions_path, _CaptionRow, expected_columns=("id", "caption")).iter_rows())
+        series_file = f"m4_series_{frequency}.csv"
+        series_rows = self._read_rows(series_file, _SeriesRow, ("id", "series"))
+        caption_rows = self._read_rows(f"m4_captions_{frequency}.csv", _CaptionRow, ("id", "caption"))
         if len(series_rows) != len(caption_rows):
             raise TimeNetConnectorError(
-                f"{series_path.name} has {len(series_rows)} series rows but {len(caption_rows)} caption rows"
+                f"{series_file} has {len(series_rows)} series rows but {len(caption_rows)} caption rows"
             )
         for number, (series_row, caption_row) in enumerate(zip(series_rows, caption_rows, strict=True), start=1):
             try:
-                m4_id = frequency.parse_m4_id(series_row.id)
-                if series_row.id != caption_row.id:
-                    raise TimeNetConnectorError(
-                        f"series id {series_row.id!r} does not match caption id {caption_row.id!r}"
-                    )
-                if caption_row.caption.startswith(CAPTION_ERROR_PREFIX):
-                    continue
-                yield M4CaptionedSeries(
-                    m4_id=m4_id,
-                    frequency=frequency,
-                    values=np.array(series_row.series, dtype=np.float32),
-                    caption=caption_row.caption,
-                )
+                yield M4CaptionSeries.from_rows(frequency, series_row, caption_row)
             except TimeNetConnectorError as exc:
-                raise TimeNetConnectorError(f"{series_path.name} data row {number}: {exc}") from exc
+                raise TimeNetConnectorError(f"{series_file} data row {number}: {exc}") from exc
+
+    def _read_rows(self, file_name: str, row_type: type[_RowT], columns: tuple[str, ...]) -> list[_RowT]:
+        """Read every row of one CSV file of the release.
+
+        Returns:
+            The rows, in file order.
+        """
+        return list(CsvDataReader(self.directory / file_name, row_type, expected_columns=columns).iter_rows())
 
 
 class M4CaptionConnector(BaseConnector[list[M4CaptionReader]]):
@@ -311,12 +309,13 @@ class M4CaptionConnector(BaseConnector[list[M4CaptionReader]]):
         Returns:
             The populated dataset.
         """
-        (release,) = releases
+        (reader,) = releases
         dataset = TimeFDataset(metadata=self.metadata())
-        for series in release.read_series():
-            record, task = series.create_record_and_caption_task()
-            dataset.add_record(record)
-            dataset.add_task(task)
+        for split, series_in_split in reader.split_series(reader.read_series()).items():
+            for series in series_in_split:
+                record, task = series.create_record_and_caption_task(split=split)
+                dataset.add_record(record)
+                dataset.add_task(task)
         return dataset
 
 

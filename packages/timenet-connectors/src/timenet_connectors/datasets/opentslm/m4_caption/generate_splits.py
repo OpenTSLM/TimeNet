@@ -1,18 +1,14 @@
-"""Write splits.json.xz, the frozen train, validation and test split of m4-caption.
+"""The script that made splits.json.xz, the train, validation and test split of m4-caption.
 
-The release archive stores no split. This script makes an 80/10/10 split with StratifiedSplitter,
-stratified by M4 frequency, so that validation and test each hold a tenth of every frequency.
+We ran this script once, offline, and committed its output. The connector reads splits.json.xz and
+does not run this script, so you do not need to run it. It is here only to show how the split was
+made. A new run can give another split, because the result depends on the version of scikit-learn.
 
-M4 has 90 pairs of series whose train parts are equal value for value. Series with the same values
-must stay in one split, so the splitter groups the series by their values. The script reads the
-series through the connector, so it leaves out the series whose caption is an error message.
+The release archive stores no split. The script makes an 80/10/10 split with StratifiedSplitter,
+stratified by M4 frequency. M4 has 90 pairs of series with equal values, so the splitter groups the
+series by their values and each pair stays in one split.
 
-The result depends on the version of scikit-learn. So the script ran once and wrote the validation
-and test series to splits.json.xz, and the connector reads that file. The script is kept here for
-reference.
-
-Run it once from the root of the repository. The argument is the path to the release archive,
-M4TimeSeriesCaptionDatasetV02.zip::
+To run it from the root of the repository, give the path to M4TimeSeriesCaptionDatasetV02.zip::
 
     uv run python -m timenet_connectors.datasets.opentslm.m4_caption.generate_splits <archive>
 """
@@ -30,8 +26,8 @@ from timenet_connectors.datasets.opentslm.m4_caption.connector import (
     M4_CAPTION_SHA256,
     RELEASE_FOLDER,
     SPLITS_PATH,
-    M4CaptionedSeries,
     M4CaptionReader,
+    M4CaptionSeries,
     M4Frequency,
 )
 from timenet_connectors.splitting import StratifiedSplitter
@@ -40,7 +36,7 @@ from timenet_connectors.splitting import StratifiedSplitter
 SEED = 42
 
 
-def frequency(series: M4CaptionedSeries) -> M4Frequency:
+def frequency(series: M4CaptionSeries) -> M4Frequency:
     """Return the frequency of a series, which the split stratifies by.
 
     Returns:
@@ -49,7 +45,7 @@ def frequency(series: M4CaptionedSeries) -> M4Frequency:
     return series.frequency
 
 
-def values_digest(series: M4CaptionedSeries) -> str:
+def values_digest(series: M4CaptionSeries) -> str:
     """Return the SHA-256 digest of the values of a series. Series with the same values form one group.
 
     Returns:
@@ -80,9 +76,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as directory, zipfile.ZipFile(archive_path) as archive:
         archive.extractall(directory)
         reader = M4CaptionReader(directory=Path(directory) / RELEASE_FOLDER, splits_path=SPLITS_PATH)
-        captioned = reader.read_captioned_series()
+        captioned = reader.read_series()
 
-    splitter = StratifiedSplitter[M4CaptionedSeries](
+    splitter = StratifiedSplitter[M4CaptionSeries](
         train_folds=8,
         validation_folds=1,
         test_folds=1,

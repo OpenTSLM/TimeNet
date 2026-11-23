@@ -101,7 +101,10 @@ def _convert(directory: Path, **changes) -> TimeFDataset:
 
 def test_each_series_becomes_a_record_and_a_caption_task(tmp_path):
     tasks = _convert(tmp_path).tasks_of(AnswerTask)
-    expected = [(frequency, m4_id) for frequency, m4_ids in _SERIES_IDS.items() for m4_id in m4_ids]
+    release_order = [(frequency, m4_id) for frequency, m4_ids in _SERIES_IDS.items() for m4_id in m4_ids]
+    # The tasks come split by split, each split in release order.
+    split_order = [Split.TRAIN, Split.VALIDATION, Split.TEST]
+    expected = sorted(release_order, key=lambda series: split_order.index(_expected_split(series[1])))
     assert len(tasks) == len(expected)
     for task, (frequency, m4_id) in zip(tasks, expected, strict=True):
         (record,) = task.inputs
@@ -131,7 +134,7 @@ def test_a_series_whose_caption_is_an_error_message_is_left_out(tmp_path):
         "Q1": "Error generating caption: Error code: 404",
     }
     tasks = _convert(tmp_path, captions=captions).tasks_of(AnswerTask)
-    assert [task.inputs[0].metadata["m4_id"] for task in tasks] == ["D1", "H1", "M1", "M2", "M3", "Q2", "W1", "Y1"]
+    assert {task.inputs[0].metadata["m4_id"] for task in tasks} == {"D1", "H1", "M1", "M2", "M3", "Q2", "W1", "Y1"}
 
 
 @pytest.mark.parametrize(
