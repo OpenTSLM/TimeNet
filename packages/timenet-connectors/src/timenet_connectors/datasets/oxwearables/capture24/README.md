@@ -13,8 +13,9 @@ record also asks each user to obey privacy law, to protect the confidentiality o
 and not to try to identify them. The authors' benchmark code is [OxWearables/capture24][code]. It has a separate
 academic-use license. The connector reimplements its windowing without copying that code.
 
-The connector is one file, `connector.py`. Its tests build a small fake release, so they need no
-download.
+The connector has two files. `source_data.py` reads and checks the published files and selects
+the benchmark windows. `connector.py` builds the TimeNet dataset from the results. The tests build a
+small fake release, so they need no download.
 
 [paper]: https://doi.org/10.1038/s41597-024-03960-3
 [ora]: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
@@ -118,7 +119,7 @@ TimeF stores each set once, and the dataset has no dataset annotations.
 | `willetts_specific_2018` | Activity type | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
 | `walmsley_2020` | Movement behavior | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
 
-The classes are written in `connector.py`, not read from the release. The build fails if the label
+The classes are written in `source_data.py`, not read from the release. The build fails if the label
 dictionary gives a class that the scheme's label set does not list.
 
 The label dictionary must contain exactly the raw label column and the six scheme columns.

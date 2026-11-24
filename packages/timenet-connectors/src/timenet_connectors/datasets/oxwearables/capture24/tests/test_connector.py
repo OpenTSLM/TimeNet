@@ -9,7 +9,7 @@ from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.types.text import read_value
-from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector
+from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector, source_data
 
 
 _SLEEP = "7030 sleeping;MET 0.95"
@@ -334,12 +334,10 @@ def test_card_pins_the_archive_the_connector_downloads():
     assert Capture24Connector().metadata().source_revision == f"sha256:{connector.ARCHIVE_SHA256}"
 
 
-@pytest.mark.parametrize(
-    "label_set", [connector._ACTIVITY_TYPES_WILLETTS_SPECIFIC_2018, connector._MOVEMENT_BEHAVIORS_WALMSLEY_2020]
-)
-def test_label_sets_are_in_string_order(label_set):
-    # A tie between classes goes to the first in string order, which is the first in the label set.
-    assert list(label_set.names) == sorted(label_set.names)
+@pytest.mark.parametrize("classes", source_data.BENCHMARK_CLASSES.values())
+def test_benchmark_classes_are_in_string_order(classes):
+    # A tie between classes goes to the first in string order, which is the first in the list.
+    assert list(classes) == sorted(classes)
 
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
@@ -354,13 +352,13 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
 
 def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
     reads = []
-    read_acceleration = connector._read_acceleration
+    read_acceleration = source_data.read_acceleration
 
-    def spy(participant):
-        reads.append(participant.person.path.name)
-        return read_acceleration(participant)
+    def spy(recording):
+        reads.append(recording.participant.path.name)
+        return read_acceleration(recording)
 
-    monkeypatch.setattr(connector, "_read_acceleration", spy)
+    monkeypatch.setattr(source_data, "read_acceleration", spy)
     original = Capture24Connector().convert(_release(tmp_path))
     LocalRegistry(tmp_path / "registry").put_dataset(original)
     assert reads == ["P001.csv.gz", "P100.csv.gz", "P101.csv.gz"]
