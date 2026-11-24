@@ -174,17 +174,16 @@ def _walk(start_us: int, end_us: int) -> tuple:
     return ("activity", _WALK, start_us, end_us, _WALK_CLASSES)
 
 
-_WILLETTS = _name(connector.WILLETTS_SPECIFIC_2018)
-_WALMSLEY = _name(connector.WALMSLEY_2020)
+_WILLETTS = "willetts_specific_2018"
+_WALMSLEY = "walmsley_2020"
 
 # Descriptions tell readers that age is a band and time is shifted.
 # Other connectors store an exact age under the key age.
 _DESCRIPTIONS = {
-    "age_band": "The participant's age band in years, as metadata.csv writes it. The authors give no exact age.",
+    "age_band": "The participant's age band in years.",
     "recording_start_local": (
         "The first sample's timestamp as the authors published it, with no zone. For anonymity they "
-        "randomized the date and shifted the time by a small random amount. The time of day is as "
-        "published, not an exact local time."
+        "randomized the date and shifted the time by a small random amount."
     ),
 }
 
@@ -335,7 +334,9 @@ def test_card_pins_the_archive_the_connector_downloads():
     assert Capture24Connector().metadata().source_revision == f"sha256:{connector.ARCHIVE_SHA256}"
 
 
-@pytest.mark.parametrize("label_set", [connector.WILLETTS_SPECIFIC_2018, connector.WALMSLEY_2020])
+@pytest.mark.parametrize(
+    "label_set", [connector._ACTIVITY_TYPES_WILLETTS_SPECIFIC_2018, connector._MOVEMENT_BEHAVIORS_WALMSLEY_2020]
+)
 def test_label_sets_are_in_string_order(label_set):
     # A tie between classes goes to the first in string order, which is the first in the label set.
     assert list(label_set.names) == sorted(label_set.names)
@@ -421,6 +422,15 @@ def test_changed_recording_fails_when_reread(tmp_path, edit, message):
         _x_of(dataset, "P001").to_numpy()
     assert "P001.csv.gz" in str(error.value)
     assert "the file changed" in str(error.value)
+
+
+def test_a_participant_outside_both_splits_fails(tmp_path):
+    root = _release(tmp_path)
+    (root / "P101.csv.gz").rename(root / "P152.csv.gz")
+    metadata = root / "metadata.csv"
+    metadata.write_text(metadata.read_text(encoding="utf-8").replace("P101", "P152"), encoding="utf-8")
+    with pytest.raises(TimeNetConnectorError, match=r"metadata\.csv:4: P152 is in neither the train split nor"):
+        Capture24Connector().convert(root)
 
 
 def test_a_release_with_no_participants_fails(tmp_path):

@@ -39,8 +39,8 @@ from timenet_connectors.download import ensure_archive, find_dir_containing
 
 ARCHIVE_URL = "https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001/files/rpr76f381b"
 """The URL of the 6.9 GB CAPTURE-24 archive."""
-_ARCHIVE_FILENAME = "capture24.zip"
 ARCHIVE_SHA256 = "69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2"
+_ARCHIVE_FILENAME = "capture24.zip"
 _ARCHIVE_ROOT = "capture24"
 """The top-level directory inside the archive."""
 
@@ -96,7 +96,6 @@ _COLUMN_TYPES = {
 _SPEC = TimeSeriesSpec(
     spec_type="acceleration", name="Wrist acceleration", unit_value=ureg.standard_gravity, dtype="float32"
 )
-_SCHEME_COLUMN_PREFIX = "label:"
 
 
 @unique
@@ -113,7 +112,6 @@ class _Key(StrEnum):
     """An activity annotation for consecutive samples with the same raw label."""
 
 
-# TODO(#624): use `Sex` from `timenet_connectors.demographics` after PR #624 reaches the base branch.
 @unique
 class _Sex(StrEnum):
     """A participant's recorded sex."""
@@ -122,7 +120,7 @@ class _Sex(StrEnum):
     MALE = "male"
 
 
-_SEX_OF_LETTER = {"F": _Sex.FEMALE, "M": _Sex.MALE}
+_SEX_FROM_LETTER = {"F": _Sex.FEMALE, "M": _Sex.MALE}
 """The sex value for each metadata letter."""
 
 
@@ -139,40 +137,22 @@ class _AgeBand(StrEnum):
 # What the authors' prepare_data.py (``--winsec 10``) and benchmark.py fix.
 _WINDOW_US = 10 * US_PER_S
 _WINDOW_SAMPLES = _WINDOW_US // _SAMPLE_PERIOD_US
-_FIRST_TEST_PARTICIPANT = 101
-"""The first test participant's number in the P101 to P151 test set."""
+_TRAIN_PARTICIPANTS = range(1, 101)
+"""The participant numbers of the train split, P001 to P100."""
+_TEST_PARTICIPANTS = range(101, 152)
+"""The participant numbers of the test split, P101 to P151."""
 _NO_LABEL = -1
-"""The code for an empty activity label."""
-_AGE_BAND_DESCRIPTION = "The participant's age band in years, as metadata.csv writes it. The authors give no exact age."
+"""The raw label code of an unlabeled sample.
+
+As an index, it selects the "no class" entry at the end of each class array.
+"""
+_AGE_BAND_DESCRIPTION = "The participant's age band in years."
 _RECORDING_START_DESCRIPTION = (
     "The first sample's timestamp as the authors published it, with no zone. For anonymity they randomized "
-    "the date and shifted the time by a small random amount. The time of day is as published, not an "
-    "exact local time."
+    "the date and shifted the time by a small random amount."
 )
 
-
-# The label sets of the two schemes that benchmark.py scores, with the classes as the label dictionary
-# names them. Each set is in string order, because a tie between classes goes to the first in string
-# order.
-WILLETTS_SPECIFIC_2018 = LabelSet(
-    [
-        "bicycling",
-        "household-chores",
-        "manual-work",
-        "mixed-activity",
-        "sitting",
-        "sleep",
-        "sports",
-        "standing",
-        "vehicle",
-        "walking",
-    ],
-    annotations=[Annotation("name", value="willetts_specific_2018")],
-)
-WALMSLEY_2020 = LabelSet(
-    ["light", "moderate-vigorous", "sedentary", "sleep"],
-    annotations=[Annotation("name", value="walmsley_2020")],
-)
+_SCHEME_COLUMN_PREFIX = "label:"
 
 
 @unique
@@ -192,9 +172,47 @@ class _Scheme(StrEnum):
         return f"{_SCHEME_COLUMN_PREFIX}{self.value}"
 
 
-_LABEL_SETS = {
-    _Scheme.WILLETTS_SPECIFIC_2018: WILLETTS_SPECIFIC_2018,
-    _Scheme.WALMSLEY_2020: WALMSLEY_2020,
+# The label sets of the two schemes that benchmark.py scores, with the classes as the label dictionary
+# names them. Each set is in string order, because a tie between classes goes to the first in string
+# order.
+_ACTIVITY_TYPES_WILLETTS_SPECIFIC_2018 = LabelSet(
+    [
+        "bicycling",
+        "household-chores",
+        "manual-work",
+        "mixed-activity",
+        "sitting",
+        "sleep",
+        "sports",
+        "standing",
+        "vehicle",
+        "walking",
+    ],
+    annotations=[
+        Annotation("name", value="willetts_specific_2018"),
+        Annotation(
+            "description",
+            value="Activity type, in the 10 classes of the WillettsSpecific2018 scheme (Willetts et al., 2018).",
+        ),
+    ],
+)
+_MOVEMENT_BEHAVIORS_WALMSLEY_2020 = LabelSet(
+    ["light", "moderate-vigorous", "sedentary", "sleep"],
+    annotations=[
+        Annotation("name", value="walmsley_2020"),
+        Annotation(
+            "description",
+            value=(
+                "Movement behavior: sleep, sedentary, light or moderate-vigorous activity, as in the "
+                "Walmsley2020 scheme (Walmsley et al., 2020)."
+            ),
+        ),
+    ],
+)
+
+_BENCHMARK_LABEL_SETS = {
+    _Scheme.WILLETTS_SPECIFIC_2018: _ACTIVITY_TYPES_WILLETTS_SPECIFIC_2018,
+    _Scheme.WALMSLEY_2020: _MOVEMENT_BEHAVIORS_WALMSLEY_2020,
 }
 """The label sets for the two benchmark schemes."""
 
@@ -206,7 +224,7 @@ class _LabelDictionary:
     raw_labels: tuple[str, ...]
     """The raw labels in dictionary row order."""
     code_of_raw: dict[str, int]
-    """The dictionary row index of each raw label."""
+    """The code of each raw label, which is its row number in the dictionary."""
     scheme_classes_of_raw: tuple[dict[_Scheme, str], ...]
     """The class of each raw label in all six schemes."""
     class_of_raw: dict[_Scheme, np.ndarray]
@@ -249,12 +267,8 @@ class _Person:
     pid: str
     age_band: _AgeBand
     sex: _Sex
+    split: Split
     path: Path
-
-    @property
-    def split(self) -> Split:
-        """The participant's training or test split."""
-        return Split.TEST if int(self.pid.removeprefix("P")) >= _FIRST_TEST_PARTICIPANT else Split.TRAIN
 
 
 @dataclass(frozen=True)
@@ -330,7 +344,9 @@ def _read_labels(path: Path) -> _LabelDictionary:
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
     if len(set(raw_labels)) != len(raw_labels):
         raise TimeNetConnectorError(f"{path}: a raw label is listed twice")
-    class_of_raw = {scheme: _class_codes(path, [row[scheme.column] for row in rows], scheme) for scheme in _LABEL_SETS}
+    class_of_raw = {
+        scheme: _class_codes(path, [row[scheme.column] for row in rows], scheme) for scheme in _BENCHMARK_LABEL_SETS
+    }
     return _LabelDictionary(
         raw_labels=tuple(raw_labels),
         code_of_raw={label: code for code, label in enumerate(raw_labels)},
@@ -348,7 +364,7 @@ def _class_codes(path: Path, classes: list[str], scheme: _Scheme) -> np.ndarray:
     Raises:
         TimeNetConnectorError: If a class is absent from the label set.
     """
-    label_set = _LABEL_SETS[scheme]
+    label_set = _BENCHMARK_LABEL_SETS[scheme]
     unknown = sorted(set(classes) - set(label_set.names))
     if unknown:
         raise TimeNetConnectorError(f"{path}: classes missing from the label set of {scheme}: {unknown}")
@@ -411,16 +427,23 @@ def _person_of_row(path: Path, line: int, row: dict[str, str], recordings: dict[
     """Build a participant from a metadata row and its recording path.
 
     Returns:
-        The participant's ID, age band, sex, and recording path.
+        The participant's ID, age band, sex, split, and recording path.
 
     Raises:
-        TimeNetConnectorError: If the age band or sex is unknown.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _parse_person_value
+        TimeNetConnectorError: If the age band or sex is unknown, or the participant is in no split.
+    """
     pid = row[_MetadataColumn.PID]
+    number = int(pid.removeprefix("P"))
+    if number in _TRAIN_PARTICIPANTS:
+        split = Split.TRAIN
+    elif number in _TEST_PARTICIPANTS:
+        split = Split.TEST
+    else:
+        raise TimeNetConnectorError(f"{path}:{line}: {pid} is in neither the train split nor the test split")
     age_band = _parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand)
     sex_letter = row[_MetadataColumn.SEX]
-    sex = _parse_person_value(path, line, _MetadataColumn.SEX, sex_letter, _SEX_OF_LETTER.__getitem__)
-    return _Person(pid=pid, age_band=age_band, sex=sex, path=recordings[pid])
+    sex = _parse_person_value(path, line, _MetadataColumn.SEX, sex_letter, _SEX_FROM_LETTER.__getitem__)
+    return _Person(pid=pid, age_band=age_band, sex=sex, split=split, path=recordings[pid])
 
 
 def _recordings_by_pid(root: Path) -> dict[str, Path]:
@@ -661,7 +684,7 @@ def _make_windows(
         per_sample = class_of_raw[window_codes]
         # Count each class per window. Unlabeled samples use an index beyond the classes, so the counts exclude them.
         counts = np.stack(
-            [(per_sample == index).sum(axis=1) for index in range(len(_LABEL_SETS[scheme].labels))], axis=1
+            [(per_sample == index).sum(axis=1) for index in range(len(_BENCHMARK_LABEL_SETS[scheme].labels))], axis=1
         )
         # argmax takes the first of equal counts: the class first in string order.
         classes[scheme] = counts.argmax(axis=1).astype(np.int16)
@@ -798,7 +821,7 @@ def _scheme_tasks(scheme: _Scheme, participant: _Participant, record: Record) ->
     Yields:
         A task with the window's time span and class in time order.
     """
-    label_set = _LABEL_SETS[scheme]
+    label_set = _BENCHMARK_LABEL_SETS[scheme]
     starts_us = participant.window_starts_us.tolist()
     classes = participant.window_classes[scheme].tolist()
     for start_us, class_index in zip(starts_us, classes, strict=True):
@@ -856,7 +879,7 @@ class Capture24Connector(BaseConnector[Path]):
 
         def tasks() -> Iterator[ClassificationTask]:
             # As the authors' benchmark.py: one benchmark per scheme, over every participant's windows.
-            for scheme in _LABEL_SETS:
+            for scheme in _BENCHMARK_LABEL_SETS:
                 for participant, record in zip(participants, records, strict=True):
                     yield from _scheme_tasks(scheme, participant, record)
 

@@ -110,13 +110,13 @@ one scheme. The authors' `benchmark.py` scores two schemes, so the connector def
 sets.
 
 Each task carries the label set of its scheme in `label_set`. The `name` annotation of each set
-holds the name in the table below. TimeF stores each set once, and the dataset has no dataset
-annotations.
+holds the name in the table below, and its `description` annotation says what the set classifies.
+TimeF stores each set once, and the dataset has no dataset annotations.
 
-| Label set | Classes, sorted by their text |
-| --- | --- |
-| `willetts_specific_2018` | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
-| `walmsley_2020` | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
+| Label set | What it classifies | Classes, sorted by their text |
+| --- | --- | --- |
+| `willetts_specific_2018` | Activity type | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
+| `walmsley_2020` | Movement behavior | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
 
 The classes are written in `connector.py`, not read from the release. The build fails if the label
 dictionary gives a class that the scheme's label set does not list.
@@ -126,7 +126,8 @@ Each row must name a class in every scheme, including schemes without tasks.
 This prevents blank classes from entering the activity annotations.
 
 The `metadata.csv` table must list at least one participant and use the expected age bands and sex
-values. Both tables must contain exactly the expected columns. A blank or missing field fails the
+values. Each participant must be in the train split (P001 to P100) or the test split (P101 to
+P151). Both tables must contain exactly the expected columns. A blank or missing field fails the
 build. A row with more fields than the header also fails, so no extra value is dropped unnoticed.
 Violations of these rules raise `TimeNetConnectorError`.
 
@@ -205,6 +206,12 @@ a small fake release to exercise the same rules.
   Their `make_windows` at commit `f861b44` keeps 934,762.
 - The AX3 was set to ±8 g. Some values reach 8 g or more in magnitude after the authors' gravity
   calibration. The connector keeps these values as published.
+- The paper does not explain the gaps in eight recordings. P016 and P017 each skip exactly one
+  hour at about 1 a.m., and the samples after the gap have labels. This matches a clock change in
+  the local timestamps. If a clock change is the cause, no data is missing, and the second Source
+  starts one hour later than the true elapsed time. P060 and P094 end with only 10 s and 13 s of
+  samples after a gap of more than two hours. The connector keeps the published timestamps and
+  marks no timestep as missing.
 - `train_deep_models.py` imports `old_code`, which is not in the repository, and loads
   `Y_willetts.npy` and `pid.npy`, which `prepare_data.py` does not write. The CNN and RNN results
   cannot be reproduced from the repository as published.
