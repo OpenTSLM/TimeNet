@@ -176,6 +176,30 @@ input order or adding samples can change it. No global random state is modified.
 package pins scikit-learn 1.9.1 because its allocation affects persisted dataset contents. Review
 generated assignments and version affected datasets when upgrading the splitter implementation.
 
+If the split must not change with a library version, or must reproduce a split that other code
+made, a script computes it once and writes the train, validation and test samples to a file beside
+the connector. `PrecomputedSplitter.from_file` reads that file and checks that the split was made
+from the pinned source file. Each sample must be in exactly one split of the file. The file names a
+sample by its position in the samples, or by the key that `key` returns:
+
+```python
+from timenet_connectors.splitting import PrecomputedSplitter
+
+def get_series_id(sample):
+    return sample.series_id
+
+splitter = PrecomputedSplitter.from_file(
+    SPLITS_PATH,
+    source_sha256=SOURCE_SHA256,
+    key=get_series_id,
+)
+splits = splitter.split(samples)
+```
+
+The file is JSON, compressed with xz when its name ends in `.xz`. It holds `source_sha256`,
+`train_keys`, `validation_keys` and `test_keys`. The `opentslm/sleep-cot` and `opentslm/m4-caption` connectors keep the
+script that wrote their file, `generate_splits.py`.
+
 When constructing TimeNet tasks, copy the partition name onto each task:
 
 ```python

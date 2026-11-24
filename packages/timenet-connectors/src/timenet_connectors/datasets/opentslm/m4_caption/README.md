@@ -15,9 +15,8 @@ The OpenTSLM release has no split. We ran `generate_splits.py` once to make an 8
 with equal values in one split, preventing identical inputs from crossing splits. This is not the
 OpenTSLM paper's random split.
 
-`splits.json.xz` stores the validation and test M4 ids (9,929 each) and the release archive's
-SHA-256. All remaining series go into train. The build fails if the SHA-256 does not match the
-pinned release.
+`splits.json.xz` stores the train, validation and test M4 ids (79,436, 9,929 and 9,929) and the
+release archive's SHA-256. The build fails if the SHA-256 does not match the pinned release.
 
 ## Relation to the M4 data
 
