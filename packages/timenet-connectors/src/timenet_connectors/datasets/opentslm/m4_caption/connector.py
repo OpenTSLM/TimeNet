@@ -37,11 +37,12 @@ SPLITS_PATH = Path(__file__).with_name("splits.json.xz")
 """The stratified split of the release, as generate_splits.py wrote it."""
 
 CAPTION_PROMPT = "Please generate a detailed caption for this time-series, describing it as accurately as possible."
-"""The prompt of OpenTSLM's loader, the same for every series: the post-prompt of ``M4QADataset``."""
+"""The prompt that OpenTSLM's loader gives the model to ask for the caption of a series. Note: It is not the prompt that GPT-4o got to write the captions."""
 
 CAPTION_ERROR_PREFIX = "Error generating caption: "
-"""The start of an error message of the caption API, which the release has instead of a caption for
-706 series. The dataset leaves out these series."""
+"""The start of the text that the release has in place of a caption when the caption API failed. For
+706 of the 100,000 series, the caption is such an error message, for example "Error generating
+caption: Connection error.". The connector leaves out these series."""
 
 # The release states no unit, and the M4 series come from many domains.
 M4_SERIES = TimeSeriesSpec(spec_type="m4_series", name="M4 series", unit_value=None, dtype="float32")
@@ -242,7 +243,9 @@ class M4CaptionReader:
         Returns:
             Each series with its caption.
         """
-        series = [one_series for frequency in M4Frequency for one_series in self._read_frequency(frequency)]
+        series: list[M4CaptionSeries] = []
+        for frequency in M4Frequency:
+            series.extend(self._read_frequency(frequency))
         return [one_series for one_series in series if not one_series.has_error_caption]
 
     def split_series(self, series: Sequence[M4CaptionSeries]) -> DatasetSplits[M4CaptionSeries]:
@@ -264,8 +267,8 @@ class M4CaptionReader:
                 the row.
         """
         series_file = f"m4_series_{frequency}.csv"
-        series_rows = self._read_rows(series_file, _SeriesRow, ("id", "series"))
-        caption_rows = self._read_rows(f"m4_captions_{frequency}.csv", _CaptionRow, ("id", "caption"))
+        series_rows = self._read_rows(series_file, _SeriesRow, expected_columns=("id", "series"))
+        caption_rows = self._read_rows(f"m4_captions_{frequency}.csv", _CaptionRow, expected_columns=("id", "caption"))
         if len(series_rows) != len(caption_rows):
             raise TimeNetConnectorError(
                 f"{series_file} has {len(series_rows)} series rows but {len(caption_rows)} caption rows"
@@ -276,13 +279,19 @@ class M4CaptionReader:
             except TimeNetConnectorError as exc:
                 raise TimeNetConnectorError(f"{series_file} data row {number}: {exc}") from exc
 
-    def _read_rows(self, file_name: str, row_type: type[_RowT], columns: tuple[str, ...]) -> list[_RowT]:
+    def _read_rows(self, file_name: str, row_type: type[_RowT], *, expected_columns: tuple[str, ...]) -> list[_RowT]:
         """Read every row of one CSV file of the release.
+
+        Args:
+            file_name: The name of the CSV file.
+            row_type: The model of one row of the file.
+            expected_columns: The header of the file, which the reader checks.
 
         Returns:
             The rows, in file order.
         """
-        return list(CsvDataReader(self.directory / file_name, row_type, expected_columns=columns).iter_rows())
+        reader = CsvDataReader(self.directory / file_name, row_type, expected_columns=expected_columns)
+        return list(reader.iter_rows())
 
 
 class M4CaptionConnector(BaseConnector[list[M4CaptionReader]]):

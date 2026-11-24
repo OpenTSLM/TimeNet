@@ -16,6 +16,7 @@ To run it from the root of the repository, give the path to M4TimeSeriesCaptionD
 import hashlib
 import json
 import lzma
+from operator import attrgetter
 from pathlib import Path
 import sys
 import tempfile
@@ -28,21 +29,11 @@ from timenet_connectors.datasets.opentslm.m4_caption.connector import (
     SPLITS_PATH,
     M4CaptionReader,
     M4CaptionSeries,
-    M4Frequency,
 )
 from timenet_connectors.splitting import StratifiedSplitter
 
 
 SEED = 42
-
-
-def frequency(series: M4CaptionSeries) -> M4Frequency:
-    """Return the frequency of a series, which the split stratifies by.
-
-    Returns:
-        The frequency.
-    """
-    return series.frequency
 
 
 def values_digest(series: M4CaptionSeries) -> str:
@@ -82,7 +73,7 @@ def main() -> None:
         train_folds=8,
         validation_folds=1,
         test_folds=1,
-        stratify_by=frequency,
+        stratify_by=attrgetter("frequency"),
         group_by=values_digest,
         seed=SEED,
     )
