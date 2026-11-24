@@ -28,7 +28,6 @@ from timenet.types import (
     US_PER_S,
     Annotation,
     ClassificationTask,
-    Label,
     LabelSet,
     Split,
     TimeInterval,
@@ -156,26 +155,23 @@ _RECORDING_START_DESCRIPTION = (
 # names them. Each set is in string order, because a tie between classes goes to the first in string
 # order.
 WILLETTS_SPECIFIC_2018 = LabelSet(
-    name="willetts_specific_2018",
-    labels=tuple(
-        Label(name=name)
-        for name in (
-            "bicycling",
-            "household-chores",
-            "manual-work",
-            "mixed-activity",
-            "sitting",
-            "sleep",
-            "sports",
-            "standing",
-            "vehicle",
-            "walking",
-        )
-    ),
+    [
+        "bicycling",
+        "household-chores",
+        "manual-work",
+        "mixed-activity",
+        "sitting",
+        "sleep",
+        "sports",
+        "standing",
+        "vehicle",
+        "walking",
+    ],
+    annotations=[Annotation("name", value="willetts_specific_2018")],
 )
 WALMSLEY_2020 = LabelSet(
-    name="walmsley_2020",
-    labels=tuple(Label(name=name) for name in ("light", "moderate-vigorous", "sedentary", "sleep")),
+    ["light", "moderate-vigorous", "sedentary", "sleep"],
+    annotations=[Annotation("name", value="walmsley_2020")],
 )
 
 
@@ -334,10 +330,7 @@ def _read_labels(path: Path) -> _LabelDictionary:
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
     if len(set(raw_labels)) != len(raw_labels):
         raise TimeNetConnectorError(f"{path}: a raw label is listed twice")
-    class_of_raw = {
-        scheme: _class_codes(path, [row[scheme.column] for row in rows], label_set)
-        for scheme, label_set in _LABEL_SETS.items()
-    }
+    class_of_raw = {scheme: _class_codes(path, [row[scheme.column] for row in rows], scheme) for scheme in _LABEL_SETS}
     return _LabelDictionary(
         raw_labels=tuple(raw_labels),
         code_of_raw={label: code for code, label in enumerate(raw_labels)},
@@ -346,8 +339,8 @@ def _read_labels(path: Path) -> _LabelDictionary:
     )
 
 
-def _class_codes(path: Path, classes: list[str], label_set: LabelSet) -> np.ndarray:
-    """Map activity classes to indices in a label set.
+def _class_codes(path: Path, classes: list[str], scheme: _Scheme) -> np.ndarray:
+    """Map activity classes to indices in the label set of a benchmark scheme.
 
     Returns:
         Class indices in input order followed by ``len(label_set.labels)`` for unlabeled samples.
@@ -355,9 +348,10 @@ def _class_codes(path: Path, classes: list[str], label_set: LabelSet) -> np.ndar
     Raises:
         TimeNetConnectorError: If a class is absent from the label set.
     """
+    label_set = _LABEL_SETS[scheme]
     unknown = sorted(set(classes) - set(label_set.names))
     if unknown:
-        raise TimeNetConnectorError(f"{path}: classes missing from label set {label_set.name!r}: {unknown}")
+        raise TimeNetConnectorError(f"{path}: classes missing from the label set of {scheme}: {unknown}")
     index_of_class = {name: index for index, name in enumerate(label_set.names)}
     codes = [index_of_class[name] for name in classes]
     unlabeled = len(label_set.labels)
@@ -743,7 +737,7 @@ def _activity_annotations(runs: _LabelRuns, labels: _LabelDictionary) -> Iterato
     """
     for start_us, end_us, code in zip(runs.starts_us.tolist(), runs.ends_us.tolist(), runs.codes.tolist(), strict=True):
         yield Annotation(
-            key=_Key.ACTIVITY,
+            _Key.ACTIVITY,
             value=labels.raw_labels[code],
             span=TimeInterval.micros(start_us, end_us),
             metadata={scheme.value: name for scheme, name in labels.scheme_classes_of_raw[code].items()},
@@ -762,7 +756,7 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
     sources = []
     for index, (segment, runs) in enumerate(zip(participant.segments, participant.label_runs, strict=True)):
         time_axis = RegularAxis.from_rate_hz(_SAMPLE_RATE_HZ, offset_us=segment.offset_us)
-        signals = tuple(
+        signals = [
             Signal.from_loader(
                 name=column,
                 spec=_SPEC,
@@ -771,31 +765,31 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
                 loader=partial(_load_segment, acceleration, participant, segment, axis),
             )
             for axis, column in enumerate(_AXES)
-        )
+        ]
         # Pass all runs to the Source constructor at once. Adding one run at a time copies the
         # annotation tuple for every run.
         sources.append(
             Source(
-                name=f"{_DEVICE} segment {index}",
+                f"{_DEVICE} segment {index}",
                 signals=signals,
-                annotations=tuple(_activity_annotations(runs, labels)),
+                annotations=list(_activity_annotations(runs, labels)),
             )
         )
     person = participant.person
-    record = Record(sources=tuple(sources), metadata={_RECORD_FILE_KEY: person.path.name})
-    record.add_annotations(
-        (
-            Annotation(key=_Key.SUBJECT_IDS, value=[person.pid]),
-            Annotation(key=_Key.AGE_BAND, value=person.age_band.value, description=_AGE_BAND_DESCRIPTION),
-            Annotation(key=_Key.SEX, value=person.sex.value),
+    return Record(
+        sources=sources,
+        metadata={_RECORD_FILE_KEY: person.path.name},
+        annotations=[
+            Annotation(_Key.SUBJECT_IDS, value=[person.pid]),
+            Annotation(_Key.AGE_BAND, value=person.age_band.value, description=_AGE_BAND_DESCRIPTION),
+            Annotation(_Key.SEX, value=person.sex.value),
             Annotation(
-                key=_Key.RECORDING_START_LOCAL,
+                _Key.RECORDING_START_LOCAL,
                 value=participant.start_local,
                 description=_RECORDING_START_DESCRIPTION,
             ),
-        )
+        ],
     )
-    return record
 
 
 def _scheme_tasks(scheme: _Scheme, participant: _Participant, record: Record) -> Iterator[ClassificationTask]:
@@ -809,9 +803,9 @@ def _scheme_tasks(scheme: _Scheme, participant: _Participant, record: Record) ->
     classes = participant.window_classes[scheme].tolist()
     for start_us, class_index in zip(starts_us, classes, strict=True):
         yield ClassificationTask(
-            inputs=(record,),
+            inputs=[record],
             scope=TimeInterval.micros(start_us, start_us + _WINDOW_US),
-            targets=(label_set.names[class_index],),
+            targets=label_set.names[class_index],
             label_set=label_set,
             split=participant.person.split,
         )
@@ -820,37 +814,36 @@ def _scheme_tasks(scheme: _Scheme, participant: _Participant, record: Record) ->
 class Capture24Connector(BaseConnector[Path]):
     """Build CAPTURE-24 from its pinned Oxford Research Archive zip file."""
 
-    async def download_async(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use] - the connector interface
+    async def download_async(self, cache_dir: Path) -> Path:  # ruff: ignore[no-self-use] - the connector interface
         """Download and extract the pinned CAPTURE-24 archive.
 
         The archive must match ``ARCHIVE_SHA256`` before extraction.
         Later calls reuse the extracted directory.
 
         Returns:
-            A list with the extracted ``capture24`` directory.
+            The extracted ``capture24`` directory.
         """
         root = await ensure_archive(ARCHIVE_URL, cache_dir, filename=_ARCHIVE_FILENAME, sha256=ARCHIVE_SHA256)
-        return [find_dir_containing(root, f"{_ARCHIVE_ROOT}/{_METADATA_FILE}")]
+        return find_dir_containing(root, f"{_ARCHIVE_ROOT}/{_METADATA_FILE}")
 
-    def convert(self, raw_refs: list[Path]) -> TimeFDataset:
+    def convert(self, root: Path, /) -> TimeFDataset:
         """Convert CAPTURE-24 recordings to records and window classification tasks.
 
         Acceleration values load from the files on demand.
         Keep the files available and unchanged until all signals have loaded.
 
         Args:
-            raw_refs: A list with the extracted ``capture24`` directory.
+            root: The extracted ``capture24`` directory.
 
         Returns:
             A dataset with participant records and streamed tasks for both benchmark schemes.
 
         Raises:
-            TimeFValidationError: If ``raw_refs`` does not contain exactly one directory.
+            TimeFValidationError: If ``root`` is not a directory.
             TimeNetConnectorError: If a metadata table or recording is invalid.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
-        if len(raw_refs) != 1 or not raw_refs[0].is_dir():
-            raise TimeFValidationError(f"CAPTURE-24 loads from one directory, got {raw_refs}")
-        (root,) = raw_refs
+        if not root.is_dir():
+            raise TimeFValidationError(f"CAPTURE-24 loads from one directory, got {root}")
         labels = _read_labels(root / _DICTIONARY_FILE)
         # One participant's samples are held at a time: the first pass keeps only small results.
         participants = [_read_participant(person, labels) for person in _read_people(root)]
@@ -859,7 +852,7 @@ class Capture24Connector(BaseConnector[Path]):
 
         dataset = TimeFDataset(metadata=self.metadata())
         for record in records:
-            dataset.add_record(record=record)
+            dataset.add_record(record)
 
         def tasks() -> Iterator[ClassificationTask]:
             # As the authors' benchmark.py: one benchmark per scheme, over every participant's windows.

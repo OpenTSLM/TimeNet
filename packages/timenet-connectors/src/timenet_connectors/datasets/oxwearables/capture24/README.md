@@ -109,8 +109,9 @@ A label scheme groups raw labels into activity classes. A label set lists the al
 one scheme. The authors' `benchmark.py` scores two schemes, so the connector defines two label
 sets.
 
-Each task carries the label set of its scheme in `label_set`. TimeF stores each set once, and the
-dataset has no dataset annotations.
+Each task carries the label set of its scheme in `label_set`. The `name` annotation of each set
+holds the name in the table below. TimeF stores each set once, and the dataset has no dataset
+annotations.
 
 | Label set | Classes, sorted by their text |
 | --- | --- |

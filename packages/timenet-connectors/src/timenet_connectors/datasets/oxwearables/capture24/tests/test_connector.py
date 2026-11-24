@@ -85,6 +85,11 @@ def _pid(record) -> str:
     return pid
 
 
+def _name(label_set) -> str:
+    """The name that a label set's ``name`` annotation holds."""
+    return next(read_value(a.value) for a in label_set.annotations if a.key == "name")
+
+
 def _output(dataset) -> dict:
     """Summarize the dataset structure, annotations, and tasks as plain values, with records keyed by participant."""
     records = {}
@@ -125,14 +130,14 @@ def _output(dataset) -> dict:
             # RNN and HMM read it. The Record's Sources still carry the activity annotations, which
             # hold the answer, so a consumer must drop them.
             task.scope.time_series,
-            task.label_set.name,
+            _name(task.label_set),
             task.targets,
             task.split.value,
         )
         for task in dataset.iter_tasks()
     ]
     annotations = {a.key: read_value(a.value) for a in dataset.annotations}
-    label_sets = {task.label_set.name: list(task.label_set.names) for task in dataset.iter_tasks()}
+    label_sets = {_name(task.label_set): list(task.label_set.names) for task in dataset.iter_tasks()}
     return {"annotations": annotations, "label_sets": label_sets, "records": records, "tasks": tasks}
 
 
@@ -169,8 +174,8 @@ def _walk(start_us: int, end_us: int) -> tuple:
     return ("activity", _WALK, start_us, end_us, _WALK_CLASSES)
 
 
-_WILLETTS = connector.WILLETTS_SPECIFIC_2018.name
-_WALMSLEY = connector.WALMSLEY_2020.name
+_WILLETTS = _name(connector.WILLETTS_SPECIFIC_2018)
+_WALMSLEY = _name(connector.WALMSLEY_2020)
 
 # Descriptions tell readers that age is a band and time is shifted.
 # Other connectors store an exact age under the key age.
@@ -312,7 +317,7 @@ def _assert_values(dataset) -> None:
 
 
 def test_converts_the_fixture(tmp_path):
-    dataset = Capture24Connector().convert([_release(tmp_path)])
+    dataset = Capture24Connector().convert(_release(tmp_path))
     assert _output(dataset) == _EXPECTED
     _assert_values(dataset)
 
@@ -321,7 +326,7 @@ def test_recording_start_keeps_one_format_when_it_has_microseconds(tmp_path):
     # isoformat() alone drops a zero fraction, which can give Records different timestamp formats.
     root = _release(tmp_path)
     _write_recording(root / "P001.csv.gz", [(10_000 + index * 10_000, _SLEEP) for index in range(1000)])
-    records = _output(Capture24Connector().convert([root]))["records"]
+    records = _output(Capture24Connector().convert(root))["records"]
     assert records["P001"]["annotations"]["recording_start_local"] == "2016-11-13T02:18:00.010000"
     assert records["P100"]["annotations"]["recording_start_local"] == "2016-11-13T02:18:00.000000"
 
@@ -337,7 +342,7 @@ def test_label_sets_are_in_string_order(label_set):
 
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
-    original = Capture24Connector().convert([_release(tmp_path)])
+    original = Capture24Connector().convert(_release(tmp_path))
     registry = LocalRegistry(tmp_path / "registry")
     registry.put_dataset(original)
     with TimeFReader(open_local_version(registry.root / "oxwearables/capture24/1.0.0")) as reader:
@@ -355,7 +360,7 @@ def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
         return read_acceleration(participant)
 
     monkeypatch.setattr(connector, "_read_acceleration", spy)
-    original = Capture24Connector().convert([_release(tmp_path)])
+    original = Capture24Connector().convert(_release(tmp_path))
     LocalRegistry(tmp_path / "registry").put_dataset(original)
     assert reads == ["P001.csv.gz", "P100.csv.gz", "P101.csv.gz"]
 
@@ -389,7 +394,7 @@ def test_malformed_recording_fails_with_its_path(tmp_path, edit, message):
     root = _release(tmp_path)
     _rewrite(root / "P001.csv.gz", edit)
     with pytest.raises(TimeNetConnectorError, match=message) as error:
-        Capture24Connector().convert([root])
+        Capture24Connector().convert(root)
     assert "P001.csv.gz" in str(error.value)
 
 
@@ -410,7 +415,7 @@ def _x_of(dataset, pid: str):
 )
 def test_changed_recording_fails_when_reread(tmp_path, edit, message):
     root = _release(tmp_path)
-    dataset = Capture24Connector().convert([root])
+    dataset = Capture24Connector().convert(root)
     _rewrite(root / "P001.csv.gz", edit)
     with pytest.raises(TimeNetConnectorError, match=message) as error:
         _x_of(dataset, "P001").to_numpy()
@@ -425,7 +430,7 @@ def test_a_release_with_no_participants_fails(tmp_path):
         recording.unlink()
     (root / "metadata.csv").write_text("pid,age,sex\n", encoding="utf-8")
     with pytest.raises(TimeNetConnectorError, match="lists no participants"):
-        Capture24Connector().convert([root])
+        Capture24Connector().convert(root)
 
 
 @pytest.mark.parametrize(
@@ -444,7 +449,7 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, chang
     root = _release(tmp_path)
     change(root)
     with pytest.raises(TimeNetConnectorError, match=message):
-        Capture24Connector().convert([root])
+        Capture24Connector().convert(root)
 
 
 @pytest.mark.parametrize(
@@ -480,7 +485,7 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, chang
             "annotation-label-dictionary.csv",
             ",light\n",
             ",strolling\n",
-            r"classes missing from label set 'walmsley_2020': \['strolling'\]",
+            r"classes missing from the label set of Walmsley2020: \['strolling'\]",
         ),
         (
             "annotation-label-dictionary.csv",
@@ -495,7 +500,7 @@ def test_malformed_tables_fail_with_their_path(tmp_path, table, old, new, messag
     path = root / table
     path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
     with pytest.raises(TimeNetConnectorError, match=message) as error:
-        Capture24Connector().convert([root])
+        Capture24Connector().convert(root)
     assert table in str(error.value)
 
 
@@ -509,14 +514,14 @@ def test_unreadable_tables_fail_with_their_path(tmp_path, table, damage):
     root = _release(tmp_path)
     damage(root / table)
     with pytest.raises(TimeNetConnectorError) as error:
-        Capture24Connector().convert([root])
+        Capture24Connector().convert(root)
     assert table in str(error.value)
 
 
 def test_a_file_in_place_of_the_directory_fails(tmp_path):
     root = _release(tmp_path)
     with pytest.raises(TimeFValidationError, match="loads from one directory"):
-        Capture24Connector().convert([root / "metadata.csv"])
+        Capture24Connector().convert(root / "metadata.csv")
 
 
 def test_window_across_a_short_gap_fails(tmp_path):
@@ -526,7 +531,7 @@ def test_window_across_a_short_gap_fails(tmp_path):
     rows += [(4_990_000 + 15_000 + index * 10_000, _SIT) for index in range(500)]
     _write_recording(root / "P001.csv.gz", rows)
     with pytest.raises(TimeNetConnectorError, match="across a gap") as error:
-        Capture24Connector().convert([root])
+        Capture24Connector().convert(root)
     assert "P001.csv.gz" in str(error.value)
 
 
@@ -535,5 +540,5 @@ def test_truncated_recording_fails_with_its_path(tmp_path):
     path = root / "P001.csv.gz"
     path.write_bytes(path.read_bytes()[:100])
     with pytest.raises(TimeNetConnectorError) as error:
-        Capture24Connector().convert([root])
+        Capture24Connector().convert(root)
     assert "P001.csv.gz" in str(error.value)
