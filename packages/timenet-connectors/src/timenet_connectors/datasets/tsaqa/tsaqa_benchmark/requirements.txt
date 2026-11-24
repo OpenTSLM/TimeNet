@@ -1,0 +1,5 @@
+# huggingface_hub downloads the source dataset from the HuggingFace Hub; 1.1 adds tqdm_class.
+huggingface_hub>=1.1
+
+# Load the pinned Hugging Face source files through the datasets API.
+datasets>=4.0
