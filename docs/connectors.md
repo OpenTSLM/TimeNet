@@ -212,6 +212,20 @@ package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yam
 `requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
 bases live under `timenet_connectors/bases/`.
 
+### Connectors in another package
+
+Another installed package can add connectors. Give it a datasets package with the same
+`<org>/<name>/` layout, and register it under the `timenet_connectors.datasets` entry-point group:
+
+```toml
+[project.entry-points."timenet_connectors.datasets"]
+acme = "acme_connectors.datasets"
+```
+
+The built-in package wins when two packages declare the same dataset id. Install your package from
+git or from a local directory: an isolated build installs it again from there, not from a package
+index.
+
 ## Dependencies and credentials
 
 A connector declares the libraries its source needs in a `requirements.txt` beside its

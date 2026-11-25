@@ -2,15 +2,18 @@
 
 Each connector lives in its own folder at ``datasets/<org>/<name>/``, or ``datasets/<name>/`` for a
 flat id. The package's ``__init__.py`` exposes a ``CONNECTOR`` class. A ``dataset.yaml`` card sits
-beside it. A dataset id maps to that package by convention, so there is no central registry. Discovery
-imports only the requested connector. Each connector declares its own id through ``metadata()``.
+beside it. Discovery reads every ``dataset.yaml`` under the built-in root and under the roots
+registered in the ``timenet_connectors.datasets`` entry-point group, and imports only the requested
+connector.
 """
 
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+import functools
 import importlib
-import importlib.machinery
-import importlib.util
+from importlib.metadata import entry_points
 from pathlib import Path
-import pkgutil
+from types import ModuleType
 import warnings
 
 import yaml
@@ -20,20 +23,90 @@ from timenet.errors import ConnectorCardWarning
 import timenet_connectors.datasets as _datasets
 
 
-_DATASETS = _datasets.__name__
+@dataclass(frozen=True)
+class _ConnectorCard:
+    """One connector card in a datasets root."""
+
+    directory: Path
+    """The connector directory, which holds the ``dataset.yaml`` card."""
+    module_name: str
+    """The module path of the connector package."""
+    package_name: str | None
+    """The distribution that registers the datasets root, or ``None`` for the built-in root."""
+
+
+@functools.cache
+def _get_connector_cards_by_id() -> Mapping[str, _ConnectorCard]:
+    """Find the datasets roots once per process and read every connector card in them.
+
+    A card that cannot be read gives one :class:`~timenet.errors.ConnectorCardWarning`. When more
+    than one root declares an id, the first root wins, so the built-in root wins over the others.
+
+    Returns:
+        The connector card for each declared dataset id.
+    """
+    cards: dict[str, _ConnectorCard] = {}
+    for datasets_module, package_name in _iter_datasets_roots():
+        for path in datasets_module.__path__:
+            # A flat id sits at ``datasets/<name>/``, an ``org/name`` id one level deeper.
+            for card_path in (*Path(path).glob("*/dataset.yaml"), *Path(path).glob("*/*/dataset.yaml")):
+                declared = _declared_id(card_path)
+                if declared is None or declared in cards:
+                    continue
+                module_name = ".".join((datasets_module.__name__, *card_path.parent.relative_to(path).parts))
+                cards[declared] = _ConnectorCard(card_path.parent, module_name, package_name)
+    return cards
+
+
+def _iter_datasets_roots() -> Iterator[tuple[ModuleType, str | None]]:
+    """Yield the built-in datasets package, then each package registered by an entry point.
+
+    Yields:
+        Each datasets package with the distribution that registers it, or ``None`` for the built-in one.
+    """
+    yield _datasets, None
+    for entry in entry_points(group="timenet_connectors.datasets"):
+        yield entry.load(), entry.dist.name  # ty: ignore[unresolved-attribute]
+
+
+def _get_connector_card(dataset_id: str) -> _ConnectorCard:
+    """Find the connector card for a dataset id.
+
+    Args:
+        dataset_id: A flat (``hello_world``) or ``org/name`` id, as its card declares it.
+
+    Returns:
+        The connector card.
+
+    Raises:
+        LookupError: If no root holds a card for the id.
+    """
+    card = _get_connector_cards_by_id().get(dataset_id)
+    if card is None:
+        raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(known_ids()) or '(none)'}")
+    return card
+
+
+def get_connector_package_name(dataset_id: str) -> str | None:
+    """Return the installed package that holds the connector of a dataset id.
+
+    Args:
+        dataset_id: A flat (``hello_world``) or ``org/name`` id.
+
+    Returns:
+        The distribution name of the package, or ``None`` when the connector is built in.
+
+    Raises:
+        LookupError: If no root holds a card for the id.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _get_connector_card, not directly here)
+    return _get_connector_card(dataset_id).package_name
 
 
 def connector_dir(dataset_id: str) -> Path:
     """Return the directory of a dataset id's connector package.
 
-    Deliberately import-free. This runs before the connector's environment
-    exists, so importing the connector module (which is what :func:`resolve`
-    does) would fail on the very dependencies its ``requirements.txt``
-    declares. ``find_spec`` imports the parent packages only, never the leaf.
-
-    A connector directory holds a ``dataset.yaml`` card. An org namespace package
-    (``physionet``) also has ``submodule_search_locations`` but no card, so it is
-    not a connector and is rejected like any unknown id.
+    Reads only the cards and never imports the connector, because this runs before the connector's
+    environment exists.
 
     Args:
         dataset_id: A flat (``hello_world``) or ``org/name`` id.
@@ -43,13 +116,8 @@ def connector_dir(dataset_id: str) -> Path:
 
     Raises:
         LookupError: If no connector with a ``dataset.yaml`` card exists for the id.
-    """
-    spec = _connector_spec(dataset_id)
-    if spec and spec.submodule_search_locations:
-        path = Path(next(iter(spec.submodule_search_locations)))
-        if (path / "dataset.yaml").is_file():
-            return path
-    raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(known_ids()) or '(none)'}")
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _get_connector_card, not directly here)
+    return _get_connector_card(dataset_id).directory
 
 
 def requirements_for(dataset_id: str) -> Path | None:
@@ -75,16 +143,9 @@ def known_ids() -> list[str]:
     :class:`~timenet.errors.ConnectorCardWarning`, so it fails only its own dataset.
 
     Returns:
-        The sorted dataset IDs, with duplicates removed.
+        The sorted dataset IDs.
     """
-    ids: set[str] = set()
-    for root in _datasets.__path__:
-        # A flat id sits at ``datasets/<name>/``, an ``org/name`` id one level deeper.
-        for card in (*Path(root).glob("*/dataset.yaml"), *Path(root).glob("*/*/dataset.yaml")):
-            declared = _declared_id(card)
-            if declared is not None:
-                ids.add(declared)
-    return sorted(ids)
+    return sorted(_get_connector_cards_by_id())
 
 
 def _declared_id(card: Path) -> str | None:
@@ -111,31 +172,6 @@ def _declared_id(card: Path) -> str | None:
     return None
 
 
-def _connector_spec(dataset_id: str) -> importlib.machinery.ModuleSpec | None:
-    """Find a connector module's spec without importing the module itself.
-
-    Args:
-        dataset_id: A flat (``hello_world``) or ``org/name`` id.
-
-    Returns:
-        The module spec, or ``None`` when the id names no known module.
-
-    Raises:
-        ModuleNotFoundError: If a connector module for the id exists but fails to import a
-            dependency of its own (surfaced instead of being masked as an unknown id).
-    """
-    module_name = _module_name(dataset_id)
-    try:
-        return importlib.util.find_spec(module_name)
-    except ModuleNotFoundError as exc:
-        # find_spec imports the parent packages. An unknown id fails to find one of *our* modules. A
-        # broken import inside an existing connector fails to find something else. Surface that real
-        # error instead of masking it as "unknown connector".
-        if exc.name and (module_name + ".").startswith(exc.name + "."):
-            return None  # a missing parent package (for example, an unknown org)
-        raise
-
-
 def resolve(dataset_id: str) -> type[BaseConnector]:
     """Return the connector class for a dataset id and import only its module.
 
@@ -146,66 +182,11 @@ def resolve(dataset_id: str) -> type[BaseConnector]:
         The connector class.
 
     Raises:
-        LookupError: If no module exists for the id, or it exposes no ``CONNECTOR``.
-        ModuleNotFoundError: If a connector module for the id exists but fails to import one of its own
-            dependencies. This surfaces the real error instead of masking it as an unknown id.
-    """  # ruff: ignore[docstring-extraneous-exception] (raised by _connector_spec, not directly here)
-    spec = _connector_spec(dataset_id)
-    if spec is None:
-        raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(available()) or '(none)'}")
-    module_name = _module_name(dataset_id)
+        LookupError: If no connector card exists for the id, or the module exposes no ``CONNECTOR``.
+        ModuleNotFoundError: If the connector module fails to import one of its own dependencies.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _get_connector_card and the import, not directly here)
+    module_name = _get_connector_card(dataset_id).module_name
     connector = getattr(importlib.import_module(module_name), "CONNECTOR", None)
     if connector is None:
         raise LookupError(f"module {module_name!r} defines no CONNECTOR")
     return connector
-
-
-def available() -> list[str]:
-    """List the dataset ids of every discoverable connector.
-
-    This imports each connector module. Use it for listings and error messages, not the build hot path.
-
-    Returns:
-        The declared dataset ids, sorted.
-    """
-    ids: set[str] = set()
-    for info in pkgutil.walk_packages(_datasets.__path__, _DATASETS + "."):
-        # Skip each connector's co-located ``tests`` package of test modules and fixtures. It lives
-        # beside the connector but is not a connector module. Importing a test module pulls
-        # test-only deps such as pytest into this producer path. Match the ``tests`` dir, not a
-        # ``test_``-prefixed name, so this still finds a connector like ``timenet/test-mean``.
-        if "tests" in info.name.split("."):
-            continue
-        # A connector package re-exports CONNECTOR from its ``connector`` submodule, so both the
-        # package and that submodule surface it. A set dedupes them. Org packages expose none.
-        connector = getattr(importlib.import_module(info.name), "CONNECTOR", None)
-        if connector is not None:
-            ids.add(connector().metadata().dataset_id)
-    return sorted(ids)
-
-
-def _module_name(dataset_id: str) -> str:
-    """Map a dataset id to its connector module path.
-
-    Python packages are lowercase to avoid clashes on case-insensitive filesystems, and hyphens become
-    underscores. So ``chengsenwang/tsqa`` maps to ``...datasets.chengsenwang.tsqa``.
-
-    Returns:
-        The dotted module path of the connector.
-    """
-    org, slash, name = dataset_id.partition("/")
-    if slash:
-        return f"{_DATASETS}.{_segment(org)}.{_segment(name)}"
-    return f"{_DATASETS}.{_segment(org)}"
-
-
-def _segment(part: str) -> str:
-    """Normalize one id segment to its Python package name: lowercase, hyphens to underscores.
-
-    Args:
-        part: An org or name segment of a dataset id.
-
-    Returns:
-        The importable package/module name for that segment.
-    """
-    return part.replace("-", "_").lower()

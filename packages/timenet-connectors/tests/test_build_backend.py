@@ -97,13 +97,11 @@ def test_a_card_that_cannot_be_read_is_skipped_with_a_warning(tmp_path, monkeypa
     with pytest.warns(ConnectorCardWarning, match=expected):
         assert "timenet/hello-world" in known_ids()
     # The installed entry point loads the builder backend of this package, which lists its dataset IDs.
-    with pytest.warns(ConnectorCardWarning, match=expected):
-        found = installed_builder("timenet/hello-world")
+    found = installed_builder("timenet/hello-world")
     assert found is not None
     assert found.card.dataset_id == "timenet/hello-world"
     # The installed connectors still answer for the other datasets.
-    with pytest.warns(ConnectorCardWarning, match=expected):
-        answer = InstalledConnectors().resolve("timenet/hello-world", None)
+    answer = InstalledConnectors().resolve("timenet/hello-world", None)
     assert isinstance(answer, FoundInConnector)
     assert answer.version == Version(1, 0, 0)
 

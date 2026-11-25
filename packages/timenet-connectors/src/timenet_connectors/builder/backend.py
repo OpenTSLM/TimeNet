@@ -46,9 +46,7 @@ class ConnectorBuilder:
             directory = connector_dir(dataset_id)
         except LookupError:
             return None
-        card = DatasetMetadata.from_yaml(directory / "dataset.yaml")
-        # The module path of a connector also accepts other spellings, such as "_" for "-".
-        return card if card.dataset_id == dataset_id else None
+        return DatasetMetadata.from_yaml(directory / "dataset.yaml")
 
     def build(
         self,

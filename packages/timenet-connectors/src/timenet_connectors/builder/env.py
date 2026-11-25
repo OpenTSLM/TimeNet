@@ -25,7 +25,7 @@ from timenet.errors import TimeNetBuildError, TimeNetIsolationError
 from timenet.manifest import PayloadSource
 from timenet.provenance import InstalledDistribution, TimeNetSnapshot
 from timenet.types.references import DatasetRef
-from timenet_connectors.discovery import requirements_for
+from timenet_connectors.discovery import get_connector_package_name, requirements_for
 
 
 @dataclass(frozen=True)
@@ -51,9 +51,13 @@ def env_spec(dataset_id: str) -> EnvSpec:
 
     Raises:
         LookupError: If no connector exists for the id.
-        TimeNetIsolationError: If a base distribution is not installed.
-    """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
+        TimeNetIsolationError: If a base distribution is not installed, or the package that holds the
+            connector is not installed from git or from a local directory.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _get_uv_install_args, not directly here)
     base = _base_args()
+    connector_package = get_connector_package_name(dataset_id)
+    if connector_package is not None:
+        base += _get_uv_install_args(connector_package, allow_index=False)
     # The parent cannot read the connector's backend before the environment exists, so the
     # environment always includes the optional Zarr backend. Keep the parent's source/version pin;
     # the additional requirement only requests its extra.
@@ -200,22 +204,43 @@ def _base_args() -> tuple[str, ...]:
 
     Raises:
         TimeNetIsolationError: If a base distribution is not installed in this interpreter.
-    """
-    args: list[str] = []
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _get_uv_install_args, not directly here)
     # Pin TimeNet to the parent's own versions, so the code that writes the TimeF bytes is the code
     # that reads them back. timenet-connectors depends on timenet[build], so the card-YAML
     # dependencies arrive transitively and the extra never needs naming here.
-    for name in TimeNetSnapshot.package_names():
-        try:
-            installed = InstalledDistribution.from_name(name)
-        except PackageNotFoundError as exc:
-            raise TimeNetIsolationError(
-                f"cannot make a build environment: {name} is not installed in {sys.executable}."
-            ) from exc
-        if (git_url := installed.get_pinned_git_requirement_url()) is not None:
-            args += ["--with", f"{name} @ {git_url}"]
-        elif (source := installed.path_to_ondisk_project_directory()) is not None:
-            args += ["--with-editable", str(source)]
-        else:
-            args += ["--with", f"{name}=={installed.version}"]
-    return tuple(args)
+    return tuple(arg for name in TimeNetSnapshot.package_names() for arg in _get_uv_install_args(name))
+
+
+def _get_uv_install_args(name: str, *, allow_index: bool = True) -> tuple[str, ...]:
+    """Build the uv arguments that install the same code as an installed distribution.
+
+    A git install keeps its commit and a local directory installs as editable. Any other install
+    keeps its version, which uv then gets from a package index.
+
+    Args:
+        name: The distribution name.
+        allow_index: Whether the distribution can come from a package index by its version.
+
+    Returns:
+        A flag/value pair for uv.
+
+    Raises:
+        TimeNetIsolationError: If the distribution is not installed in this interpreter, or it is not
+            installed from git or from a local directory and ``allow_index`` is false.
+    """
+    try:
+        installed = InstalledDistribution.from_name(name)
+    except PackageNotFoundError as exc:
+        raise TimeNetIsolationError(
+            f"cannot make a build environment: {name} is not installed in {sys.executable}."
+        ) from exc
+    if (git_url := installed.get_pinned_git_requirement_url()) is not None:
+        return ("--with", f"{name} @ {git_url}")
+    if (source := installed.path_to_ondisk_project_directory()) is not None:
+        return ("--with-editable", str(source))
+    if not allow_index:
+        raise TimeNetIsolationError(
+            f"cannot make a build environment: {name} holds the connector, but it is not installed from git "
+            "or from a local directory. Install it from git or from a local directory."
+        )
+    return ("--with", f"{name}=={installed.version}")
