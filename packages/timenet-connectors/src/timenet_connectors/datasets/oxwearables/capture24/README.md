@@ -1,26 +1,12 @@
 # CAPTURE-24
 
-`oxwearables/capture24` holds CAPTURE-24 ([Chan et al., Sci Data 2024][paper]).
-The dataset contains wrist acceleration recordings from 151 participants during daily life.
-Each recording covers about one day. Activity labels come from body-camera images and sleep
-diaries. The dataset supports human activity recognition.
+`oxwearables/capture24` holds CAPTURE-24. The dataset contains wrist acceleration recordings from
+151 participants during daily life. Each recording covers about one day. Activity labels come from
+body-camera images and sleep diaries. The dataset supports human activity recognition.
 
-The connector reads the 6.9 GB zip file from the [Oxford Research Archive record][ora].
-It uses the SHA-256 digest (`69740c22…40e2`) to identify the expected archive and detect changes.
-The dataset card records the same digest as `source_revision`.
-The data license is CC BY 4.0, and the dataset DOI is [10.5287/bodleian:NGx0JOMP5][doi]. The
-record also asks each user to obey privacy law, to protect the confidentiality of the participants
-and not to try to identify them. The authors' benchmark code is [OxWearables/capture24][code]. It has a separate
-academic-use license. The connector reimplements its windowing without copying that code.
-
-The connector has two files. `source_data.py` reads and checks the published files and selects
-the benchmark windows. `connector.py` builds the TimeNet dataset from the results. The tests build a
-small fake release, so they need no download.
-
-[paper]: https://doi.org/10.1038/s41597-024-03960-3
-[ora]: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
-[doi]: https://doi.org/10.5287/bodleian:NGx0JOMP5
-[code]: https://github.com/OxWearables/capture24/tree/f861b44
+The connector reads the 6.9 GB zip file from the Oxford Research Archive. The authors' benchmark
+code, `OxWearables/capture24` at commit `f861b44`, has a separate academic-use license. The
+connector reimplements its windowing without copying that code.
 
 ## The source data
 
@@ -39,8 +25,8 @@ They also applied gravity autocalibration, which corrects the sensor's calibrati
 the periods when the device is still and measures only gravity.
 
 The source values have eight significant digits. The connector reads and stores them as float32,
-which keeps about seven, as the authors' own loader does. This rounding is far below the sensor's
-resolution, and float32 halves the stored size.
+which keeps about seven, as the authors' own loader does. This rounding is far more precise than
+the sensor's resolution, and float32 halves the stored size.
 
 The `time` column contains timestamps without a time zone. For anonymity, the authors randomized
 the dates so that every recording is dated 2016. They also shifted each timestamp by a small random
@@ -58,83 +44,61 @@ The `annotation` column contains a [Compendium of Physical Activity][cpa] entry,
 
 ### Records
 
-The connector creates one Record per participant and one Source per segment.
-A segment is a run of samples exactly 10 ms apart. A gap starts a new segment, and nothing fills it.
-Each segment has three float32 signals: `x`, `y`, and `z`.
-The signals load when needed and use `standard_gravity` units.
+The connector creates one Record for each segment of a recording. A segment is a run of samples
+exactly 10 ms apart. A gap starts a new segment, and nothing fills it. So 143 participants have one
+Record each, and the 8 participants whose recording has a gap have two. That makes 159 Records for
+151 participants.
 
-The `offset_us` value gives the time from the recording's first sample to the segment's first
-sample.
-There are 143 Records with one Source and 8 with two.
+Each Record has one Source, `Axivity AX3`, with three float32 signals: `x`, `y`, and `z`. The
+signals use `standard_gravity` units.
 
-The timestamps have no time zone, and their dates are randomized, so the connector leaves
-`start_time` unset. It stores the following information instead:
+The timestamps have no time zone, and their dates are randomized, so the origin has no timestamp.
+The connector stores the following information instead:
 
 | Where | Key | Value |
 | --- | --- | --- |
 | Record metadata | `file` | The recording's file name |
+| Record metadata | `segment` | The index of the Record's segment in its recording, from 0 |
 | Record annotation | `subject_ids` | A list that holds the participant id, such as `["P001"]` |
-| Record annotation | `age_band` | The age band of `metadata.csv`, such as `38-52`. Other connectors use `age` for an exact age in years, so this key is different |
+| Record annotation | `age_band` | The age band of `metadata.csv`, such as `38-52` |
 | Record annotation | `sex` | `female` or `male`, from the `F` or `M` of `metadata.csv` |
-| Record annotation | `recording_start_local` | The first sample's published timestamp, in ISO 8601 with microseconds and no zone, such as `2016-11-13T02:18:00.000000` |
-
-`recording_start_local` is the anonymized timestamp that the authors published. Its date is not
-the original recording date, and its time of day includes a small random shift. The annotation's
-`description` explains these changes so that readers do not mistake it for the true local time.
+| Record annotation | `recording_start_local` | The published timestamp of the recording's first sample, in ISO 8601 with microseconds and no zone, such as `2016-11-13T02:18:00.000000` |
 
 ### Activity annotations
 
-Each Source carries the raw labels of its segment. A run of consecutive samples with the same
-raw label becomes one annotation on the Source:
+Each Source carries the labels of its segment. A run is a sequence of consecutive samples with the
+same raw label. Each run becomes seven annotations on the Source, all with the run as their `span`,
+from its first sample to one period after its last:
 
-| Field | Value |
+| Key | Value |
 | --- | --- |
-| `key` | `activity` |
-| `value` | The raw label, such as `7030 sleeping;MET 0.95` |
-| `span` | The run, from its first sample to one period after its last |
-| `metadata` | The raw label's class in each of the six schemes of the label dictionary, keyed by scheme name, such as `{"Walmsley2020": "sleep", ...}` |
+| `activity` | The raw label, such as `7030 sleeping;MET 0.95` |
+| `activity_willetts_specific_2018` | The raw label's class in WillettsSpecific2018, such as `sleep` |
+| `activity_willetts_met_2018` | Its class in WillettsMET2018 |
+| `activity_doherty_specific_2018` | Its class in DohertySpecific2018 |
+| `activity_willetts_2018` | Its class in Willetts2018 |
+| `activity_doherty_2018` | Its class in Doherty2018 |
+| `activity_walmsley_2020` | Its class in Walmsley2020 |
 
-Unlabeled samples belong to no run, so the annotations also show which samples have a label. A
-run never crosses a gap. The signals carry no annotations.
+Unlabeled samples belong to no run, so the annotations also show which samples have a label. A run
+never crosses a gap.
 
-Build model inputs from the signals and exclude the Source activity annotations. Those annotations
-contain the task answers, so including them exposes the answers to the model.
-
-A task's `inputs` contains the whole Record, including its Source annotations.
-The task's `input_annotations` is empty. That field lists selected annotations but does not remove
-annotations from the Record.
+Build model inputs from the signals and exclude all Source annotations whose key starts with
+`activity`. Those annotations contain the task answers, so including them exposes the answers to the
+model.
 
 ### Label sets
 
 A label scheme groups raw labels into activity classes. A label set lists the allowed classes of
 one scheme. The authors' `benchmark.py` scores two schemes, so the connector defines two label
-sets.
-
-Each task carries the label set of its scheme in `label_set`. The `name` annotation of each set
-holds the name in the table below, and its `description` annotation says what the set classifies.
-TimeF stores each set once, and the dataset has no dataset annotations.
+sets:
 
 | Label set | What it classifies | Classes, sorted by their text |
 | --- | --- | --- |
 | `willetts_specific_2018` | Activity type | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
 | `walmsley_2020` | Movement behavior | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
 
-The classes are written in `source_data.py`, not read from the release. The build fails if the label
-dictionary gives a class that the scheme's label set does not list.
-
-The label dictionary must contain exactly the raw label column and the six scheme columns.
-Each row must name a class in every scheme, including schemes without tasks.
-This prevents blank classes from entering the activity annotations.
-
-The `metadata.csv` table must list at least one participant and use the expected age bands and sex
-values. Each participant must be in the train split (P001 to P100) or the test split (P101 to
-P151). Both tables must contain exactly the expected columns. A blank or missing field fails the
-build. A row with more fields than the header also fails, so no extra value is dropped unnoticed.
-Violations of these rules raise `TimeNetConnectorError`.
-
-The dictionary has four more schemes (`WillettsMET2018`, `DohertySpecific2018`, `Willetts2018` and
-`Doherty2018`). They have no tasks. Their classes are in the metadata of each activity annotation.
-A task on the raw labels or on another scheme needs a change to the connector.
+The other four schemes have no tasks. Their classes are only in the activity annotations.
 
 ### Tasks
 
@@ -149,70 +113,25 @@ their `benchmark.py` scores:
 | `label_set` | `willetts_specific_2018` or `walmsley_2020` |
 | `split` | `train` for P001 to P100, `test` for P101 to P151 |
 
-There is no prompt because the benchmark asks no question in words.
-
-The task stream follows the order used by `benchmark.py`: all WillettsSpecific2018 tasks, then all
-Walmsley2020 tasks. Within each scheme, participants appear in ID order.
-Each participant's windows appear in time order.
-
 A bin is a fixed 10 s time interval. `make_windows` starts the bins at the recording's first sample.
 After a gap, the bins stay on this original time grid. A bin becomes a window if it contains exactly
-1000 samples and at least one labeled sample. So a window's class can come from a single labeled
-sample. The activity annotations show how much of each window has a label.
+1000 samples and at least one labeled sample, so a window's class can come from a single labeled
+sample. No window crosses a gap.
 
-A bin that crosses a gap usually has fewer than 1000 samples, so it is dropped. A step between one
-and two sample periods is also a gap, but the bin around it can still hold 1000 samples. The build
-fails on such a bin, so no window crosses a gap.
 A window's class is the most common class among its labeled samples. If classes tie, the class
 that sorts first by its text wins, as in the authors' `Series.mode`.
-A window's scope starts at its first sample. After a gap, that sample can fall up to 10 ms after
-the start of its bin.
-
-The tasks use P101 to P151 as the test set, as specified in the paper and by `range(101, 152)` in
-`benchmark.py`. The authors' repository README instead says P102 to P151.
-The authors randomly select groups from the training set for validation.
-This selection is not fixed, so the connector assigns no task to `validation`.
-
-A task's `inputs` contains the participant's whole Record, and its `scope` identifies the window.
-For a model that reads one window, find the Source whose time span contains the scope, and read the
-1000 samples of its `x`, `y`, and `z` within the scope. In a Record with a gap, both Sources have
-signals with the same names, so pick the Source by its time span, not a signal by its name.
-
-The authors' sequence models read several windows together. Their recurrent neural network (RNN)
-reads 8 consecutive windows. Their hidden Markov model (HMM) reads a participant's whole sequence.
-For these models, use one participant's tasks from one scheme. Those tasks are already in time
-order.
-
-A model that reads samples outside its window can guess the class from its neighbors. Two adjacent
-windows have the same class in more than 99.9% of pairs, because the labels come from photos taken
-every 20 to 40 seconds and from sleep diaries.
-
-## What a real build gave
-
-A full build of the pinned archive in November 2026 produced:
-
-- 151 Records and 159 Sources: 143 Records with one Source and 8 with two.
-- 13,298 activity annotations on the Sources, and four metadata annotations on each Record.
-- 1,869,524 classification tasks, which is 934,762 windows with two schemes each. The test split
-  holds 616,896 tasks and the train split holds 1,252,628.
-- A release of 1.99 GB in 124 Parquet value files. `TimeFReader.verify()` passed.
-
-A pandas port of the authors' `make_windows` at commit `f861b44` ran on the same files. On each of
-the 151 recordings, it keeps the same windows with the same classes as the connector. The tests use
-a small fake release to exercise the same rules.
 
 ## Known issues upstream
 
 - The paper reports 922,199 windows, and the authors' repository datasheet reports 939,017.
   Their `make_windows` at commit `f861b44` keeps 934,762.
+- The authors' repository README gives P102 to P151 as the test set. The paper and `benchmark.py`
+  use P101 to P151.
 - The AX3 was set to ±8 g. Some values reach 8 g or more in magnitude after the authors' gravity
   calibration. The connector keeps these values as published.
 - The paper does not explain the gaps in eight recordings. P016 and P017 each skip exactly one
   hour at about 1 a.m., and the samples after the gap have labels. This matches a clock change in
-  the local timestamps. If a clock change is the cause, no data is missing, and the second Source
+  the local timestamps. If a clock change is the cause, no data is missing, and the second Record
   starts one hour later than the true elapsed time. P060 and P094 end with only 10 s and 13 s of
   samples after a gap of more than two hours. The connector keeps the published timestamps and
   marks no timestep as missing.
-- `train_deep_models.py` imports `old_code`, which is not in the repository, and loads
-  `Y_willetts.npy` and `pid.npy`, which `prepare_data.py` does not write. The CNN and RNN results
-  cannot be reproduced from the repository as published.

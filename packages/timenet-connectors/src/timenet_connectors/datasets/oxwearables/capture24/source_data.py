@@ -1,7 +1,5 @@
 """Read and check the published CAPTURE-24 files, and select the windows of the authors' benchmark."""
 
-from collections.abc import Callable
-import csv
 from dataclasses import dataclass
 from enum import StrEnum, unique
 import gzip
@@ -9,28 +7,23 @@ import hashlib
 from itertools import pairwise
 from pathlib import Path
 import re
-from typing import NamedTuple, TypeVar
+from typing import Literal, NamedTuple
+import zlib
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.csv as pa_csv
+from pydantic import Field
 
 from timenet.errors import TimeNetConnectorError
-from timenet.types import US_PER_S, Split
+from timenet.types import US_PER_S
+from timenet.types.metadata_fields import NonEmptyText
+from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
 
 METADATA_FILE = "metadata.csv"
 """The participant table, which also marks the release directory."""
-
-
-@unique
-class _MetadataColumn(StrEnum):
-    """A metadata table column."""
-
-    PID = "pid"
-    AGE = "age"
-    SEX = "sex"
-
+_METADATA_COLUMNS = ("pid", "age", "sex")
 
 DICTIONARY_FILE = "annotation-label-dictionary.csv"
 _DICTIONARY_LABEL_COLUMN = "annotation"
@@ -40,7 +33,7 @@ _TIME_COLUMN = "time"
 _LABEL_COLUMN = "annotation"
 
 
-class Acceleration(NamedTuple):
+class AccelerationValues(NamedTuple):
     """A recording's x, y, and z acceleration arrays with one float32 value per sample."""
 
     x: np.ndarray
@@ -48,19 +41,17 @@ class Acceleration(NamedTuple):
     z: np.ndarray
 
 
-AXES = Acceleration._fields
-"""The acceleration column names."""
+AXES = AccelerationValues._fields
 _RECORDING_COLUMNS = [_TIME_COLUMN, *AXES, _LABEL_COLUMN]
-_FIRST_DATA_LINE = 2
-"""The first data row's line number after the CSV header."""
 
 # The paper's Methods: an Axivity AX3 on the dominant wrist, at 100 Hz with a range of ±8 g. The
 # authors resampled every recording to exactly 100 Hz before release.
 DEVICE = "Axivity AX3"
 SAMPLE_RATE_HZ = 100
 _SAMPLE_PERIOD_US = US_PER_S // SAMPLE_RATE_HZ
-# The source writes eight significant digits. float32 keeps about seven, a step far below the sensor's
-# resolution, and halves the stored size. The authors' own loader reads x, y and z as float32 too.
+# The source writes eight significant digits. float32 keeps about seven, which is still far more
+# precise than the sensor's resolution, and it halves the stored size. The authors' own loader
+# reads x, y and z as float32 too.
 AXIS_TYPE = pa.float32()
 _COLUMN_TYPES = {
     _TIME_COLUMN: pa.timestamp("us"),
@@ -78,7 +69,6 @@ class Sex(StrEnum):
 
 
 _SEX_FROM_LETTER = {"F": Sex.FEMALE, "M": Sex.MALE}
-"""The sex value for each metadata letter."""
 
 
 @unique
@@ -91,24 +81,26 @@ class AgeBand(StrEnum):
     AGE_53_PLUS = "53+"
 
 
-# What the authors' prepare_data.py (``--winsec 10``) and benchmark.py fix.
+class _MetadataRow(DataRow):
+    """A row of the metadata table."""
+
+    pid: NonEmptyText
+    age: AgeBand
+    sex: Literal["F", "M"]
+
+
+# What the authors' prepare_data.py (``--winsec 10``) fixes.
 WINDOW_US = 10 * US_PER_S
 _WINDOW_SAMPLES = WINDOW_US // _SAMPLE_PERIOD_US
-_TRAIN_PARTICIPANTS = range(1, 101)
-"""The participant numbers of the train split, P001 to P100."""
-_TEST_PARTICIPANTS = range(101, 152)
-"""The participant numbers of the test split, P101 to P151."""
 _NO_LABEL = -1
 """The raw label code of an unlabeled sample.
 
 As an index, it selects the "no class" entry at the end of each class array.
 """
 
-_SCHEME_COLUMN_PREFIX = "label:"
-
 
 @unique
-class Scheme(StrEnum):
+class LabelScheme(StrEnum):
     """A label scheme in dictionary column order."""
 
     WILLETTS_SPECIFIC_2018 = "WillettsSpecific2018"
@@ -121,14 +113,29 @@ class Scheme(StrEnum):
     @property
     def column(self) -> str:
         """The dictionary column for this scheme's activity classes."""
-        return f"{_SCHEME_COLUMN_PREFIX}{self.value}"
+        return f"label:{self.value}"
 
 
-# The classes of the two schemes that benchmark.py scores, as the label dictionary names them, in
-# benchmark.py's order. Each list is in string order, because a tie between classes goes to the first
-# in string order.
-BENCHMARK_CLASSES = {
-    Scheme.WILLETTS_SPECIFIC_2018: (
+_DICTIONARY_COLUMNS = (_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in LabelScheme))
+
+
+class _DictionaryRow(DataRow):
+    """A row of the label dictionary: a raw label and its class in each scheme, none of them blank."""
+
+    annotation: NonEmptyText
+    willetts_specific_2018: NonEmptyText = Field(alias=LabelScheme.WILLETTS_SPECIFIC_2018.column)
+    willetts_met_2018: NonEmptyText = Field(alias=LabelScheme.WILLETTS_MET_2018.column)
+    doherty_specific_2018: NonEmptyText = Field(alias=LabelScheme.DOHERTY_SPECIFIC_2018.column)
+    willetts_2018: NonEmptyText = Field(alias=LabelScheme.WILLETTS_2018.column)
+    doherty_2018: NonEmptyText = Field(alias=LabelScheme.DOHERTY_2018.column)
+    walmsley_2020: NonEmptyText = Field(alias=LabelScheme.WALMSLEY_2020.column)
+
+
+# The classes of each scheme, as the label dictionary names them. Keep each list in alphabetical
+# order: on a tie, the authors' benchmark picks the class that comes first alphabetically, and so
+# does the connector.
+SCHEME_CLASSES = {
+    LabelScheme.WILLETTS_SPECIFIC_2018: (
         "bicycling",
         "household-chores",
         "manual-work",
@@ -140,8 +147,37 @@ BENCHMARK_CLASSES = {
         "vehicle",
         "walking",
     ),
-    Scheme.WALMSLEY_2020: ("light", "moderate-vigorous", "sedentary", "sleep"),
+    LabelScheme.WILLETTS_MET_2018: (
+        "bicycling",
+        "gym",
+        "sitstand+activity",
+        "sitstand+lowactivity",
+        "sitting",
+        "sleep",
+        "sports",
+        "standing",
+        "vehicle",
+        "walking",
+        "walking+activity",
+    ),
+    LabelScheme.DOHERTY_SPECIFIC_2018: (
+        "bicycling",
+        "sedentary-non-screen",
+        "sedentary-screen",
+        "sleep",
+        "sport-interrupted",
+        "sports-continuous",
+        "tasks-light",
+        "tasks-moderate",
+        "vehicle",
+        "walking",
+    ),
+    LabelScheme.WILLETTS_2018: ("bicycling", "mixed", "sit-stand", "sleep", "vehicle", "walking"),
+    LabelScheme.DOHERTY_2018: ("moderate", "sedentary", "sleep", "tasks-light", "walking"),
+    LabelScheme.WALMSLEY_2020: ("light", "moderate-vigorous", "sedentary", "sleep"),
 }
+# The two schemes that the authors' benchmark.py scores, in its order.
+BENCHMARK_SCHEMES = (LabelScheme.WILLETTS_SPECIFIC_2018, LabelScheme.WALMSLEY_2020)
 
 
 @dataclass(frozen=True)
@@ -149,27 +185,15 @@ class LabelDictionary:
     """Raw activity labels and their class mappings."""
 
     raw_labels: tuple[str, ...]
-    """The raw labels in dictionary row order."""
-    code_of_raw: dict[str, int]
-    """The code of each raw label, which is its row number in the dictionary."""
-    scheme_classes_of_raw: tuple[dict[Scheme, str], ...]
+    """The raw labels in dictionary row order. A raw label's code is its index here."""
+    scheme_classes_of_raw: tuple[dict[LabelScheme, str], ...]
     """The class of each raw label in all six schemes."""
-    class_of_raw: dict[Scheme, np.ndarray]
+    class_of_raw: dict[LabelScheme, np.ndarray]
     """The class indices for each benchmark scheme in raw label order.
 
     The final entry represents unlabeled samples and is selected by ``_NO_LABEL``.
     On a tie in class counts, the lower index wins, as in the authors' ``make_windows``.
     """
-
-
-@dataclass(frozen=True)
-class Segment:
-    """A sequence of samples spaced exactly one sample period apart."""
-
-    first_row: int
-    n_values: int
-    offset_us: int
-    """The segment's start offset in microseconds from the recording's first sample."""
 
 
 @dataclass(frozen=True)
@@ -188,24 +212,24 @@ class LabelRuns:
 
 
 @dataclass(frozen=True)
+class Segment:
+    """A sequence of samples spaced exactly one sample period apart."""
+
+    first_row: int
+    n_values: int
+    offset_us: int
+    """The segment's start offset in microseconds from the recording's first sample."""
+    runs: LabelRuns
+
+
+@dataclass(frozen=True)
 class Participant:
     """A participant's metadata and recording path."""
 
     pid: str
     age_band: AgeBand
     sex: Sex
-    split: Split
     path: Path
-
-
-@dataclass(frozen=True)
-class _Windows:
-    """A recording's selected windows and activity classes."""
-
-    first_rows: np.ndarray
-    """The first row index of each selected window."""
-    classes: dict[Scheme, np.ndarray]
-    """Each selected window's class index in each benchmark scheme's ``BENCHMARK_CLASSES``."""
 
 
 @dataclass(frozen=True)
@@ -223,39 +247,10 @@ class Recording:
     The authors randomized the date and shifted the time of day.
     """
     segments: tuple[Segment, ...]
-    label_runs: tuple[LabelRuns, ...]
-    """The raw label runs for each segment in segment order."""
     window_starts_us: np.ndarray
     """Each selected window's start offset in microseconds from the recording's first sample."""
-    window_classes: dict[Scheme, np.ndarray]
-    """The class index of each selected window in each benchmark scheme's ``BENCHMARK_CLASSES``."""
-
-
-def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
-    """Read a CSV table with the specified columns in any order.
-
-    Returns:
-        A list of rows keyed by column name.
-
-    Raises:
-        TimeNetConnectorError: If reading fails or the header or row fields are invalid.
-    """
-    try:
-        with path.open(newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            rows = list(reader)
-            header = reader.fieldnames or []
-    except (OSError, UnicodeDecodeError, csv.Error) as exc:
-        raise TimeNetConnectorError(f"{path}: {exc}") from exc
-    if len(header) != len(columns) or set(header) != set(columns):
-        raise TimeNetConnectorError(f"{path}: expected the columns {columns}, got {header}")
-    for line, row in enumerate(rows, start=_FIRST_DATA_LINE):
-        if None in row:
-            raise TimeNetConnectorError(f"{path}:{line}: more fields than the header names")
-        for column in columns:
-            if not row[column]:
-                raise TimeNetConnectorError(f"{path}:{line}: no value for {column!r}")
-    return rows
+    window_classes: dict[LabelScheme, np.ndarray]
+    """The class index of each selected window in each benchmark scheme's ``SCHEME_CLASSES``."""
 
 
 def read_labels(path: Path) -> LabelDictionary:
@@ -265,65 +260,62 @@ def read_labels(path: Path) -> LabelDictionary:
         The raw labels and class mappings.
 
     Raises:
-        TimeNetConnectorError: If reading fails or columns, fields, raw labels, or benchmark classes are invalid.
-    """
-    rows = _read_rows(path, [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in Scheme)])
+        TimeNetConnectorError: If reading fails or columns, fields, raw labels, or classes are invalid.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the check helpers
+    reader = CsvDataReader(path, _DictionaryRow, expected_columns=_DICTIONARY_COLUMNS)
+    rows = [row.model_dump(by_alias=True) for row in reader.iter_rows()]
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
-    if len(set(raw_labels)) != len(raw_labels):
-        raise TimeNetConnectorError(f"{path}: a raw label is listed twice")
-    class_of_raw = {
-        scheme: _class_codes(path, [row[scheme.column] for row in rows], scheme) for scheme in BENCHMARK_CLASSES
-    }
+    _check_raw_labels_are_unique(path, raw_labels)
+    _check_classes_are_listed(path, rows)
+    # The class of each raw label in each of the six schemes.
+    scheme_classes_of_raw: list[dict[LabelScheme, str]] = []
+    for row in rows:
+        scheme_classes_of_raw.append({scheme: row[scheme.column] for scheme in LabelScheme})
+    # The class index of each raw label in the class list of each benchmark scheme.
+    class_of_raw: dict[LabelScheme, np.ndarray] = {}
+    for scheme in BENCHMARK_SCHEMES:
+        classes = [row[scheme.column] for row in rows]
+        class_of_raw[scheme] = _class_codes(classes, scheme)
     return LabelDictionary(
         raw_labels=tuple(raw_labels),
-        code_of_raw={label: code for code, label in enumerate(raw_labels)},
-        scheme_classes_of_raw=tuple(_scheme_classes(row) for row in rows),
+        scheme_classes_of_raw=tuple(scheme_classes_of_raw),
         class_of_raw=class_of_raw,
     )
 
 
-def _class_codes(path: Path, classes: list[str], scheme: Scheme) -> np.ndarray:
-    """Map activity classes to indices in the class list of a benchmark scheme.
+def _check_raw_labels_are_unique(path: Path, raw_labels: list[str]) -> None:
+    """Check that the label dictionary lists each raw label only once.
+
+    Raises:
+        TimeNetConnectorError: If a raw label is listed twice.
+    """
+    if len(set(raw_labels)) != len(raw_labels):
+        raise TimeNetConnectorError(f"{path}: a raw label is listed twice")
+
+
+def _check_classes_are_listed(path: Path, rows: list[dict[str, str]]) -> None:
+    """Check that every class in the label dictionary is in the class list of its scheme.
+
+    Raises:
+        TimeNetConnectorError: If a class is absent from the class list of its scheme.
+    """
+    for scheme in LabelScheme:
+        unknown = sorted({row[scheme.column] for row in rows} - set(SCHEME_CLASSES[scheme]))
+        if unknown:
+            raise TimeNetConnectorError(f"{path}: classes missing from the class list of {scheme}: {unknown}")
+
+
+def _class_codes(classes: list[str], scheme: LabelScheme) -> np.ndarray:
+    """Map activity classes to indices in the class list of a scheme.
 
     Returns:
         Class indices in input order followed by the class count for unlabeled samples.
-
-    Raises:
-        TimeNetConnectorError: If a class is absent from the class list.
     """
-    names = BENCHMARK_CLASSES[scheme]
-    unknown = sorted(set(classes) - set(names))
-    if unknown:
-        raise TimeNetConnectorError(f"{path}: classes missing from the label set of {scheme}: {unknown}")
+    names = SCHEME_CLASSES[scheme]
     index_of_class = {name: index for index, name in enumerate(names)}
     codes = [index_of_class[name] for name in classes]
     unlabeled = len(names)
     return np.array([*codes, unlabeled], dtype=np.int16)
-
-
-def _scheme_classes(row: dict[str, str]) -> dict[Scheme, str]:
-    """Return the activity class for each scheme in a dictionary row."""
-    return {scheme: row[scheme.column] for scheme in Scheme}
-
-
-_Parsed = TypeVar("_Parsed")
-
-
-def _parse_participant_value(
-    path: Path, line: int, column: str, value: str, parse: Callable[[str], _Parsed]
-) -> _Parsed:
-    """Parse a metadata cell with the given parser.
-
-    Returns:
-        The parsed cell value.
-
-    Raises:
-        TimeNetConnectorError: If the parser rejects the value.
-    """
-    try:
-        return parse(value)
-    except (KeyError, ValueError) as exc:
-        raise TimeNetConnectorError(f"{path}:{line}: unknown {column} {value!r}") from exc
 
 
 def read_participants(root: Path) -> list[Participant]:
@@ -333,13 +325,11 @@ def read_participants(root: Path) -> list[Participant]:
         Participants sorted by ID.
 
     Raises:
-        TimeNetConnectorError: If reading fails or metadata is invalid, empty, or inconsistent with recording files.
+        TimeNetConnectorError: If reading fails or metadata is invalid or inconsistent with recording files.
     """
     path = root / METADATA_FILE
-    rows = _read_rows(path, [column.value for column in _MetadataColumn])
-    if not rows:
-        raise TimeNetConnectorError(f"{path}: lists no participants")
-    pids = [row[_MetadataColumn.PID] for row in rows]
+    rows = list(CsvDataReader(path, _MetadataRow, expected_columns=_METADATA_COLUMNS).iter_rows())
+    pids = [row.pid for row in rows]
     if len(set(pids)) != len(pids):
         raise TimeNetConnectorError(f"{path}: a pid is listed twice")
     recordings = _recordings_by_pid(root)
@@ -349,32 +339,10 @@ def read_participants(root: Path) -> list[Participant]:
             f"unlisted recordings {sorted(set(recordings) - set(pids))}"
         )
     participants = [
-        _participant_of_row(path, line, row, recordings) for line, row in enumerate(rows, start=_FIRST_DATA_LINE)
+        Participant(pid=row.pid, age_band=row.age, sex=_SEX_FROM_LETTER[row.sex], path=recordings[row.pid])
+        for row in rows
     ]
     return sorted(participants, key=lambda participant: participant.pid)
-
-
-def _participant_of_row(path: Path, line: int, row: dict[str, str], recordings: dict[str, Path]) -> Participant:
-    """Build a participant from a metadata row and its recording path.
-
-    Returns:
-        The participant's ID, age band, sex, split, and recording path.
-
-    Raises:
-        TimeNetConnectorError: If the age band or sex is unknown, or the participant is in no split.
-    """
-    pid = row[_MetadataColumn.PID]
-    number = int(pid.removeprefix("P"))
-    if number in _TRAIN_PARTICIPANTS:
-        split = Split.TRAIN
-    elif number in _TEST_PARTICIPANTS:
-        split = Split.TEST
-    else:
-        raise TimeNetConnectorError(f"{path}:{line}: {pid} is in neither the train split nor the test split")
-    age_band = _parse_participant_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], AgeBand)
-    sex_letter = row[_MetadataColumn.SEX]
-    sex = _parse_participant_value(path, line, _MetadataColumn.SEX, sex_letter, _SEX_FROM_LETTER.__getitem__)
-    return Participant(pid=pid, age_band=age_band, sex=sex, split=split, path=recordings[pid])
 
 
 def _recordings_by_pid(root: Path) -> dict[str, Path]:
@@ -408,34 +376,47 @@ def read_recording(participant: Participant, labels: LabelDictionary) -> Recordi
     stamps = _read_stamps(path, table)
     offsets = stamps - stamps[0]
     raw_codes = _raw_codes(path, table[_LABEL_COLUMN].combine_chunks(), labels)
-    segments = _make_segments(stamps)
-    windows = _make_windows(path, offsets, raw_codes, segments, labels)
+    first_rows, window_classes = _make_windows(path, offsets, raw_codes, labels)
     return Recording(
         participant=participant,
         n_rows=len(stamps),
         acceleration_digest=_digest(_axis_values(path, table)),
         start_local=table[_TIME_COLUMN][0].as_py().isoformat(timespec="microseconds"),
-        segments=segments,
-        label_runs=tuple(_label_runs(raw_codes, segment) for segment in segments),
-        window_starts_us=offsets[windows.first_rows],
-        window_classes=windows.classes,
+        segments=_make_segments(stamps, raw_codes),
+        window_starts_us=offsets[first_rows],
+        window_classes=window_classes,
     )
 
 
-def _convert_options(columns: list[str]) -> pa_csv.ConvertOptions:
-    """Configure CSV parsing for the selected recording columns.
+def _read_csv_gz(path: Path, columns: list[str] | None = None) -> pa.Table:
+    """Read a gzipped recording, with all its columns or only the given ones.
 
-    Only empty fields count as missing values.
+    Reading all columns checks that the header is exactly ``time,x,y,z,annotation``, so no extra
+    column is dropped unnoticed. Only empty fields count as missing values. Python's gzip inflates
+    the file, which is about twice as fast as Arrow's own decompression.
 
     Returns:
-        Parsing options with the recording's column types.
+        The recording's columns.
+
+    Raises:
+        TimeNetConnectorError: If the file cannot be read or parsed, or its header is wrong.
     """
-    return pa_csv.ConvertOptions(
-        include_columns=columns,
-        column_types={column: _COLUMN_TYPES[column] for column in columns},
+    options = pa_csv.ConvertOptions(
+        include_columns=columns or [],
+        column_types=_COLUMN_TYPES,
         strings_can_be_null=True,
         null_values=[""],
     )
+    try:
+        with gzip.open(path, "rb") as stream:
+            table = pa_csv.read_csv(stream, convert_options=options)
+    except (OSError, EOFError, zlib.error, pa.ArrowException) as exc:
+        raise TimeNetConnectorError(f"{path}: {exc}") from exc
+    if columns is None and table.column_names != _RECORDING_COLUMNS:
+        raise TimeNetConnectorError(
+            f"{path}: expected the header {','.join(_RECORDING_COLUMNS)}, got {','.join(table.column_names)}"
+        )
+    return table
 
 
 def _read_table(path: Path) -> pa.Table:
@@ -447,17 +428,7 @@ def _read_table(path: Path) -> pa.Table:
     Raises:
         TimeNetConnectorError: If reading fails, the header is invalid, or the recording is empty.
     """
-    try:
-        with gzip.open(path, "rt", newline="", encoding="utf-8") as handle:
-            header = next(csv.reader(handle), None)
-    except (OSError, EOFError, UnicodeDecodeError, csv.Error) as exc:
-        raise TimeNetConnectorError(f"{path}: {exc}") from exc
-    if header != _RECORDING_COLUMNS:
-        raise TimeNetConnectorError(f"{path}: expected the header {','.join(_RECORDING_COLUMNS)}, got {header}")
-    try:
-        table = pa_csv.read_csv(path, convert_options=_convert_options(_RECORDING_COLUMNS))
-    except (OSError, pa.ArrowException) as exc:
-        raise TimeNetConnectorError(f"{path}: {exc}") from exc
+    table = _read_csv_gz(path)
     if table.num_rows == 0:
         raise TimeNetConnectorError(f"{path}: holds no samples")
     return table
@@ -486,39 +457,40 @@ def _read_stamps(path: Path, table: pa.Table) -> np.ndarray:
     return stamps
 
 
-def _make_segments(stamps: np.ndarray) -> tuple[Segment, ...]:
+def _make_segments(stamps: np.ndarray, raw_codes: np.ndarray) -> tuple[Segment, ...]:
     """Split samples at timestamp steps that differ from one sample period.
 
     Returns:
-        Sample segments in time order.
+        Sample segments in time order, each with its label runs.
     """
     bounds = [0, *(np.flatnonzero(np.diff(stamps) != _SAMPLE_PERIOD_US) + 1).tolist(), len(stamps)]
-    return tuple(
-        Segment(first_row=start, n_values=end - start, offset_us=int(stamps[start] - stamps[0]))
-        for start, end in pairwise(bounds)
-    )
+    segments = []
+    for start, end in pairwise(bounds):
+        offset_us = int(stamps[start] - stamps[0])
+        runs = _label_runs(raw_codes[start:end], offset_us)
+        segments.append(Segment(first_row=start, n_values=end - start, offset_us=offset_us, runs=runs))
+    return tuple(segments)
 
 
-def _label_runs(raw_codes: np.ndarray, segment: Segment) -> LabelRuns:
+def _label_runs(codes: np.ndarray, offset_us: int) -> LabelRuns:
     """Find consecutive samples with the same nonempty raw label within a segment.
 
     Returns:
         Label runs in time order.
     """
-    codes = raw_codes[segment.first_row : segment.first_row + segment.n_values]
     changes = np.flatnonzero(np.diff(codes)) + 1
     starts = np.concatenate(([0], changes))
     ends = np.concatenate((changes, [len(codes)]))
     labeled = codes[starts] != _NO_LABEL
     starts, ends = starts[labeled], ends[labeled]
     return LabelRuns(
-        starts_us=segment.offset_us + starts * _SAMPLE_PERIOD_US,
-        ends_us=segment.offset_us + ends * _SAMPLE_PERIOD_US,
+        starts_us=offset_us + starts * _SAMPLE_PERIOD_US,
+        ends_us=offset_us + ends * _SAMPLE_PERIOD_US,
         codes=codes[starts],
     )
 
 
-def _axis_values(path: Path, table: pa.Table) -> Acceleration:
+def _axis_values(path: Path, table: pa.Table) -> AccelerationValues:
     """Read the x, y, and z acceleration columns from a recording table.
 
     Returns:
@@ -527,7 +499,7 @@ def _axis_values(path: Path, table: pa.Table) -> Acceleration:
     Raises:
         TimeNetConnectorError: If an acceleration value is missing or nonfinite.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _finite_column
-    return Acceleration._make(_finite_column(path, table, column) for column in AXES)
+    return AccelerationValues._make(_finite_column(path, table, column) for column in AXES)
 
 
 def _finite_column(path: Path, table: pa.Table, column: str) -> np.ndarray:
@@ -548,16 +520,27 @@ def _finite_column(path: Path, table: pa.Table, column: str) -> np.ndarray:
     return values
 
 
-def _digest(values: Acceleration) -> str:
+def _digest(values: AccelerationValues) -> str:
     """Compute a digest of acceleration values in x, y, and z order.
 
     Returns:
-        The hexadecimal BLAKE2b digest.
+        The hexadecimal SHA-256 digest.
     """
-    digest = hashlib.blake2b()
+    digest = hashlib.sha256()
     for axis in values:
         digest.update(axis)
     return digest.hexdigest()
+
+
+def _check_raw_labels_are_in_dictionary(path: Path, written: list[str], labels: LabelDictionary) -> None:
+    """Check that the label dictionary lists every raw label that a recording writes.
+
+    Raises:
+        TimeNetConnectorError: If a raw label is absent from the dictionary.
+    """
+    unknown = sorted(set(written) - set(labels.raw_labels))
+    if unknown:
+        raise TimeNetConnectorError(f"{path}: raw labels missing from the label dictionary: {unknown}")
 
 
 def _raw_codes(path: Path, column: pa.DictionaryArray, labels: LabelDictionary) -> np.ndarray:
@@ -568,26 +551,25 @@ def _raw_codes(path: Path, column: pa.DictionaryArray, labels: LabelDictionary) 
 
     Raises:
         TimeNetConnectorError: If a raw label is absent from the dictionary.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_raw_labels_are_in_dictionary
     written = column.dictionary.to_pylist()
-    unknown = sorted(label for label in written if label not in labels.code_of_raw)
-    if unknown:
-        raise TimeNetConnectorError(f"{path}: raw labels missing from the label dictionary: {unknown}")
+    _check_raw_labels_are_in_dictionary(path, written, labels)
+    code_of_raw = {label: code for code, label in enumerate(labels.raw_labels)}
     # Replace each null index with the index of an extra entry whose value is _NO_LABEL.
-    codes = np.array([labels.code_of_raw[label] for label in written] + [_NO_LABEL], dtype=np.int16)
+    codes = np.array([code_of_raw[label] for label in written] + [_NO_LABEL], dtype=np.int16)
     return codes[column.indices.fill_null(len(written)).to_numpy()]
 
 
 def _make_windows(
-    path: Path, offsets_us: np.ndarray, raw_codes: np.ndarray, segments: tuple[Segment, ...], labels: LabelDictionary
-) -> _Windows:
+    path: Path, offsets_us: np.ndarray, raw_codes: np.ndarray, labels: LabelDictionary
+) -> tuple[np.ndarray, dict[LabelScheme, np.ndarray]]:
     """Select 10-second windows and assign their activity classes.
 
     Bins start at the first sample and require 1000 samples with at least one label.
     Each scheme uses the most common labeled class and breaks ties by class name order.
 
     Returns:
-        The selected windows and their class indices for each benchmark scheme.
+        The first row of each selected window, and the window classes for each benchmark scheme.
 
     Raises:
         TimeNetConnectorError: If a selected window crosses a gap.
@@ -601,12 +583,9 @@ def _make_windows(
     window_codes = raw_codes[full[:, None] + np.arange(_WINDOW_SAMPLES)]
     labeled = (window_codes != _NO_LABEL).any(axis=1)
     first_rows, window_codes = full[labeled], window_codes[labeled]
-    # A window crosses a gap if its first and last rows are in different segments. searchsorted finds
-    # each row's segment from the segments' first rows, with no array as long as the recording.
-    segment_first_rows = np.array([segment.first_row for segment in segments])
-    first_segment = np.searchsorted(segment_first_rows, first_rows, side="right")
-    last_segment = np.searchsorted(segment_first_rows, first_rows + _WINDOW_SAMPLES - 1, side="right")
-    crossing = first_segment != last_segment
+    # No step is shorter than one period, so a window spans 999 periods only if no gap falls inside it.
+    spans = offsets_us[first_rows + _WINDOW_SAMPLES - 1] - offsets_us[first_rows]
+    crossing = spans != (_WINDOW_SAMPLES - 1) * _SAMPLE_PERIOD_US
     if crossing.any():
         row = int(first_rows[crossing][0])
         raise TimeNetConnectorError(f"{path}: the window at row {row} holds {_WINDOW_SAMPLES} samples across a gap")
@@ -614,16 +593,14 @@ def _make_windows(
     for scheme, class_of_raw in labels.class_of_raw.items():
         per_sample = class_of_raw[window_codes]
         # Count each class per window. Unlabeled samples use an index beyond the classes, so the counts exclude them.
-        counts = np.stack(
-            [(per_sample == index).sum(axis=1) for index in range(len(BENCHMARK_CLASSES[scheme]))], axis=1
-        )
+        counts = np.stack([(per_sample == index).sum(axis=1) for index in range(len(SCHEME_CLASSES[scheme]))], axis=1)
         # argmax takes the first of equal counts: the class first in string order.
         classes[scheme] = counts.argmax(axis=1).astype(np.int16)
-    return _Windows(first_rows=first_rows, classes=classes)
+    return first_rows, classes
 
 
-def read_acceleration(recording: Recording) -> Acceleration:
-    """Read and validate a recording's acceleration against its saved summary.
+def read_acceleration(recording: Recording) -> AccelerationValues:
+    """Read and validate a recording's acceleration against its saved digest.
 
     Returns:
         One float32 array per acceleration axis.
@@ -632,10 +609,7 @@ def read_acceleration(recording: Recording) -> Acceleration:
         TimeNetConnectorError: If reading fails, a value is missing or nonfinite, or the row count or values changed.
     """
     path = recording.participant.path
-    try:
-        table = pa_csv.read_csv(path, convert_options=_convert_options(list(AXES)))
-    except (OSError, pa.ArrowException) as exc:
-        raise TimeNetConnectorError(f"{path}: {exc}") from exc
+    table = _read_csv_gz(path, list(AXES))
     if table.num_rows != recording.n_rows:
         raise TimeNetConnectorError(
             f"{path}: holds {table.num_rows} rows, {recording.n_rows} when it was read; the file changed"

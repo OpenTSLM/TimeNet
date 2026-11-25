@@ -1,13 +1,4 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
-# Dataset metadata for the oxwearables/capture24 connector.
-# The connector loads this card with DatasetMetadata.from_yaml(). The builder combines it with
-# the schema derived from the data to create manifest.json.
-#
-# Tasks follow the authors' benchmark. Each 10 s window kept by prepare_data.make_windows has one
-# ClassificationTask per scheme scored by benchmark.py: WillettsSpecific2018 and Walmsley2020.
-# P001-P100 are training participants. P101-P151 are test participants.
-# Signals use the published values at 100 Hz, in g, with one Source per segment between gaps.
-# The authors resampled and calibrated the recordings before release.
 yaml_schema_version: 1
 dataset_id: oxwearables/capture24
 dataset_version: 1.0.0
@@ -15,10 +6,8 @@ dataset_version: 1.0.0
 source_revision: sha256:69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2
 name: CAPTURE-24
 description: >-
-  About a day of free-living wrist accelerometry from each of 151 participants, at 100 Hz, with
-  activity labels from body-camera images and sleep diaries. The Oxford Research Archive record also
-  asks each user to obey privacy law, to protect the confidentiality of the participants and not to
-  try to identify them.
+  CAPTURE-24 holds about one day of wrist accelerometer data from each of 151 adults, recorded during normal daily life. Most of each day has activity labels that people coded from wearable-camera images and sleep diaries.
+  The data was recorded in 2014 to 2016 in Oxfordshire. Each participant wore an Axivity AX3 accelerometer on the dominant wrist for about 24 hours. At the same time, a Vicon Autograph camera on the chest took an image every 20 to 40 seconds, and the participant kept a Whitehall II sleep diary. Annotators then coded the images and the diary into activity labels, with codes from the Compendium of Physical Activities.
 license: CC-BY-4.0
 domains:
   - activity
