@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: tsaqa/tsaqa-clean
+dataset_version: 1.0.0
+name: TSAQA-clean
+description: >-
+  A derived raw-input TSAQA variant with temporal ordering tasks disabled.
+  Inherits all 510,093 raw signals from tsaqa/tsaqa-benchmark@1.0.0 and
+  retains 180,111 tasks, excluding the 29,889 actual ordering questions.
+  Selection uses the resolved question_format, so the 10,000 continuation
+  questions incorrectly labeled ordering by the source remain available.
+  Prompts, answers, annotations, context, and splits are unchanged.
+  Parent lineage and stored numerical payloads are reused through TimeNet
+  inheritance. This variant is not a general data-quality certification
+  and is not directly comparable with the paper's normalized-input scores.
+license: MIT
+source_url: https://huggingface.co/datasets/TSAQA/TSAQA-Benchmark
+domains:
+  - energy
+  - transport
+  - health
+  - cardiology
+  - economics
+  - finance
+  - environment
+  - observability
+  - industrial
+  - motion
+  - general
+tags:
+  - qa
+  - classification
+  - anomaly-detection
+  - derived
+parents:
+  tsaqa: tsaqa/tsaqa-benchmark@1.0.0
