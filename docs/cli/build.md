@@ -118,9 +118,10 @@ Unexpected programming errors keep their traceback.
 timenet-build check [DATASETS_DIR]...
 ```
 
-`check` is a hidden command for connector authors. For each connector in `DATASETS_DIR` that has a
-`dataset.yaml` card and a `tests` directory, it runs `pytest <connector>/tests` and
-`ty check <connector>` through `uv run --with-requirements <connector>/requirements.txt`. Run it
+`check` is a hidden command for connector authors. A connector is a directory in `DATASETS_DIR` with a
+`dataset.yaml` card and a `tests` directory. For each connector, `check` runs `pytest <connector>/tests`
+and `ty check <connector>` through `uv run`. If the connector has a `requirements.txt`, `uv run` also
+gets `--with-requirements <connector>/requirements.txt`. Run it
 from a project whose environment has `timenet`, pytest and `ty`. With no `DATASETS_DIR`, it checks
 only the built-in datasets directory.
 

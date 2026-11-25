@@ -37,7 +37,7 @@ from timenet.sources import InstalledConnectors
 from timenet.types.references import DatasetRef, is_latest, split_ref
 from timenet_connectors import datasets
 from timenet_connectors.builder.backend import ConnectorBuilder
-from timenet_connectors.discovery import known_ids
+from timenet_connectors.discovery import find_card_paths, known_ids
 
 
 app = typer.Typer(help="Build TimeNet datasets from connectors.", no_args_is_help=True)
@@ -256,9 +256,9 @@ def check(
 ) -> None:
     """Run the tests and type check of each connector in an environment built from its requirements.
 
-    A connector directory has a ``dataset.yaml`` card and a ``tests`` directory. For each one,
-    pytest runs its tests and ``ty`` checks its directory through ``uv run --with-requirements``
-    with its ``requirements.txt``, on top of the current project environment. Run the command from the project
+    A connector directory has a ``dataset.yaml`` card and a ``tests`` directory. For each connector,
+    the command runs pytest on its tests and ``ty`` on its directory. Both run through ``uv run`` in the
+    current project environment, with the requirements.txt of the connector added if it exists. Run the command from the project
     whose environment has ``timenet``, pytest and ``ty``.
     \f
 
@@ -270,7 +270,7 @@ def check(
     datasets_dirs = datasets_dirs or [Path(datasets.__path__[0])]
     connectors: list[tuple[str, Path]] = []
     for datasets_dir in datasets_dirs:
-        card_paths = sorted((*datasets_dir.glob("*/dataset.yaml"), *datasets_dir.glob("*/*/dataset.yaml")))
+        card_paths = find_card_paths(datasets_dir)
         connectors += [
             (str(card_path.parent.relative_to(datasets_dir)), card_path.parent)
             for card_path in card_paths
