@@ -47,7 +47,7 @@ from timenet.types import (
     annotation_type_of,
 )
 from timenet.types.ids import EntityId
-from timenet.types.splits import parse_split
+from timenet.types.splits import Split
 
 
 if TYPE_CHECKING:
@@ -579,7 +579,7 @@ class DuckDBControlWriter:
                         "task_type": task_type,
                         "prompt": self._pack(ObjectKind.TASK, task_id, PackedField.PROMPT, task.prompt),
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
-                        "split": None if task.split is None else parse_split(task.split).value,
+                        "split": None if task.split is None else Split.from_name(task.split).value,
                         **self._scope_columns(task, signal_ids),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),

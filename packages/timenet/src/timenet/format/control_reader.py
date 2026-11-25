@@ -66,7 +66,7 @@ from timenet.types.handles import CallableArray
 from timenet.types.ids import EntityId
 from timenet.types.object_kind import ObjectKind
 from timenet.types.reference_keys import ParentAlias, SourceKey
-from timenet.types.splits import Split, parse_split
+from timenet.types.splits import Split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 
@@ -1762,10 +1762,10 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
 
         Raises:
             TimeFValidationError: If the split is unknown.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_split
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by Split.from_name
         if split is None:
             return "", []
-        return "t.split = ?", [parse_split(split).value]
+        return "t.split = ?", [Split.from_name(split).value]
 
     @staticmethod
     def _modality_filter(

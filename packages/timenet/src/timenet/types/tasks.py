@@ -17,7 +17,7 @@ from timenet.types.ids import EntityId, assigned_id
 from timenet.types.label_sets import LabelSet
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
-from timenet.types.splits import Split, parse_split
+from timenet.types.splits import Split
 from timenet.types.text import InlineText, TextHandle, optional_text
 from timenet.types.units import normalize_unit
 
@@ -218,7 +218,7 @@ class Task(SupportsAnnotate):
             )
         self.metadata = validate_json_mapping(self.metadata)
         if self.split is not None:
-            self.split = parse_split(self.split)
+            self.split = Split.from_name(self.split)
         if self.input_modalities is not None:
             self.input_modalities = self.resolved_input_modalities
         for target in self.targets or ():

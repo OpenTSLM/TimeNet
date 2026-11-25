@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 from enum import StrEnum, unique
+from typing import Self
 
 from timenet.errors import TimeFValidationError
 
@@ -14,25 +15,24 @@ class Split(StrEnum):
     VALIDATION = "validation"
     TEST = "test"
 
+    @classmethod
+    def from_name(cls, name: str) -> Self:
+        """Parse a canonical partition name without accepting source-specific aliases.
 
-def parse_split(value: Split | str) -> Split:
-    """Coerce a split name to :class:`Split`.
+        Connectors map source filenames to canonical names before calling this method.
 
-    Args:
-        value: The member itself, or its value such as ``"train"``.
+        Returns:
+            The partition named by ``name``.
 
-    Returns:
-        The matching member.
-
-    Raises:
-        TimeFValidationError: If ``value`` names no split.
-    """
-    try:
-        return Split(value)
-    except ValueError as exc:
-        raise TimeFValidationError(
-            f"unknown split {value!r}; expected one of {[member.value for member in Split]}"
-        ) from exc
+        Raises:
+            TimeFValidationError: If the name is not train, validation, or test.
+        """
+        try:
+            return cls(name)
+        except ValueError as exc:
+            raise TimeFValidationError(
+                f"unknown split {name!r}; expected one of {[member.value for member in cls]}"
+            ) from exc
 
 
 def parse_splits(values: Split | str | Iterable[Split | str]) -> frozenset[Split]:
@@ -46,7 +46,7 @@ def parse_splits(values: Split | str | Iterable[Split | str]) -> frozenset[Split
     """
     if isinstance(values, str):
         values = (values,)
-    selected = frozenset(parse_split(value) for value in values)
+    selected = frozenset(Split.from_name(value) for value in values)
     if not selected:
         raise TimeFValidationError("select at least one split; use get_all() for every task")
     return selected
