@@ -8,8 +8,10 @@ time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.p
 
 import json
 from pathlib import Path
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argument vectors, never a shell string
 
 import typer
+from uv import find_uv_bin
 
 from timenet import publish
 from timenet._hints import (  # ruff: ignore[import-private-name]
@@ -27,12 +29,13 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
 from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.coordinator.plan import BuildStep, Plan, Step
-from timenet.errors import TimeNetVersionConflictError
+from timenet.errors import TimeNetIsolationError, TimeNetVersionConflictError
 from timenet.manifest import PayloadSource
 from timenet.registry import LocalRegistry, WritableRegistry
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
 from timenet.sources import InstalledConnectors
 from timenet.types.references import DatasetRef, is_latest, split_ref
+from timenet_connectors import datasets
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.discovery import known_ids
 
@@ -239,6 +242,64 @@ def _plan_lines(plan: Plan) -> list[str]:
         if step.release not in needed:
             draw(step, "", "")
     return lines
+
+
+@app.command(hidden=True)
+def check(
+    datasets_dirs: list[Path] | None = typer.Argument(
+        None,
+        metavar="[DATASETS_DIR]...",
+        help="A datasets directory (default: the built-in datasets directory).",
+        exists=True,
+        file_okay=False,
+    ),
+) -> None:
+    """Run the tests and type check of each connector in an environment built from its requirements.
+
+    A connector directory has a ``dataset.yaml`` card and a ``tests`` directory. For each one,
+    pytest runs its tests and ``ty`` checks its directory through ``uv run --with-requirements``
+    with its ``requirements.txt``, on top of the current project environment. Run the command from the project
+    whose environment has ``timenet``, pytest and ``ty``.
+    \f
+
+    Raises:
+        BadParameter: If no connector with a ``tests`` directory is found.
+        TimeNetIsolationError: If the uv executable is missing.
+        Exit: With code 1 if a check failed.
+    """  # ruff: ignore[escape-sequence-in-docstring] - the form feed ends the help text
+    datasets_dirs = datasets_dirs or [Path(datasets.__path__[0])]
+    connectors: list[tuple[str, Path]] = []
+    for datasets_dir in datasets_dirs:
+        card_paths = sorted((*datasets_dir.glob("*/dataset.yaml"), *datasets_dir.glob("*/*/dataset.yaml")))
+        connectors += [
+            (str(card_path.parent.relative_to(datasets_dir)), card_path.parent)
+            for card_path in card_paths
+            if (card_path.parent / "tests").is_dir()
+        ]
+    if not connectors:
+        raise typer.BadParameter(
+            f"found no connectors with a tests directory under {', '.join(map(str, datasets_dirs))}"
+        )
+    try:
+        uv = find_uv_bin()
+    except FileNotFoundError as exc:
+        raise TimeNetIsolationError("cannot run connector checks: no uv executable found.") from exc
+    failures: list[str] = []
+    for name, connector_dir in connectors:
+        typer.echo(f"\n=== {name} ===")
+        uv_run = [uv, "run"]
+        if (requirements := connector_dir / "requirements.txt").is_file():
+            uv_run += ["--with-requirements", str(requirements)]
+        for command in (["pytest", str(connector_dir / "tests"), "-q"], ["ty", "check", str(connector_dir)]):
+            # ruff: ignore[subprocess-without-shell-equals-true]
+            if subprocess.run([*uv_run, *command], check=False).returncode != 0:
+                failures.append(f"{name}: {command[0]}")
+    if failures:
+        typer.echo("\nconnector checks failed:")
+        for failure in failures:
+            typer.echo(f"  - {failure}")
+        raise typer.Exit(1)
+    typer.echo("\nall connector checks passed")
 
 
 @app.command("build-prepared-release", hidden=True)
