@@ -39,9 +39,10 @@ def _base_args_for(monkeypatch, dist):
     return env_module._base_args()
 
 
-def test_uv_command_runs_without_the_project_environment():
+def test_uv_command_runs_without_the_project_environment_or_uv_sources():
     command = uv_command(_spec(), ["timenet-build", "build", "x/y"])
     assert "--no-project" in command
+    assert "--no-sources" in command
 
 
 def test_uv_command_pins_the_parent_interpreter():
@@ -109,6 +110,16 @@ def test_base_args_uses_editable_for_a_local_path_install(monkeypatch, tmp_path)
 def test_base_args_pins_a_version_for_an_index_install(monkeypatch):
     # An index or wheel install has no direct_url.json, so pin the exact version.
     assert _base_args_for(monkeypatch, _FakeDist(version="9.9.9", direct_url=None)) == ("--with", "timenet==9.9.9")
+
+
+_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_base_args_pins_the_commit_for_a_git_install(monkeypatch, tmp_path):
+    record = {"url": tmp_path.as_uri(), "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+    url = f"git+{tmp_path.as_uri()}@{_COMMIT}"
+
+    assert _base_args_for(monkeypatch, _FakeDist(direct_url=json.dumps(record))) == ("--with", f"timenet @ {url}")
 
 
 @pytest.mark.parametrize("editable", [False, True])
