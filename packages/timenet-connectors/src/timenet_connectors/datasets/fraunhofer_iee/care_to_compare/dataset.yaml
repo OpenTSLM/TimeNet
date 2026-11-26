@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the fraunhofer-iee/care-to-compare connector: the single source for this
+# dataset's metadata.
+#
+# Scope: all three wind farms of version 6 of the Zenodo record. Each event file becomes one Record
+# with one Signal per sensor statistic, as released (no resampling, no cleaning, no unit conversion).
+# The release has no split across events. Within each Record, the `training_period` annotation marks
+# the rows meant for fitting a normal-behavior model and `prediction_period` the rows to evaluate.
+yaml_schema_version: 1
+dataset_id: fraunhofer-iee/care-to-compare
+dataset_version: 1.0.0
+source_revision: zenodo-15846963-v6
+name: CARE to Compare
+description: >-
+  Real-world SCADA data of 36 wind turbines from three wind farms (A: 5 onshore turbines in
+  Portugal, from the EDP open data platform; B: 9 and C: 22 offshore turbines in Germany), released
+  by Fraunhofer IEE as a benchmark for early fault detection. There are 95 Records, one per event
+  file: 45 anomaly events that lead up to a documented turbine fault and 50 normal events. Each
+  Record holds one turbine's 10-minute SCADA signals over about one year of training data followed by
+  4 to 98 days of prediction data that contain the event window. Wind farm A has 81 sensor signals,
+  B 252, and C 952: the 10-minute mean of every sensor and, for some sensors, the 10-minute minimum,
+  maximum and standard deviation. A further signal holds the turbine's operating status (0 normal,
+  1 derated, 2 idling, 3 service, 4 downtime, 5 other); for wind farm A the release derived it from a
+  fault logbook (14 days before each fault marked as downtime, 3 days after as service), so it is
+  meant for filtering training data, not for evaluation. A skipped 10-minute step or an empty cell is
+  a null. Wind farms B and C were delivered with missing values replaced by 0, and the release notes
+  that many of their minimum, maximum and standard deviation values are implausible; the 10-minute
+  means are reliable. Sensor names are anonymized; each Signal's spec carries the release's sensor
+  description and unit. Reactive power, reactive energy, mG and DL units have no pint form and are
+  kept in a `source_unit` annotation. Timestamps were shifted by whole years so that each file starts
+  in 2022. Annotations give the wind farm, asset, event label, the training and prediction periods,
+  the event window and the operator's root-cause note. Each Record has a ClassificationTask for the
+  event label over the prediction period. Each anomaly Record also has a TemporalLocalizationTask
+  for the event window. For the 18 anomaly events of wind farms A and B, a ClassificationTask gives
+  the faulty component (hydraulic, gearbox, generator_bearing, transformer or rotor_bearing); TimeNet
+  derived these labels from the release's root-cause notes. The event windows' starts were estimated
+  by the authors and can be later than the true onset of an anomaly. The release defines the CARE
+  score (coverage, accuracy, reliability, earliness) for evaluation.
+license: CC-BY-SA-4.0
+license_url: https://creativecommons.org/licenses/by-sa/4.0/
+source_url: https://doi.org/10.5281/zenodo.15846963
+citation: >-
+  Gück, C., Roelofs, C. M. A., & Faulstich, S. (2024). CARE to Compare: A Real-World Benchmark
+  Dataset for Early Fault Detection in Wind Turbine Data. Data, 9(12), 138.
+  https://doi.org/10.3390/data9120138
+domains:
+  - energy
+  - industrial
+tags:
+  - wind-turbine
+  - scada
+  - anomaly-detection
+  - fault-detection
+  - predictive-maintenance
+  - condition-monitoring
+  - multivariate
