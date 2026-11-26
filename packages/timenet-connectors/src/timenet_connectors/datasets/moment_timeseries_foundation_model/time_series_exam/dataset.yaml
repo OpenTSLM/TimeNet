@@ -1,0 +1,19 @@
+yaml_schema_version: 1
+dataset_id: moment-timeseries-foundation-model/time-series-exam
+dataset_version: 1.0.0
+name: TimeSeriesExam (round 3)
+description: >-
+  The 763 frozen round-three questions of TimeSeriesExam. The release is an exam
+  without train or validation partitions; every question is assigned to test.
+  Baseline prompts preserve the upstream response-format example without optional
+  hints, concept definitions, or example signals. Synthetic observations retain
+  their full JSON precision and ordering; no physical sampling rate is provided.
+license: MIT
+source_url: https://github.com/moment-timeseries-foundation-model/TimeSeriesExam
+domains:
+  - general
+tags:
+  - qa
+  - time-series
+  - synthetic
+  - benchmark
