@@ -41,6 +41,7 @@ class ConnectorBuilder:
 
         Raises:
             TimeNetInvalidCardError: If reading the card fails or the card is not a mapping.
+            TimeNetDuplicateDatasetError: If more than one connector card declares the ID.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by DatasetMetadata.from_yaml
         try:
             directory = connector_dir(dataset_id)

@@ -5,6 +5,7 @@ import pytest
 from timenet.errors import (
     ConnectorCardWarning,
     TimeFValidationError,
+    TimeNetDuplicateDatasetError,
     TimeNetInvalidCardError,
     TimeNetRegistryError,
 )
@@ -174,13 +175,24 @@ def test_installed_connectors_leave_out_a_card_that_cannot_be_read(monkeypatch):
 
     # The second backend claims the dataset too, but the first entry point wins, as it does for a build.
     install_backends(monkeypatch, Broken(_card("a/broken")), _Cards(_card("a/broken"), _card("b/kept")))
-    with pytest.warns(
-        ConnectorCardWarning, match=r"^a/broken: the card of its installed connector cannot be read"
-    ) as caught:
+    with pytest.warns(ConnectorCardWarning, match=r"^a/broken is skipped: the card cannot be read") as caught:
         cards = InstalledConnectors().list_datasets()
     assert [card.dataset_id for card in cards] == ["b/kept"]
     # The warning points at the caller of list_datasets().
     assert [warning.filename for warning in caught] == [__file__]
+
+
+def test_installed_connectors_leave_out_a_dataset_that_two_connectors_declare(monkeypatch):
+    class Duplicate(_Cards):
+        def card(self, dataset_id):
+            if dataset_id == "a/twice":
+                raise TimeNetDuplicateDatasetError("more than one connector declares 'a/twice'")
+            return super().card(dataset_id)
+
+    install_backends(monkeypatch, Duplicate(_card("a/twice"), _card("b/kept")))
+    with pytest.warns(ConnectorCardWarning, match=r"^a/twice is skipped: more than one connector"):
+        cards = InstalledConnectors().list_datasets()
+    assert [card.dataset_id for card in cards] == ["b/kept"]
 
 
 def test_an_error_of_the_dataset_ids_of_a_backend_propagates_from_the_cards(monkeypatch):

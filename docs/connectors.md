@@ -222,9 +222,12 @@ Another installed package can add connectors. Give it a datasets package with th
 acme = "acme_connectors.datasets"
 ```
 
-The built-in package wins when two packages declare the same dataset id. Install your package from
-git or from a local directory: an isolated build installs it again from there, not from a package
-index.
+If two packages declare the same dataset id, that dataset fails with an error that names both
+connector directories. The other datasets keep working. If the registered module cannot be
+imported, every dataset fails with a `TimeNetBuildError` that names the entry point and its package.
+
+Install your package from git or from a local directory. An isolated build installs it again from
+that source. It does not use a package index.
 
 ## Dependencies and credentials
 

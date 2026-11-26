@@ -318,10 +318,7 @@ def test_list_shows_a_warning_as_a_line_without_a_file_and_a_line_number(tmp_pat
     result = runner.invoke(app, ["list", *flags])
 
     assert result.exit_code == 0, result.output
-    assert click.unstyle(result.stderr).splitlines() == [
-        "⚠️ test/gated: the card of its installed connector cannot be read, so the listing leaves it out: "
-        "the card cannot be read"
-    ]
+    assert click.unstyle(result.stderr).splitlines() == ["⚠️ test/gated is skipped: the card cannot be read"]
 
 
 def test_info_shows_the_card_of_a_dataset_that_only_a_connector_has(tmp_path, monkeypatch):

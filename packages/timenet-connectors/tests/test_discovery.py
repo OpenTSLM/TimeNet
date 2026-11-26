@@ -1,9 +1,11 @@
+from importlib.metadata import EntryPoint
 import re
 import sys
 from uuid import uuid4
 
 import pytest
 
+from timenet.errors import TimeNetBuildError, TimeNetDuplicateDatasetError
 from timenet_connectors import discovery
 from timenet_connectors.discovery import (
     connector_dir,
@@ -107,8 +109,8 @@ def _add_datasets_root(tmp_path, monkeypatch, *dataset_ids):
     return root
 
 
-def test_a_registered_root_adds_connectors_but_the_built_in_root_wins(tmp_path, monkeypatch):
-    root = _add_datasets_root(tmp_path, monkeypatch, "acme/widget", "physionet/acme-extra", "timenet/hello-world")
+def test_a_registered_root_adds_connectors(tmp_path, monkeypatch):
+    root = _add_datasets_root(tmp_path, monkeypatch, "acme/widget", "physionet/acme-extra")
 
     assert {"acme/widget", "physionet/acme-extra", "physionet/ecg-qa-cot"} <= set(known_ids())
     assert connector_dir("acme/widget") == root / "acme" / "widget"
@@ -116,5 +118,49 @@ def test_a_registered_root_adds_connectors_but_the_built_in_root_wins(tmp_path, 
     assert get_connector_package_name("acme/widget") == "acme-datasets"
     assert connector_dir("physionet/acme-extra") == root / "physionet" / "acme_extra"
     assert connector_dir("physionet/ecg-qa-cot").parts[-4:-2] == ("timenet_connectors", "datasets")
-    assert connector_dir("timenet/hello-world").parts[-4:-2] == ("timenet_connectors", "datasets")
     assert get_connector_package_name("timenet/hello-world") is None
+
+
+def test_a_root_listed_twice_on_the_path_counts_once(tmp_path, monkeypatch):
+    package = f"nsacme_{uuid4().hex[:8]}"
+    directory = tmp_path / package / "datasets" / "acme" / "gadget"
+    directory.mkdir(parents=True)
+    (directory / "__init__.py").write_text("")
+    (directory / "dataset.yaml").write_text("dataset_id: acme/gadget\n")
+    dist_info = tmp_path / "nsacme_datasets-0.1.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: nsacme-datasets\nVersion: 0.1\n")
+    (dist_info / "entry_points.txt").write_text(f"[timenet_connectors.datasets]\nroot = {package}.datasets\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    assert connector_dir("acme/gadget") == directory
+
+
+def test_a_dataset_id_in_two_roots_fails_only_for_that_dataset(tmp_path, monkeypatch):
+    root = _add_datasets_root(tmp_path, monkeypatch, "acme/widget", "timenet/hello-world")
+
+    assert "timenet/hello-world" in known_ids()
+    with pytest.raises(TimeNetDuplicateDatasetError, match=r"more than one connector declares 'timenet/hello-world'"):
+        connector_dir("timenet/hello-world")
+    assert connector_dir("acme/widget") == root / "acme" / "widget"
+    assert connector_dir("physionet/ecg-qa-cot").parts[-4:-2] == ("timenet_connectors", "datasets")
+
+
+def test_an_entry_point_that_cannot_be_imported_names_its_package(tmp_path, monkeypatch):
+    dist_info = tmp_path / "acme_datasets-0.1.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: acme-datasets\nVersion: 0.1\n")
+    (dist_info / "entry_points.txt").write_text("[timenet_connectors.datasets]\nroot = acme_missing.datasets\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(TimeNetBuildError, match=r"root = acme_missing\.datasets of acme-datasets"):
+        connector_dir("timenet/hello-world")
+
+
+def test_an_entry_point_without_a_package_names_itself(monkeypatch):
+    entry = EntryPoint("root", "acme.datasets", "timenet_connectors.datasets")
+    monkeypatch.setattr(discovery, "entry_points", lambda group: [entry])
+
+    with pytest.raises(TimeNetBuildError, match=r"root = acme\.datasets names no installed package"):
+        connector_dir("timenet/hello-world")
