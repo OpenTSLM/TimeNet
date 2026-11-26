@@ -185,3 +185,7 @@ with TimeNet(sources=["/tmp/timenet-tsaqa-registry"]).open(
     raw_values = task.inputs[0].signals[0].to_numpy()
     question = task.prompt.read()
 ```
+
+Tests use small, unchanged samples of the pinned source, documented in `tests/README.md`. They
+compare raw float64 bytes, exact questions/context, answers, splits and provenance, including a
+TimeF storage round trip. Malformed-source and changed-source tests exercise failure boundaries.
