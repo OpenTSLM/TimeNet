@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: cubico/kelmarsh
+dataset_version: 1.1.0
+name: Kelmarsh wind farm
+description: >-
+  Ten-minute SCADA data of the six Senvion MM92 turbines (2,050 kW each) of the Kelmarsh wind
+  farm in the United Kingdom, for 2019 to 2022. One Record is one turbine for one UTC day, with
+  144 steps of six signals: active power, wind speed, blade pitch angle, rotor speed, nacelle
+  direction, and ambient temperature. Each value is the mean of a ten-minute period, at the
+  start time of the period. A step that the source leaves empty stays missing. The labels come
+  from the status log of the operator, not from the signals. Each stop event of the log is an
+  annotation with the IEC category that the operator gave it, as one of six reasons, and a
+  second annotation with the message of the event. Each curtailment event is an annotation
+  too. The tasks ask whether the turbine stopped on the day, for how many minutes, in which
+  intervals, and for which main reason. A day gets the reason task only if every stop of the
+  day has a category. A stop entry without an end time would be a point annotation, and the
+  days from that stop to the next System OK entry of the log would get no task. These years
+  have no such entry. The log records curtailment only in 2022, so only the records of that
+  year have the task that asks whether the operator limited the output. A further task asks whether the turbine had at least 60 minutes of downtime on the day, where
+  downtime is stop time in the log. A day with no stop and less than 60 minutes of curtailment
+  is no downtime. A day with 1 to 59 minutes of stop, or with no stop and 60 minutes or more of
+  curtailment, gets no such task: a short stop is another question, and a power limit is not a
+  stop. The metadata of each Record states how many of the 144 steps have no power value, so
+  that a user can keep the days with full coverage.
+  The split follows
+  dates, the same for all turbines: days before July 2021 are train, the rest of 2021 is
+  validation, and 2022 is test. If a stop or curtailment runs across one of the two dates, the
+  days of that turbine that it touches get no task. The power setpoint and the alarm codes of the source are not
+  signals, because they state the answer.
+license: CC-BY-4.0
+source_url: https://doi.org/10.5281/zenodo.16807551
+citation: >-
+  Plumley, C., & Takeuchi, R. (2025). Kelmarsh wind farm data. Zenodo.
+  https://doi.org/10.5281/zenodo.16807551
+domains:
+  - energy
+  - industrial
+tags:
+  - wind-turbine
+  - scada
+  - classification
+  - temporal-localization
+  - scalar-prediction
