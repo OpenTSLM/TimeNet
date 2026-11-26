@@ -1,0 +1,29 @@
+Data Sampling Rate: 256 Hz
+*************************
+
+Channels in EDF Files:
+**********************
+Channel 1: FP1-F7
+Channel 2: T8-P8
+Channel 3: T8-P8
+
+File Name: chb21_01.edf
+File Start Time: 10:00:00
+File End Time: 10:00:11
+Number of Seizures in File: 0
+
+Channels changed:
+*****************
+Channel 1: FP1-F7
+Channel 2: .
+Channel 3: T8-P8
+Channel 4: ECG
+
+File Name: chb21_02.edf
+File Start Time: 12:00:00
+File End Time: 12:00:11
+Number of Seizures in File: 2
+Seizure 1 Start Time:  2 seconds
+Seizure 1 End Time:  4 seconds
+Seizure 2 Start Time: 8 seconds
+Seizure 2 End Time:   10 seconds
