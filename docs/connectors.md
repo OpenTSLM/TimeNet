@@ -253,6 +253,10 @@ imported, every dataset fails with a `TimeNetBuildError` that names the entry po
 Install your package from git or from a local directory. An isolated build installs it again from
 that source. It does not use a package index.
 
+To test and type check these connectors, run `timenet-build check <DATASETS_DIR>` from the project of
+your package. Set `DATASETS_DIR` to the directory of its datasets package. See
+[`timenet-build check`](cli/build.md#check-command).
+
 ## Dependencies and credentials
 
 A connector declares the libraries its source needs in a `requirements.txt` beside its

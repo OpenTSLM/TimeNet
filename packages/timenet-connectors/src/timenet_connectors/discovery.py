@@ -48,14 +48,27 @@ def _get_connector_cards_by_id() -> Mapping[str, list[_ConnectorCard]]:
     cards: dict[str, list[_ConnectorCard]] = {}
     for datasets_module, package_name in _iter_datasets_roots():
         for path in dict.fromkeys(os.path.realpath(path) for path in datasets_module.__path__):
-            # A flat id sits at ``datasets/<name>/``, an ``org/name`` id one level deeper.
-            for card_path in (*Path(path).glob("*/dataset.yaml"), *Path(path).glob("*/*/dataset.yaml")):
+            for card_path in find_card_paths(Path(path)):
                 declared = _declared_id(card_path)
                 if declared is None:
                     continue
                 module_name = ".".join((datasets_module.__name__, *card_path.parent.relative_to(path).parts))
                 cards.setdefault(declared, []).append(_ConnectorCard(card_path.parent, module_name, package_name))
     return cards
+
+
+def find_card_paths(root: Path) -> list[Path]:
+    """Find the connector cards in a datasets directory.
+
+    A flat id sits at ``<root>/<name>/``, an ``org/name`` id one level deeper.
+
+    Args:
+        root: The datasets directory.
+
+    Returns:
+        The ``dataset.yaml`` paths, sorted.
+    """
+    return sorted((*root.glob("*/dataset.yaml"), *root.glob("*/*/dataset.yaml")))
 
 
 def _iter_datasets_roots() -> Iterator[tuple[ModuleType, str | None]]:

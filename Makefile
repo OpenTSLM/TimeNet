@@ -43,9 +43,9 @@ test-unit:
 	uv run pytest -n $(PYTEST_WORKERS) $(UNIT_TESTS)
 
 # Each connector's tests and type-check run in an environment built from that connector's own
-# requirements, the same way a build runs. See scripts/check_connectors.py.
+# requirements, the same way a build runs. See `timenet-build check --help`.
 test-connectors:
-	uv run scripts/check_connectors.py
+	uv run timenet-build check
 
 # Fail the build if a copyleft dependency (GPL/LGPL/AGPL/SSPL/EUPL/CDDL/OSL) enters the resolved
 # environment. Runs against the synced dev env, which pulls in every extra plus the connector deps in
