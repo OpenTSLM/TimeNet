@@ -106,6 +106,7 @@ def _output(dataset) -> dict:
             "sources": [
                 {
                     "name": source.name,
+                    "metadata": dict(source.metadata),
                     "annotations": [
                         (a.key, read_value(a.value), a.span.start_us, a.span.exclusive_end, a.description)
                         for a in source.annotations
@@ -142,7 +143,10 @@ def _output(dataset) -> dict:
         for task in dataset.iter_tasks()
     ]
     annotations = {a.key: read_value(a.value) for a in dataset.annotations}
-    label_sets = {_name(task.label_set): list(task.label_set.names) for task in dataset.iter_tasks()}
+    label_sets = {
+        _name(task.label_set): [(label.name, label.description) for label in task.label_set.labels]
+        for task in dataset.iter_tasks()
+    }
     return {"annotations": annotations, "label_sets": label_sets, "records": records, "tasks": tasks}
 
 
@@ -217,18 +221,27 @@ _EXPECTED = {
     "label_sets": {
         # Each benchmarked scheme's whole label set, with the classes that the fixture does not use.
         "willetts_specific_2018": [
-            "bicycling",
-            "household-chores",
-            "manual-work",
-            "mixed-activity",
-            "sitting",
-            "sleep",
-            "sports",
-            "standing",
-            "vehicle",
-            "walking",
+            (name, None)
+            for name in (
+                "bicycling",
+                "household-chores",
+                "manual-work",
+                "mixed-activity",
+                "sitting",
+                "sleep",
+                "sports",
+                "standing",
+                "vehicle",
+                "walking",
+            )
         ],
-        "walmsley_2020": ["light", "moderate-vigorous", "sedentary", "sleep"],
+        # Walmsley et al. define each class of their scheme.
+        "walmsley_2020": [
+            ("light", "Waking behavior below 3 METs that is not sedentary behavior."),
+            ("moderate-vigorous", "All behavior at 3 METs or more."),
+            ("sedentary", "Waking behavior at 1.5 METs or less in a sitting, lying or reclining posture."),
+            ("sleep", "Non-waking behavior."),
+        ],
     },
     "records": {
         ("P001", 0): {
@@ -243,6 +256,7 @@ _EXPECTED = {
             "sources": [
                 {
                     "name": "Axivity AX3",
+                    "metadata": {"device": "Axivity AX3", "placement": "dominant wrist"},
                     # One run per change of raw label. The unlabeled rows 2000 to 2998 and 3000 to 3999
                     # belong to no run, and the one labeled row 2999 is a run of its own.
                     "annotations": [
@@ -268,6 +282,7 @@ _EXPECTED = {
             "sources": [
                 {
                     "name": "Axivity AX3",
+                    "metadata": {"device": "Axivity AX3", "placement": "dominant wrist"},
                     "annotations": _run(_SLEEP, 0, 10_000_000),
                     "signals": _signals(1000, 0),
                 }
@@ -281,6 +296,7 @@ _EXPECTED = {
             "sources": [
                 {
                     "name": "Axivity AX3",
+                    "metadata": {"device": "Axivity AX3", "placement": "dominant wrist"},
                     "annotations": _run(_SIT, 0, 15_000_000),
                     "signals": _signals(1500, 0),
                 }
@@ -293,6 +309,7 @@ _EXPECTED = {
             "sources": [
                 {
                     "name": "Axivity AX3",
+                    "metadata": {"device": "Axivity AX3", "placement": "dominant wrist"},
                     # The run stops at the gap: each segment's runs are its own.
                     "annotations": _run(_WALK, _SECOND_SEGMENT_US, _SECOND_SEGMENT_US + 14_320_000),
                     # The offset is from the recording's first sample, on the origin both parts share.

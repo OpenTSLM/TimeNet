@@ -47,6 +47,7 @@ _RECORDING_COLUMNS = [_TIME_COLUMN, *AXES, _LABEL_COLUMN]
 # The paper's Methods: an Axivity AX3 on the dominant wrist, at 100 Hz with a range of ±8 g. The
 # authors resampled every recording to exactly 100 Hz before release.
 DEVICE = "Axivity AX3"
+PLACEMENT = "dominant wrist"
 SAMPLE_RATE_HZ = 100
 _SAMPLE_PERIOD_US = US_PER_S // SAMPLE_RATE_HZ
 # The source writes eight significant digits. float32 keeps about seven, which is still far more

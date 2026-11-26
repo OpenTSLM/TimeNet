@@ -20,6 +20,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import (
     Annotation,
     ClassificationTask,
+    Label,
     LabelSet,
     Split,
     TimeInterval,
@@ -68,8 +69,19 @@ _ACTIVITY_TYPES_WILLETTS_SPECIFIC_2018 = LabelSet(
         ),
     ],
 )
+# The class definitions of Walmsley et al., Br J Sports Med 2021.
+# MET is the energy use of an activity relative to quiet sitting.
+_WALMSLEY_2020_DEFINITIONS = {
+    "light": "Waking behavior below 3 METs that is not sedentary behavior.",
+    "moderate-vigorous": "All behavior at 3 METs or more.",
+    "sedentary": "Waking behavior at 1.5 METs or less in a sitting, lying or reclining posture.",
+    "sleep": "Non-waking behavior.",
+}
 _MOVEMENT_BEHAVIORS_WALMSLEY_2020 = LabelSet(
-    list(source_data.SCHEME_CLASSES[LabelScheme.WALMSLEY_2020]),
+    [
+        Label(name=name, description=_WALMSLEY_2020_DEFINITIONS[name])
+        for name in source_data.SCHEME_CLASSES[LabelScheme.WALMSLEY_2020]
+    ],
     annotations=[
         Annotation("name", value="walmsley_2020"),
         Annotation(
@@ -175,7 +187,10 @@ def _build_records(recording: Recording, labels: LabelDictionary, acceleration: 
             for axis, column in enumerate(source_data.AXES)
         ]
         source = Source(
-            source_data.DEVICE, signals=signals, annotations=list(_activity_annotations(segment.runs, labels))
+            source_data.DEVICE,
+            signals=signals,
+            annotations=list(_activity_annotations(segment.runs, labels)),
+            metadata={"device": source_data.DEVICE, "placement": source_data.PLACEMENT},
         )
         records.append(
             Record(

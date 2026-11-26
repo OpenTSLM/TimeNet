@@ -50,7 +50,8 @@ Record each, and the 8 participants whose recording has a gap have two. That mak
 151 participants.
 
 Each Record has one Source, `Axivity AX3`, with three float32 signals: `x`, `y`, and `z`. The
-signals use `standard_gravity` units.
+signals use `standard_gravity` units. The Source metadata names the device and its placement, the
+dominant wrist.
 
 The timestamps have no time zone, and their dates are randomized, so the origin has no timestamp.
 The connector stores the following information instead:
@@ -97,6 +98,10 @@ sets:
 | --- | --- | --- |
 | `willetts_specific_2018` | Activity type | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
 | `walmsley_2020` | Movement behavior | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
+
+Each label of `walmsley_2020` has the definition that Walmsley et al. (2021) give for it, by
+energy use in METs. The papers do not define the classes of `willetts_specific_2018`, so its labels
+have no description.
 
 The other four schemes have no tasks. Their classes are only in the activity annotations.
 
