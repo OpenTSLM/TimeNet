@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING, ClassVar, TypeAlias, Union
 
 from timenet import builders
 from timenet._warnings import warn_at_caller
-from timenet.errors import ConnectorCardWarning, TimeNetAccessError, TimeNetInvalidCardError
+from timenet.errors import (
+    ConnectorCardWarning,
+    TimeNetAccessError,
+    TimeNetDuplicateDatasetError,
+    TimeNetInvalidCardError,
+)
 from timenet.types import DatasetMetadata
 from timenet.types.access import Access, AccessRequirement
 from timenet.types.references import LATEST_VERSION, DatasetRef
@@ -126,6 +131,7 @@ class InstalledConnectors:
 
         Raises:
             TimeNetInvalidCardError: If the connector's card cannot be read.
+            TimeNetDuplicateDatasetError: If more than one installed connector declares the dataset ID.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
         builder = builders.installed_builder(dataset_id)
         if builder is None or (version is not None and version != builder.card.dataset_version):
@@ -136,7 +142,8 @@ class InstalledConnectors:
         """Return dataset cards from installed connectors without building the datasets.
 
         The first entry point that claims a dataset takes priority.
-        The method skips unreadable cards and emits a :class:`~timenet.errors.ConnectorCardWarning`.
+        The method skips unreadable cards and dataset IDs that more than one connector declares, and
+        emits a :class:`~timenet.errors.ConnectorCardWarning` for each.
 
         Returns:
             The cards, sorted by dataset ID.
@@ -152,13 +159,8 @@ class InstalledConnectors:
         for claim in builders.claims():
             try:
                 card = claim.backend.card(claim.dataset_id)
-            except TimeNetInvalidCardError as error:
-                warn_at_caller(
-                    ConnectorCardWarning(
-                        f"{claim.dataset_id}: the card of its installed connector cannot be read, "
-                        f"so the listing leaves it out: {error}"
-                    )
-                )
+            except (TimeNetInvalidCardError, TimeNetDuplicateDatasetError) as error:
+                warn_at_caller(ConnectorCardWarning(f"{claim.dataset_id} is skipped: {error}"))
                 continue
             if card is not None:
                 cards.append(card)

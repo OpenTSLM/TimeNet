@@ -307,6 +307,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeNetOriginError` | The provenance record of a release in the local registry is not valid. `release` names the release, `path` the file, and `detail` the first problem. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
+| `TimeNetDuplicateDatasetError` | More than one installed connector declares the same dataset ID. Only that dataset fails. |
 | `TimeNetConnectorError` | A connector found that an assumption about its source data, a download, or a parent does not hold. `TimeNetDownloadError` is a `TimeNetConnectorError`. |
 | `TimeNetBuildError` | A build failed: the connector build, or the environment that it needs. |
 | `TimeNetIsolationError` | An isolated build cannot make its environment, for example because `uv` is missing. A `TimeNetBuildError`. |

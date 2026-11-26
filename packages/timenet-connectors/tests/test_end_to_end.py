@@ -12,7 +12,7 @@ from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal
 from timenet_connectors.builder.cli import app as build_app
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
-from timenet_connectors.discovery import available, resolve
+from timenet_connectors.discovery import known_ids, resolve
 
 
 runner = CliRunner()
@@ -39,7 +39,7 @@ def converted(monkeypatch):
 
 def test_discovery_resolves_and_lists():
     assert resolve("timenet/hello-world") is HelloWorldConnector
-    assert set(available()) >= {"timenet/hello-world", "chengsenwang/tsqa", "physionet/ecg-qa-cot"}
+    assert set(known_ids()) >= {"timenet/hello-world", "chengsenwang/tsqa", "physionet/ecg-qa-cot"}
 
 
 def test_build_then_load_round_trips(converted, tmp_path):
