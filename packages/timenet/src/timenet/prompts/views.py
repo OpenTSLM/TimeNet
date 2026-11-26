@@ -210,7 +210,7 @@ def build_input_view(task: Task, dataset: DatasetMetadata | None = None) -> Task
         raise TimeFValidationError("the task's prompt is blank")
 
     pending = list(task.input_annotations)
-    windows: dict[int, Signal] = {}
+    cut: list[tuple[ChannelView, Signal]] = []
     records = []
     for record in task.inputs:
         sources = []
@@ -229,7 +229,7 @@ def build_input_view(task: Task, dataset: DatasetMetadata | None = None) -> Task
                     n_values=window.n_values,
                     context=_context(_claim(pending, signal.annotations)),
                 )
-                windows[id(channel)] = _stripped(window)
+                cut.append((channel, window))
                 channels.append(channel)
             if channels:
                 sources.append(
@@ -237,8 +237,10 @@ def build_input_view(task: Task, dataset: DatasetMetadata | None = None) -> Task
                 )
         context = _context(_claim(pending, record.walk_annotations()))
         records.append(RecordView(sources=tuple(sources), context=context))
-    if scope is not None and not windows:
+    if scope is not None and not cut:
         raise TimeFValidationError(f"the task's scope {scope!r} covers no input signal")
+    zero_us = _window_start_us(scope, [window for _, window in cut])
+    windows = {id(channel): _stripped(window, zero_us) for channel, window in cut}
 
     values = ClassificationInputView(
         dataset=DatasetView(
@@ -356,8 +358,37 @@ def _window(signal: Signal, scope: Span | None) -> Signal | None:
     return signal.slice(scope, clip=True)
 
 
-def _stripped(window: Signal) -> Signal:
-    """Copy a window without annotations, with allowed metadata only, on a time axis that starts at zero.
+def _first_offset_us(window: Signal) -> int | None:
+    """Return the time offset of a window's first value.
+
+    Returns:
+        The offset in microseconds, or ``None`` for an ordinal Signal.
+    """
+    axis = window.time_axis
+    if isinstance(axis, RegularAxis):
+        return axis.time_offset_us(0)
+    if isinstance(axis, IrregularAxis):
+        return axis.first_us
+    return None
+
+
+def _window_start_us(scope: Span | None, windows: list[Signal]) -> int:
+    """Return the time that becomes zero for every channel of the task, so that channels stay aligned.
+
+    Returns:
+        The start of a time scope, or else the earliest first value of all windows, or 0 without one.
+    """
+    if isinstance(scope, TimeInterval):
+        return scope.start_us
+    firsts = [first for first in map(_first_offset_us, windows) if first is not None]
+    return min(firsts, default=0)
+
+
+def _stripped(window: Signal, zero_us: int) -> Signal:
+    """Copy a window without annotations, with allowed metadata only, with its times relative to ``zero_us``.
+
+    Every channel of a task uses the same ``zero_us``, so the copies keep their alignment and hide
+    the window's place in the recording.
 
     Returns:
         A lazy Signal that reads the window's values.
@@ -365,12 +396,10 @@ def _stripped(window: Signal) -> Signal:
     axis: TimeAxis = window.time_axis
     time_offsets = None
     if isinstance(axis, RegularAxis):
-        axis = RegularAxis(period_us=axis.period_us)
+        axis = RegularAxis(period_us=axis.period_us, offset_us=axis.time_offset_us(0) - zero_us)
     elif isinstance(axis, IrregularAxis):
-        offsets = window.time_offsets_us()
-        first = int(offsets[0])
-        axis = IrregularAxis(first_us=0, last_us=axis.last_us - first)
-        shifted = pa.array(offsets - first, type=pa.int64())
+        axis = IrregularAxis(first_us=axis.first_us - zero_us, last_us=axis.last_us - zero_us)
+        shifted = pa.array(window.time_offsets_us() - zero_us, type=pa.int64())
 
         def time_offsets() -> pa.Array:
             return shifted

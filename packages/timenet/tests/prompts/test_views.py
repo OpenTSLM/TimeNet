@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from timenet.dataset import Record, Signal, Source
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.prompts import views
 from timenet.prompts.views import ContextItem, LabelView, WindowView, build_input_view, build_target_view
@@ -298,3 +298,43 @@ def _list_target(c):
 def test_target_view_rejects(capture, change, message):
     with pytest.raises(TimeFValidationError, match=message):
         _target_view(change(capture))
+
+
+def test_channels_share_the_window_start(make):
+    heart_rate = TimeSeriesSpec(spec_type="heart_rate", name="Heart rate", unit_value=None)
+    a = Signal.from_irregular([1.0, 2.0], time_offsets_us=[7_000_000, 9_000_000], spec=heart_rate, name="a")
+    b = Signal.from_irregular(
+        [1.0, 2.0, 3.0], time_offsets_us=[5_500_000, 6_000_000, 9_500_000], spec=heart_rate, name="b"
+    )
+    record = Record(sources=[Source("watch", signals=[a, b])])
+    task = ClassificationTask(
+        inputs=[record], scope=TimeInterval.seconds(5, 10), targets="sleep", label_set=make.label_set()
+    )
+
+    view = build_input_view(task)
+    first, second = (view.windows[id(channel)] for channel in view.values.records[0].channels)
+
+    np.testing.assert_array_equal(first.time_offsets_us(), [2_000_000, 4_000_000])
+    np.testing.assert_array_equal(second.time_offsets_us(), [500_000, 1_000_000, 4_500_000])
+    assert first.time_axis == IrregularAxis(first_us=2_000_000, last_us=4_000_000)
+
+
+def test_unscoped_segments_keep_their_distance(make):
+    early = make.acceleration("early")
+    late = Signal(
+        spec=early.spec,
+        time_axis=RegularAxis.from_rate_hz(100, offset_us=100_000_000),
+        name="late",
+        data=np.zeros(10, dtype=np.float32),
+    )
+    record = Record(sources=[Source("device", signals=[early, late])])
+    task = ClassificationTask(inputs=[record], targets="sleep", label_set=make.label_set())
+
+    view = build_input_view(task)
+    windows = [view.windows[id(channel)] for channel in view.values.records[0].channels]
+
+    axes = [window.time_axis for window in windows]
+    assert axes == [
+        RegularAxis(period_us=Fraction(10_000)),
+        RegularAxis(period_us=Fraction(10_000), offset_us=100_000_000),
+    ]

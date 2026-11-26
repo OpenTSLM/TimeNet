@@ -100,8 +100,10 @@ The view leaves out what a model must not see:
 - The start and end of the window. In a recording of a day, the start time is close to the time of
   day and can give away the answer.
 
-A series part holds a stripped copy of the Signal: the values in the window, no annotations, only
-the allowed metadata, and a time axis that starts at zero.
+A series part holds a stripped copy of the Signal: the values in the window, no annotations, and
+only the allowed metadata. Its times count from the start of the task's window, or without a time
+scope from the earliest value of all channels. All channels of a task share this zero, so they stay
+aligned.
 
 ## Write a template
 

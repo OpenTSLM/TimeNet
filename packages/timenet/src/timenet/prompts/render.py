@@ -159,7 +159,10 @@ def _render(
     context = {field.name: getattr(values, field.name) for field in fields(values)}
     try:
         text = _compile(source).render(**context, series=series)
-    except TemplateError as exc:
+    except TimeFValidationError:
+        raise
+    except (TemplateError, ArithmeticError, LookupError, TypeError, ValueError) as exc:
+        # Arithmetic, lookup and type errors come from expressions in the template, such as a division by zero.
         raise TimeFValidationError(f"template {name!r}, {section} section: {exc}") from exc
 
     parts: list[Part] = []

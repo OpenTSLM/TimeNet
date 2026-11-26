@@ -91,3 +91,9 @@ def test_dataset_card_reaches_the_view(capture):
     parts = render_input(capture.task, _template("{{ dataset.name }}"), dataset=make_dataset().metadata)
 
     assert parts == (TextPart("Hello World"),)
+
+
+@pytest.mark.parametrize("source", ["{{ 1 / 0 }}", "{{ prompt + 1 }}", "{{ records[5] }}"])
+def test_runtime_errors_name_the_template(capture, source):
+    with pytest.raises(TimeFValidationError, match="template 't', input section"):
+        render_input(capture.replace(prompt="Why?"), _template(source))
