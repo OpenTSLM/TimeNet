@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: oxwearables/capture24
+dataset_version: 1.0.0
+# The SHA-256 of the one archive file, which connector.py pins as ARCHIVE_SHA256.
+source_revision: sha256:69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2
+name: CAPTURE-24
+description: >-
+  CAPTURE-24 holds about one day of wrist accelerometer data from each of 151 adults, recorded during normal daily life. Most of each day has activity labels that people coded from wearable-camera images and sleep diaries.
+  The data was recorded in 2014 to 2016 in Oxfordshire. Each participant wore an Axivity AX3 accelerometer on the dominant wrist for about 24 hours. At the same time, a Vicon Autograph camera on the chest took an image every 20 to 40 seconds, and the participant kept a Whitehall II sleep diary. Annotators then coded the images and the diary into activity labels, with codes from the Compendium of Physical Activities.
+license: CC-BY-4.0
+domains:
+  - activity
+  - motion
+tags:
+  - accelerometer
+  - wearable
+  - wrist
+  - activity-recognition
+source_url: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
+citation: >-
+  Chan Chang, S., Walmsley, R., Gershuny, J., Harms, T., Thomas, E., Milton, K., Kelly, P., Foster,
+  C., Wong, A., Gray, N., Haque, S., Hollowell, S., & Doherty, A. (2021). Capture-24: Activity
+  tracker dataset for human activity recognition. University of Oxford.
+  https://doi.org/10.5287/bodleian:NGx0JOMP5. Original publication: Chan, S., Hang, Y., Tong, C.,
+  Acquah, A., Schonfeldt, A., Gershuny, J., & Doherty, A. (2024). CAPTURE-24: A large dataset of
+  wrist-worn activity tracker data collected in the wild for human activity recognition.
+  Scientific Data, 11, 1135. https://doi.org/10.1038/s41597-024-03960-3
