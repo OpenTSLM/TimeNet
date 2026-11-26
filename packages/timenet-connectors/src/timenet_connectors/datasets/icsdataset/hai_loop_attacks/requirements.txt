@@ -1,0 +1,2 @@
+# huggingface_hub downloads the examples table from the Hugging Face Hub. Version 1.1 adds tqdm_class.
+huggingface_hub>=1.1

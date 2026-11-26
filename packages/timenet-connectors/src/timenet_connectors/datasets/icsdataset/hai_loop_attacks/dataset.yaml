@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: icsdataset/hai-loop-attacks
+dataset_version: 1.0.0
+name: HAI loop attacks
+description: >-
+  24,132 examples from the HAI security dataset: 4,022 windows of 300 seconds, each seen through
+  the six control loops of the testbed and labelled attack or normal. Each example is a
+  classification task over its window and the 1 to 5 series of its loop (setpoint, measurement,
+  commands), with a rule-written rationale where its series show a change. Each of the 1,454
+  attack examples also has a localization task for the flagged seconds of its loop. The series
+  come from the icsdataset/hai parent, one record per data file. Splits are by whole file. The
+  table that names the windows and labels is published under CC BY-SA 4.0 on Hugging Face, pinned
+  by commit and SHA-256. The connector README gives the label rule and the limits.
+license: CC-BY-SA-4.0
+license_url: https://creativecommons.org/licenses/by-sa/4.0/
+citation: >-
+  Shin, H.-K., Lee, W., Choi, S., Yun, J.-H., & Min, B.-G. (2023). HAI security datasets.
+  https://github.com/icsdataset/hai. For HAI 21.03: Shin, H.-K., Lee, W., Yun, J.-H., & Min, B.-G.
+  (2021). Two ICS Security Datasets and Anomaly Detection Contest on the HIL-Based Augmented ICS
+  Testbed. Cyber Security Experimentation and Test Workshop (CSET '21), 36-40.
+  https://doi.org/10.1145/3474718.3474719. For HAI 20.07: Shin, H.-K., Lee, W., Yun, J.-H., &
+  Kim, H. (2020). HAI 1.0: HIL-Based Augmented ICS Security Dataset. 13th USENIX Workshop on Cyber
+  Security Experimentation and Test (CSET 20).
+domains:
+  - industrial
+  - energy
+tags:
+  - ics-security
+  - anomaly-detection
+  - control-loops
+  - classification
+  - temporal-localization
+  - generated-supervision
+parents:
+  hai: icsdataset/hai@1.0.0
