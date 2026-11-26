@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from fractions import Fraction
+import logging
 from pathlib import Path
 from typing import Any, NamedTuple
 import warnings
@@ -29,8 +30,17 @@ from timenet.types import US_PER_S
 
 # edfio repairs a short file instead of refusing it: it warns, lowers the record count of the
 # header it gives back, and reads on. A caller of a lazy loader never sees that warning, thus
-# this module matches the text of it. edfio writes one of these two for a file that ends early.
-_SHORT_FILE_WARNINGS = ("but file contains", "Data was truncated")
+# this module matches the text of it.
+#
+# edfio writes the first one when the file holds a different count of whole records than the
+# header states. It writes the second one when bytes are left over after the last whole record.
+# A file that ends early in the middle of a record gets both, because it also lost that record.
+# A file that holds every record its header states, plus some bytes after them, gets only the
+# second one.
+_RECORD_COUNT_WARNING = "but file contains"
+_PARTIAL_RECORD_WARNING = "Data was truncated"
+
+_LOG = logging.getLogger(__name__)
 
 
 class EdfHeader(NamedTuple):
@@ -100,17 +110,29 @@ def _raise_on_a_short_file(path: Path, caught: list[warnings.WarningMessage]) ->
     short file and raises every other one again. A release states a header field twice and
     the two can disagree, and a caller wants to hear about that.
 
+    A file can hold every record that its header states and then some bytes that make up no
+    whole record. ``edfio`` reads the stated records and leaves those bytes out. Nothing is lost
+    and nothing is repaired, so this logs the bytes and keeps the file.
+
     Args:
         path: The file that was read.
         caught: The warnings that reading it raised.
 
     Raises:
-        TimeFFormatError: If ``edfio`` found fewer data records than the header states.
+        TimeFFormatError: If ``edfio`` found another count of data records than the header
+            states.
     """
-    for entry in caught:
-        text = str(entry.message)
-        if any(warning in text for warning in _SHORT_FILE_WARNINGS):
-            raise TimeFFormatError(f"{path}: ends before its own header says. {text}")
+    texts = [str(entry.message) for entry in caught]
+    for text in texts:
+        if _RECORD_COUNT_WARNING in text:
+            raise TimeFFormatError(f"{path}: ends before its own header says. {' '.join(texts)}")
+
+    for entry, text in zip(caught, texts, strict=True):
+        if _PARTIAL_RECORD_WARNING in text:
+            _LOG.warning(
+                "%s: holds every record its header states, and bytes after the last one, which are not read", path
+            )
+            continue
 
         warnings.warn_explicit(entry.message, entry.category, entry.filename, entry.lineno)
 
