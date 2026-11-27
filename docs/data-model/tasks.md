@@ -357,6 +357,47 @@ place, such as `None of the above`. Set `allowable_enumerators` if the prompt fi
 enumerators. For example, a prompt that says `Answer with the letter` allows only the two Latin
 enumerators.
 
+#### Show the options to a model
+
+In several datasets one key is the correct answer much more often than the others, so a model can
+learn the key instead of the option. `get_option_presentation()` returns the prompt and the answer
+of a task with the options in a random order and with keys in a random style:
+
+```python
+shown = task.get_option_presentation()
+shown.prompt
+# For example: 'Which trend? i. down ii. up. Answer with i or ii.'
+shown.get_answer()
+# ('i',)
+
+published = task.get_option_presentation(use_shuffled_label_key=False)
+published.prompt
+# 'Which trend? A: up B: down. Answer with A or B.'
+published.get_answer()
+# ('B',)
+```
+
+The task itself does not change. It keeps the prompt and the answer of the source.
+
+The random choices depend only on `seed` and the task ID, so the same call gives the same
+presentation. Pass another seed, for example the number of the epoch, for another one. A pinned
+option keeps its place. The new key style has one of the `allowable_enumerators` and one of the
+marker forms `A:`, `A)`, `A.` and `(A)`. A key reference keeps the text around its symbol, so
+`(a), (b), or (c)` becomes `(1), (2), or (3)`.
+
+An `OptionPresentation` holds no reference to its task. `with_options_in_order()` and
+`with_key_style()` make one change at a time, and each returns a new presentation.
+`get_label_of_answer()` gives the label of the option that an answer names, so the answer of a model
+can be compared with the target labels:
+
+```python
+shown.get_label_of_answer("i") in shown.target_labels
+# True
+```
+
+If the prompt does not print the options, only their order changes, and the answer is the target
+label. The consumer prints the options in the order of the presentation.
+
 ### Answer and rationale
 
 ```python

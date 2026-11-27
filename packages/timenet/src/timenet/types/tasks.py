@@ -5,6 +5,7 @@ from copy import copy as shallow_copy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from functools import lru_cache
+import random
 from typing import TYPE_CHECKING, ClassVar, Self, TypeAlias, TypeGuard, TypeVar, cast, final
 
 import pint
@@ -16,6 +17,7 @@ from timenet.types.annotations import Annotation, SupportsAnnotate, _copy_annota
 from timenet.types.ids import EntityId, assigned_id
 from timenet.types.label_sets import LabelSet
 from timenet.types.modalities import InputModality
+from timenet.types.option_presentation import OptionPresentation
 from timenet.types.prompt_options import PromptOptions
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -479,6 +481,40 @@ class ClassificationTask(Task):
         not_shown = sorted(set(self._read_target_labels()) - set(options.labels))
         if not_shown:
             raise TimeFValidationError(f"{name} has target labels without a prompt option: {not_shown}")
+
+    def get_option_presentation(self, *, use_shuffled_label_key: bool = True, seed: int = 0) -> OptionPresentation:
+        """Return the prompt, the options and the answer of the task, as a consumer shows them to a model.
+
+        By default, the options are in a random order, and their keys are in a random style of the
+        allowable enumerators. As a result, each key is the correct answer equally often in a dataset.
+        The random choices depend only on ``seed`` and the ID of the task, so the same call gives the
+        same presentation. Pass another seed, for example the number of the epoch, for another one.
+
+        Args:
+            use_shuffled_label_key: If ``False``, the presentation is the one that the source publishes:
+                the prompt and the answer of the task as they are stored.
+            seed: The seed of the random choices.
+
+        Returns:
+            The presentation.
+
+        Raises:
+            TimeFValidationError: If the task has no prompt options, or it is not in a dataset and
+                thus has no ID for the random choices.
+        """
+        if self.prompt_options is None:
+            raise TimeFValidationError(
+                f"{type(self).__name__} has no prompt_options, so it does not say where its options are"
+            )
+        published = OptionPresentation(
+            prompt=None if self.prompt is None else self.prompt.read(),
+            prompt_options=self.prompt_options,
+            target_labels=tuple(self._read_target_labels()),
+        )
+        if not use_shuffled_label_key:
+            return published
+        # ruff: ignore[suspicious-non-cryptographic-random-usage] - the choices only vary how a prompt is shown
+        return published.with_shuffled_label_keys(random.Random(f"{seed}:{self.id}"))
 
     def walk_annotations(self) -> Iterator[Annotation]:
         """Yield the annotation occurrences of the task, then those of its label set.
