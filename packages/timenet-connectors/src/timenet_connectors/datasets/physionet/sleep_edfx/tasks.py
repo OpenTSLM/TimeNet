@@ -10,7 +10,8 @@ Each classification task draws its target from one closed set. The ``name`` anno
 ``LabelSet`` holds the annotation key whose values the set lists. The tasks that ask one question
 share one set.
 
-No task carries a prompt. The release states no question in words.
+No task carries a prompt. The release states no question in words. Each classification task has the
+default template of its label set, which asks for the label and lists the labels.
 """
 
 from collections.abc import Iterator, Sequence
@@ -31,6 +32,7 @@ from timenet.types import (
     read_value,
 )
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
+from timenet_connectors.templates import get_default_template_of_label_set
 
 
 # The epoch the release scores in, from the 1968 Rechtschaffen and Kales manual.
@@ -55,6 +57,7 @@ SLEEP_STAGES = LabelSet(
     annotations=[Annotation("name", value=str(AnnotationKey.SLEEP_STAGE))],
 )
 STAGE_LABELS = SLEEP_STAGES.names
+SLEEP_STAGE_TEMPLATE = get_default_template_of_label_set(SLEEP_STAGES)
 
 # The five labels that say the subject was asleep. None of the other three bounds a night.
 ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
@@ -66,6 +69,7 @@ SEXES = LabelSet(
     annotations=[Annotation("name", value=str(AnnotationKey.SEX))],
 )
 SEX_LABELS = SEXES.names
+SEX_TEMPLATE = get_default_template_of_label_set(SEXES)
 
 # The two nights of the telemetry study.
 CONDITION_LABELS = tuple(Condition)
@@ -73,6 +77,7 @@ CONDITIONS = LabelSet(
     [str(one) for one in Condition],
     annotations=[Annotation("name", value=str(AnnotationKey.CONDITION))],
 )
+CONDITION_TEMPLATE = get_default_template_of_label_set(CONDITIONS)
 
 
 def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation]) -> Iterator[ClassificationTask]:
@@ -131,6 +136,7 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
                 # for whoever trains.
                 targets=label,
                 label_set=SLEEP_STAGES,
+                template=SLEEP_STAGE_TEMPLATE,
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
             )
 
@@ -181,6 +187,7 @@ def build_record_tasks(
         # opposite meanings, so one code means two opposite things.
         targets=_one_of(recording_id, stated, AnnotationKey.SEX, SEX_LABELS),
         label_set=SEXES,
+        template=SEX_TEMPLATE,
     )
 
     # Only the telemetry sheet states a condition, so this one is optional.
@@ -188,6 +195,7 @@ def build_record_tasks(
         yield ClassificationTask(
             targets=_one_of(recording_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),
             label_set=CONDITIONS,
+            template=CONDITION_TEMPLATE,
         )
 
     night = find_sleep_period(span_annotations)

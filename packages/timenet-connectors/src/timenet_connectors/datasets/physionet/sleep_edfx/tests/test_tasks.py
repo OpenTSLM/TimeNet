@@ -98,9 +98,16 @@ def test_every_task_shares_the_stage_label_set():
     assert all(one.label_set is tasks.SLEEP_STAGES for one in built)
 
 
-def test_no_task_carries_a_prompt():
+def test_no_task_carries_a_prompt_and_each_has_the_template_of_its_label_set():
     built = list(tasks.build_epoch_tasks(_RECORDING_ID, [_stage("Sleep stage 2", 0, 60)]))
     assert all(one.prompt is None for one in built)
+    assert all(one.template is tasks.SLEEP_STAGE_TEMPLATE for one in built)
+    published = built[0].get_option_presentation(use_shuffled_label_key=False)
+    assert published.prompt == (
+        "Which label matches the input? Options: Sleep stage W, Sleep stage 1, Sleep stage 2, Sleep stage 3, "
+        "Sleep stage 4, Sleep stage R, Movement time, Sleep stage ?. Answer with one label."
+    )
+    assert published.answers == ("Sleep stage 2",)
 
 
 def test_a_hole_between_two_entries_gets_no_task():
