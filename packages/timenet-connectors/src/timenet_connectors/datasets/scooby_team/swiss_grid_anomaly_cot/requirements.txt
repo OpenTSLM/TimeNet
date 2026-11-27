@@ -1,0 +1,6 @@
+# pandas aligns the quarter-hourly, hourly and daily tables and fits nothing beyond numpy's lstsq.
+pandas>=2.2
+# openpyxl reads the Swissgrid .xlsx workbooks.
+openpyxl>=3.1.5
+# holidays gives the cantonal public holidays. Pinned exactly: its holiday data decides labels.
+holidays==0.108
