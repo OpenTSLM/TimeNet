@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Self, TypeVar
 
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, InputModality, LabelSet, Split
+from timenet_connectors.templates import get_template_that_lists_options_after_prompt
 
 
 if TYPE_CHECKING:
@@ -211,6 +212,10 @@ class ARFBenchQuestion:
         index in the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``.
         The interpolation flags describe what an engineer saw. This method does not interpolate.
 
+        The question text does not print the options. The template of the task lists them after the
+        question, in the order of the release. No option refers to another one, so a consumer can show
+        them in another order.
+
         Returns:
             The task, not yet added to a dataset.
         """
@@ -222,6 +227,7 @@ class ARFBenchQuestion:
             split=Split.TEST,
             metadata={"question_index": self.index},
             label_set=LabelSet(self.answer_options, ordered=True),
+            template=get_template_that_lists_options_after_prompt(self.answer_options),
             annotations=[
                 Annotation("task_category", value=self.task_category.value),
                 Annotation("difficulty", value=self.difficulty.value),

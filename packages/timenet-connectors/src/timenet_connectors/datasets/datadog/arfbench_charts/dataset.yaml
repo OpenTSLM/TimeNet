@@ -12,7 +12,7 @@
 # in its metadata, the same as the series task in `datadog/arfbench`, so a consumer can pair them.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench-charts
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: ARFBench charts
 description: >-
   The released charts of ARFBench: 750 multiple-choice questions about anomalies in 142 metrics
