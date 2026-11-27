@@ -14,7 +14,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.types import AnswerTask, ClassificationTask, Split
+from timenet.types import AnswerTask, ClassificationEnumerator, ClassificationTask, Split
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import connector
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.connector import (
     SourceIssue,
@@ -78,7 +78,8 @@ def _published_series(row: dict[str, Any]) -> list[list[float]]:
 def _check_task(task, row: dict[str, Any]) -> None:
     """Require a task to hold its published row: question, answer, series, context and provenance."""
     true_or_false = row["answer"] in {"T", "F"} and "T: True.\nF: False.\n" in row["question"]
-    assert isinstance(task, ClassificationTask if true_or_false else AnswerTask)
+    puzzle = "\n\nPatches:\n" in row["question"]
+    assert isinstance(task, AnswerTask if puzzle else ClassificationTask)
     assert task.targets == (row["answer"],)
     assert task.split is _SPLITS[task.metadata["file"].removesuffix(".parquet")]
     series = _published_series(row)
@@ -107,9 +108,48 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert task.metadata["task"] == row["task"]
     assert task.metadata["question_type"] == row["question_type"]
     assert task.metadata["source_issues"] == _EXPECTED_ISSUES.get(_row_of(task), [])
-    if isinstance(task, ClassificationTask):
+    if true_or_false:
         assert task.label_set.names == ("T", "F")
         assert [(a.key, a.value) for a in task.label_set.annotations] == [("name", "true_or_false")]
+        assert task.prompt_options is None
+    elif not puzzle:
+        _check_choices(task, row)
+
+
+def _check_choices(task, row: dict[str, Any]) -> None:
+    """Require a multiple-choice task to say where its choices are, so that they can be shown in another order."""
+    letters = tuple(re.findall(r"^([A-D]): ", row["question"].partition("\n\nChoices:\n")[2], re.MULTILINE))
+    assert task.label_set.names == letters
+    assert [(a.key, a.value) for a in task.label_set.annotations] == [("name", "multiple_choice")]
+    published = task.get_option_presentation(use_shuffled_label_key=False)
+    assert published.prompt == task.prompt.read()
+    assert published.get_answer() == (row["answer"],)
+    assert published.prompt_options.labels == letters
+    assert published.prompt_options.allowable_enumerators == {
+        ClassificationEnumerator.LATIN_UPPERCASE,
+        ClassificationEnumerator.LATIN_LOWERCASE,
+    }
+    # Each key reference is in the sentence that names the letters, before the choices.
+    choices_start = published.prompt.index("\n\nChoices:\n")
+    assert [reference.option_position for reference in published.prompt_options.key_references] == list(
+        range(len(letters))
+    )
+    assert all(reference.span.end < choices_start for reference in published.prompt_options.key_references)
+    correct = published.prompt_options.options[letters.index(row["answer"])]
+    correct_text = correct.text.read_from(published.prompt)
+    assert correct_text == task.metadata.get("answer_text", correct_text)
+
+
+def _check_shuffled_choices(task) -> None:
+    """Require the answer of a shuffled multiple-choice task to name the choice with the text of the published answer."""
+    published = task.get_option_presentation(use_shuffled_label_key=False)
+    (label,) = published.target_labels
+    correct = published.prompt_options.options[published.prompt_options.labels.index(label)]
+    shown = task.get_option_presentation()
+    (answer,) = shown.get_answer()
+    assert shown.get_label_of_answer(answer) == label
+    shown_correct = shown.prompt_options.options[shown.prompt_options.labels.index(label)]
+    assert shown_correct.text.read_from(shown.prompt) == correct.text.read_from(published.prompt)
 
 
 def test_every_task_holds_its_published_row():
@@ -127,7 +167,7 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     registry = LocalRegistry(tmp_path / "registry")
     registry.put_dataset(original)
     published = _published()
-    with TimeFReader(open_local_version(registry.root / "tsaqa/tsaqa-benchmark/1.0.0")) as reader:
+    with TimeFReader(open_local_version(registry.root / "tsaqa/tsaqa-benchmark/2.0.0")) as reader:
         restored = reader.read()
         assert all(a.key in {"task", "question_type"} for a in restored.annotations)
         assert restored.metadata.source_url == "https://huggingface.co/datasets/TSAQA/TSAQA-Benchmark"
@@ -141,6 +181,8 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
         assert len(tasks) == len(published)
         for task in tasks:
             _check_task(task, published[_row_of(task)])
+            if task.metadata["question_format"] == "multiple_choice":
+                _check_shuffled_choices(task)
         specs = Counter(record.signals[0].spec.spec_type for record in restored.records)
     # 20 inputs and the comparisons' second ones, and the temporal relationship series; then the
     # sequences of one Fourier, one wavelet and one first-order difference question, and the four
@@ -158,7 +200,7 @@ def test_each_question_format_has_its_task_type():
     kinds = Counter((type(task).__name__, task.metadata["question_format"]) for task in dataset.iter_tasks())
     assert kinds == {
         ("ClassificationTask", "true_or_false"): 9,
-        ("AnswerTask", "multiple_choice"): 8,
+        ("ClassificationTask", "multiple_choice"): 8,
         ("AnswerTask", "puzzling"): 3,
     }
 
@@ -203,14 +245,19 @@ def test_issue_filter_rejects_issues_that_are_not_issue_names_at_the_call(issues
         without_source_issues([], issues=issues)
 
 
-def _issues_after_rewrite(tmp_path: Path, position: int, printed: str, replacement: str) -> JsonValue:
-    """Replace one text in a train row's question, convert the fixtures, and return that row's issues."""
+def _task_after_rewrite(tmp_path: Path, position: int, printed: str, replacement: str):
+    """Replace one text in a train row's question, convert the fixtures, and return that row's task."""
     shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
     question = pq.read_table(tmp_path / "train.parquet").column("question")[position].as_py()
     assert printed in question
     _rewrite(tmp_path / "train.parquet", position, question=question.replace(printed, replacement))
     tasks = _FixtureConnector().convert(_refs(tmp_path)).iter_tasks()
-    return next(task for task in tasks if _row_of(task) == ("train.parquet", position)).metadata["source_issues"]
+    return next(task for task in tasks if _row_of(task) == ("train.parquet", position))
+
+
+def _issues_after_rewrite(tmp_path: Path, position: int, printed: str, replacement: str) -> JsonValue:
+    """Replace one text in a train row's question, convert the fixtures, and return that row's issues."""
+    return _task_after_rewrite(tmp_path, position, printed, replacement).metadata["source_issues"]
 
 
 @pytest.mark.parametrize(
@@ -237,6 +284,22 @@ def test_a_text_choice_equal_to_the_right_one_makes_the_answer_ambiguous(tmp_pat
     # Train row 5 is a multiple-choice comparison question whose answer is A.
     printed = "B: Lag persistence is high and consistent."
     assert _issues_after_rewrite(tmp_path, 5, printed, "B: There is no persistence in lags.") == ["ambiguous_answer"]
+
+
+def test_a_choice_that_refers_to_the_choices_before_it_keeps_its_place(tmp_path):
+    # Train row 5 is a multiple-choice comparison question with four text choices.
+    printed = "D: Lag persistence shows changing seasonality."
+    task = _task_after_rewrite(tmp_path, 5, printed, "D: None of the above")
+    assert [option.pinned for option in task.prompt_options.options] == [False, False, False, True]
+
+
+def test_a_question_that_prints_its_choices_twice_has_no_prompt_options(tmp_path):
+    # Nine questions of the release repeat their choices in the question, with the markers A) to D).
+    repeated = "\nA) There is no persistence in lags.\nB) Lag persistence is high and consistent.\nRespond ONLY"
+    task = _task_after_rewrite(tmp_path, 5, "\nRespond ONLY", repeated)
+    assert isinstance(task, ClassificationTask)
+    assert task.label_set.names == ("A", "B", "C", "D")
+    assert task.prompt_options is None
 
 
 _FLAT_PATCHES = "\n".join(f"{letter}: [0, 0, 0, 0, 0, 0]" for letter in "ABCD")

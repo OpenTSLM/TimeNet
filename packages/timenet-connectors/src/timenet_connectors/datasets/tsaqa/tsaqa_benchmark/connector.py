@@ -1,9 +1,10 @@
 """Convert the pinned TSAQA parquet files into lazy Records and one question task per row.
 
 Each row's series become Records: its input series, then each candidate series its question prints,
-which the prompt shows as ``<series N>``. A true-or-false row becomes a ClassificationTask, a
-multiple-choice or puzzle row an AnswerTask, each with the published answer as target. README.md
-explains how this follows the authors.
+which the prompt shows as ``<series N>``. A true-or-false or multiple-choice row becomes a
+ClassificationTask, a puzzle row an AnswerTask, each with the published answer as target. A
+multiple-choice task says where its choices are in its prompt. README.md explains how this follows the
+authors.
 
 Metadata is provenance and never model input. An annotation is model input only for a task that
 names it in ``input_annotations``.
@@ -29,8 +30,21 @@ import pyarrow.parquet as pq
 from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetConnectorError
 from timenet.json import JsonValue
-from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    ClassificationEnumerator,
+    ClassificationTask,
+    Label,
+    LabelSet,
+    OptionKeyStyle,
+    PromptOptions,
+    Split,
+    Task,
+    TimeSeriesSpec,
+)
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
+from timenet_connectors.sources.prompt_options import RepeatedOptionListError, locate_prompt_options
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
 
@@ -96,6 +110,17 @@ _LETTERS = ("A", "B", "C", "D")
 """A puzzle's patch letters, and the most letters a multiple-choice question offers."""
 _TRUE_OR_FALSE_LETTERS = _TRUE_OR_FALSE_LABEL_SET.names
 """The letters of a true-or-false question: T stands for 'True.' and F for 'False.'"""
+_CHOICE_LABEL_SETS = {
+    count: LabelSet(_LETTERS[:count], annotations=[Annotation("name", value="multiple_choice")])
+    for count in range(_MIN_CHOICES, len(_LETTERS) + 1)
+}
+"""The label set of a multiple-choice task, by its number of choices. Its labels are the choice letters."""
+_CHOICE_KEY_STYLE = OptionKeyStyle(enumerator=ClassificationEnumerator.LATIN_UPPERCASE, marker_suffix=":")
+"""How a multiple-choice question writes the key of a choice: ``A:`` before the choice, ``A`` elsewhere."""
+_CHOICE_ENUMERATORS = frozenset({ClassificationEnumerator.LATIN_UPPERCASE, ClassificationEnumerator.LATIN_LOWERCASE})
+"""The enumerators that fit a multiple-choice question, which asks for ``the letter of the correct choice``."""
+_PINNED_CHOICES = ("None of the above", "All of the above")
+"""The choice texts that refer to the choices before them. Such a choice keeps its place."""
 _INPUT_ROLES = (_Role.INPUT, _Role.SECOND_INPUT)
 """The roles of the input series, in order."""
 _PRINTING_TASKS = {_Task.DATA_TRANSFORMATION, _Task.TEMPORAL_RELATIONSHIP}
@@ -273,6 +298,11 @@ class _Row:
     @property
     def file(self) -> str:
         return self.split.filename
+
+    @property
+    def choice_letters(self) -> tuple[str, ...]:
+        """The letters of a multiple-choice question, whose choices are either text or printed series."""
+        return tuple(self.choices) or self.printed_roles
 
     @property
     def key(self) -> _RowKey:
@@ -682,10 +712,44 @@ def _published_labels(row: _Row) -> tuple[tuple[str, str], tuple[str, str]]:
     return ("task", row.task.value), ("question_type", row.question_type)
 
 
+def _choice_prompt_options(row: _Row) -> PromptOptions | None:
+    """Find the choices of a multiple-choice question in its prompt.
+
+    Returns:
+        The prompt options. ``None`` if the question prints its choices a second time with other markers,
+        because only one list of choices can be located.
+
+    Raises:
+        TimeNetConnectorError: If the prompt does not have the form of a multiple-choice question: one
+            choice per line with the markers ``A:`` to ``D:``, and one list of all letters.
+    """
+    try:
+        options = locate_prompt_options(
+            row.prompt,
+            published_key_style=_CHOICE_KEY_STYLE,
+            one_option_per_line=True,
+            expected_key_list_count=1,
+            allowable_enumerators=_CHOICE_ENUMERATORS,
+            pinned_option_texts=_PINNED_CHOICES,
+        )
+    except RepeatedOptionListError:
+        return None
+    except TimeNetConnectorError as exc:
+        raise TimeNetConnectorError(f"{row.file} row {row.index}: {exc}") from exc
+    if options.labels != row.choice_letters:
+        raise TimeNetConnectorError(
+            f"{row.file} row {row.index}: the prompt has the choices {options.labels}, not {row.choice_letters}"
+        )
+    return options
+
+
 def _task(
     row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue], labels: Mapping[tuple[str, str], Annotation]
 ) -> Task:
-    """Build a row's task: a true-or-false row is a classification task, any other an answer task.
+    """Build a row's task: a true-or-false or multiple-choice row is a classification task, a puzzle an answer task.
+
+    The labels of a multiple-choice task are its choice letters, and its prompt options say where each
+    choice is in the prompt.
 
     The model reads what Appendix E.1 lists: the published context, then the published ``task`` and
     ``question_type``, then the question. The context is on the first input Record: published texts
@@ -726,8 +790,19 @@ def _task(
             label_set=_TRUE_OR_FALSE_LABEL_SET,
             metadata=metadata,
         )
-    if row.choices:
-        metadata["answer_text"] = row.choices[row.answer]
+    if row.question_format is _QuestionFormat.MULTIPLE_CHOICE:
+        if row.choices:
+            metadata["answer_text"] = row.choices[row.answer]
+        return ClassificationTask(
+            inputs=inputs,
+            prompt=row.prompt,
+            targets=row.answer,
+            split=_SPLITS[row.split],
+            input_annotations=input_annotations,
+            label_set=_CHOICE_LABEL_SETS[len(row.choice_letters)],
+            prompt_options=_choice_prompt_options(row),
+            metadata=metadata,
+        )
     return AnswerTask(
         inputs=inputs,
         prompt=row.prompt,

@@ -152,16 +152,20 @@ metadata.
 | Format | TimeNet type | Target | Train | Validation | Test |
 | --- | --- | --- | --- | --- | --- |
 | `true_or_false` | `ClassificationTask` | `T` or `F` | 62,757 | 8,931 | 17,993 |
-| `multiple_choice` | `AnswerTask` | One letter, `A` to `D` | 63,311 | 9,090 | 18,029 |
+| `multiple_choice` | `ClassificationTask` | One letter, `A` to `D` | 63,311 | 9,090 | 18,029 |
 | `puzzling` | `AnswerTask` | Four letters, such as `C,B,D,A` | 20,932 | 2,979 | 5,978 |
 
 - **A true-or-false question** is a classification, since `T` and `F` mean the same in every
   question. Every true-or-false task shares one label set, with a `name` annotation of `true_or_false`: `T`
   (True.) and `F` (False.).
-- **A multiple-choice question or a puzzle** is an answer task. Its letters name choices that differ
-  from one question to the next. A classification question's choices are its UCR dataset's class
-  names, such as `normal process`. The `answer_text` metadata holds the right choice's text when the
-  choices are text.
+- **A multiple-choice question** is a classification. Its labels are its letters, `A` to `D`, and
+  the tasks with the same number of choices share one label set, with a `name` annotation of
+  `multiple_choice`. The letters name choices that differ from one question to the next, so each
+  task says where its choices are in its prompt (`prompt_options`). A consumer can then show the
+  choices in another order or with other keys, and the answer stays correct. A classification
+  question's choices are its UCR dataset's class names, such as `normal process`. The `answer_text`
+  metadata holds the right choice's text when the choices are text.
+- **A puzzle** is an answer task. Its answer is an order of all its letters, not one of them.
 - **A puzzle's answer** lists the patch letters in chronological order. That is the paper's reading
   ("Arrange A, B, C, D in the correct order"), and the release agrees. The other reading takes each
   letter's position from the answer. In 16,012 puzzles the two readings differ and no patch repeats.
@@ -188,6 +192,17 @@ D: <series 5>
 The placeholder is the connector's choice. The release prints each series as a line of its own, so
 the connector reads each such line of a data transformation or temporal relationship question as a
 series.
+
+**The prompt options** of a multiple-choice task locate three things in the prompt: the marker of
+each choice (`A:`), the text of each choice, and each letter of the sentence that names the letters
+(`A, B, C, or D`). The tasks are stored as published:
+
+- The question asks for "the letter of the correct choice", so the keys can only become Latin
+  letters, uppercase or lowercase.
+- The choices `None of the above` and `All of the above` refer to the choices before them, so they
+  keep their place.
+- Nine questions print their choices twice, first as `A) ...` in the question and then in the list.
+  Only one list can be located, so these tasks have no prompt options and stay as published.
 
 **Task metadata**, never model input:
 - `task` and `question_type`, as published. The model reads the same values through
