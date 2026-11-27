@@ -5,7 +5,7 @@ import pytest
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetConnectorError
-from timenet.types import AnswerTask, ScalarPredictionTask, read_value
+from timenet.types import AnswerTask, ScalarPredictionTask, Split, read_value
 from timenet_connectors.datasets.noaa.spaceweather_cot.connector import (
     SpaceWeatherCotConnector,
     SpaceWeatherRaw,
@@ -17,6 +17,7 @@ from timenet_connectors.datasets.noaa.spaceweather_cot.connector import (
     _parse_three_day_forecast,
     _read_goes_xray,
     _read_omni2,
+    _split_for,
 )
 
 
@@ -401,3 +402,117 @@ def test_convert_anchors_window_to_issued_header_not_file_name(tmp_path):
     bz = next(signal for signal in record.signals if signal.name == "bz_gsm")
     values = bz.to_arrow().to_pylist()
     assert -7.0 in values  # the hour-9 row is present only if the true issuance time anchored the window
+
+
+# --- Time-stratified split ------------------------------------------------------------------
+
+
+def test_split_boundaries():
+    # Train ends before 2024-12-01; the 3-day gap keeps windows and forecast periods apart.
+    assert _split_for(datetime(2024, 11, 30, 23, 59, tzinfo=UTC)) is Split.TRAIN
+    assert _split_for(datetime(2024, 12, 1, 0, 30, tzinfo=UTC)) is None  # inside the train/validation gap
+    assert _split_for(datetime(2024, 12, 3, 23, 59, tzinfo=UTC)) is None
+    assert _split_for(datetime(2024, 12, 4, 0, 30, tzinfo=UTC)) is Split.VALIDATION
+    assert _split_for(datetime(2024, 12, 31, 23, 59, tzinfo=UTC)) is Split.VALIDATION
+    assert _split_for(datetime(2025, 1, 1, 0, 30, tzinfo=UTC)) is None  # inside the validation/test gap
+    assert _split_for(datetime(2025, 1, 4, 0, 30, tzinfo=UTC)) is Split.TEST
+    assert _split_for(datetime(2025, 4, 6, 12, 30, tzinfo=UTC)) is Split.TEST
+
+
+def test_convert_excludes_issuances_in_split_gaps(tmp_path):
+    # 2024-12-02 is inside the train/validation gap, so no record is built for it at all.
+    issued_at = datetime(2024, 12, 2, 0, 30, tzinfo=UTC)
+    dataset = SpaceWeatherCotConnector().convert(_build_raw(tmp_path, issued_at))
+    assert len(dataset.records) == 0
+    assert len(dataset.tasks) == 0
+
+
+def test_convert_assigns_the_time_stratified_split_to_every_task(tmp_path):
+    issued_at = datetime(2025, 2, 17, 12, 30, tzinfo=UTC)  # test split
+    dataset = SpaceWeatherCotConnector().convert(_build_raw(tmp_path, issued_at))
+    assert len(dataset.tasks) > 0
+    assert {task.split for task in dataset.tasks} == {Split.TEST}
+
+
+# --- Observed outcomes -----------------------------------------------------------------------
+
+
+def test_greatest_kp_between_returns_max_over_fully_covered_window():
+    rows = {datetime(2024, 6, 17, h): _full_row(2.0) for h in range(20, 24)}
+    rows[datetime(2024, 6, 18, 0)] = _full_row(2.0)  # the window rounds up to hour 21 and ends after hour 0
+    rows[datetime(2024, 6, 17, 22)] = _full_row(6.5)
+    omni = _omni2_with_rows(rows)
+    start = datetime(2024, 6, 17, 20, 30, tzinfo=UTC)
+    end = datetime(2024, 6, 18, 0, 30, tzinfo=UTC)
+    assert omni.greatest_kp_between(start, end) == pytest.approx(6.5)
+
+
+def test_greatest_kp_between_returns_none_when_any_hour_is_missing():
+    rows = {datetime(2024, 6, 17, h): _full_row(2.0) for h in (21, 23)}  # hour 22 absent
+    omni = _omni2_with_rows(rows)
+    start = datetime(2024, 6, 17, 20, 30, tzinfo=UTC)
+    end = datetime(2024, 6, 18, 0, 30, tzinfo=UTC)
+    assert omni.greatest_kp_between(start, end) is None  # a truncated maximum is never reported
+
+
+def test_greatest_flux_between_returns_none_when_coverage_is_partial(tmp_path):
+    start = datetime(2024, 6, 17, 12, 0)
+    path = tmp_path / "goes.nc"
+    _write_goes_fixture(path, start=start, minutes=[0, 1, 2], flags=[0, 0, 0])
+    xray = _read_goes_xray(path)
+    # The series covers 3 minutes; a 3-day outcome window is mostly uncovered.
+    assert xray.greatest_flux_between(start.replace(tzinfo=UTC), start.replace(tzinfo=UTC) + timedelta(days=3)) is None
+    # A fully covered 2-minute window reports the greatest unflagged flux.
+    assert xray.greatest_flux_between(
+        start.replace(tzinfo=UTC), start.replace(tzinfo=UTC) + timedelta(minutes=2)
+    ) == pytest.approx(2e-7)
+
+
+def test_convert_adds_observed_outcome_tasks_when_coverage_is_complete(tmp_path):
+    issued_at = datetime(2024, 6, 17, 12, 30, tzinfo=UTC)
+    raw = _build_raw(tmp_path, issued_at)
+    # Cover the lookback and the 72-hour outcome window fully: one OMNI row per hour from the
+    # lookback through the outcome end, and one GOES sample per minute over the same span.
+    first_hour = (issued_at - timedelta(hours=24)).replace(tzinfo=None)
+    hours = 24 + 72 + 2
+    omni_lines = []
+    for h in range(hours):
+        moment = first_hour + timedelta(hours=h)
+        kp_code = 70 if h == 60 else 20  # one hour of Kp 7.0 among Kp 2.0, inside the outcome window
+        omni_lines.append(
+            _omni_line(
+                when=(moment.year, moment.timetuple().tm_yday, moment.hour),
+                bz=-5.0,
+                speed=400.0,
+                density=6.0,
+                kp_code=kp_code,
+            )
+        )
+    raw.omni_paths[0].write_text("\n".join(omni_lines) + "\n")
+    minutes = 4 * 24 * 60  # the 24-hour lookback plus the 72-hour outcome window
+    _write_goes_fixture(
+        raw.xray_paths[0],
+        start=issued_at - timedelta(hours=24),
+        minutes=list(range(minutes)),
+        flags=[0] * minutes,
+    )
+    dataset = SpaceWeatherCotConnector().convert(raw)
+    scalars = {
+        task.target_name: task.targets[0]
+        for task in dataset.tasks
+        if isinstance(task, ScalarPredictionTask) and task.targets is not None
+    }
+    assert scalars["greatest_observed_kp_next_3_days"] == pytest.approx(7.0)
+    assert "greatest_observed_xray_flux_next_3_days" in scalars
+    # The fixture assigns flux (index + 1) * 1e-7; the outcome window ends at the last minute.
+    assert scalars["greatest_observed_xray_flux_next_3_days"] == pytest.approx(5760e-7, rel=1e-3)
+
+
+def test_convert_omits_xray_outcome_when_goes_coverage_is_truncated(tmp_path):
+    # Default fixture: the GOES file holds only 3 minutes of the lookback, so the 72-hour outcome
+    # window is mostly uncovered and no X-ray outcome task may be built.
+    issued_at = datetime(2024, 6, 17, 12, 30, tzinfo=UTC)
+    dataset = SpaceWeatherCotConnector().convert(_build_raw(tmp_path, issued_at))
+    names = {task.target_name for task in dataset.tasks if isinstance(task, ScalarPredictionTask)}
+    assert "greatest_observed_xray_flux_next_3_days" not in names
+    assert "greatest_observed_kp_next_3_days" not in names  # only 2 of 72 rows exist in the fixture

@@ -5,18 +5,27 @@ dataset_version: 0.1.0
 name: SpaceWeather-CoT
 description: >-
   NOAA Space Weather Prediction Center Forecast Discussions paired with the solar and
-  geomagnetic time series the forecaster analyzed: GOES X-ray flux (solar flares) and
-  OMNI2 hourly solar-wind and Kp index values. Each record covers one 12-hourly
-  issuance's 24-hour lookback window. The forecaster's own "24 hr Summary" text is a
-  grounded, human-written rationale (not an LLM-generated caption) for the forecaster's
-  own "Forecast" text, so the chain-of-thought in this dataset is the real forecast
-  process, not distilled from a language model. The paired 3-Day Forecast product
-  supplies NOAA's own numeric probability forecasts (max Kp, radio blackout and solar
-  radiation storm chances) as scalar targets, enabling a direct model-vs-NOAA
-  comparison. This 0.1.0 release covers March 2024 through April 6, 2025 (the start
-  of the Forecast Discussion archive through the latest date with science-quality
-  GOES-16 X-ray data at build time); later versions can extend the date range and
-  satellite/coverage.
+  geomagnetic time series behind them: GOES-16 X-ray flux (solar flares) and OMNI2 hourly
+  solar-wind and Kp index values. Each record covers one 12-hourly issuance's 24-hour
+  lookback window, anchored to the true issuance time in each report's ":Issued:" header.
+  The forecaster's own "24 hr Summary" text is a grounded, human-written rationale (not an
+  LLM-generated caption) for the forecaster's own "Forecast" text, so the chain-of-thought
+  in this dataset is the real forecast process, not distilled from a language model. The
+  paired 3-Day Forecast product supplies NOAA's own numeric probability forecasts (max Kp,
+  radio blackout and solar radiation storm chances) as scalar targets. Those targets are
+  NOAA's forecasts, not outcomes, so they can only score how well NOAA is imitated; for a
+  true model-vs-NOAA comparison each record also carries the observed outcomes over the 72
+  hours after the issuance (greatest observed Kp, and greatest observed X-ray flux where
+  GOES coverage is complete). Tasks are stratified by time into train (before December
+  2024), validation (December 2024) and test (January 2025 onward) splits with a 3-day
+  forecast-horizon gap at each boundary; issuances inside a gap are left out so no window
+  or forecast period ever straddles two splits. Two honesty notes: OMNI2 and the GOES
+  science files are cleaned products published after the fact, not the real-time data the
+  forecaster worked with, and the inputs do not include the energetic particle fluxes the
+  "Energetic Particle" section and the S1 radiation-storm target are about, so a model
+  cannot learn those from the inputs alone. This 0.1.0 release covers March 2024 through
+  April 6, 2025 (the start of the Forecast Discussion archive through the end of GOES-16
+  science-quality X-ray data; GOES-19 succeeded GOES-16 as the operational primary).
 license: CC0-1.0
 source_url: https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/discussion/
 domains:
