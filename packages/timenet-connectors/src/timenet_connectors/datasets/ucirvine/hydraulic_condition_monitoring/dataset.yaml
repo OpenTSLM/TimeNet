@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the ucirvine/hydraulic-condition-monitoring connector: the single source for this
+# dataset's metadata. The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus
+# the schema derived from the data into manifest.json.
+yaml_schema_version: 1
+dataset_id: ucirvine/hydraulic-condition-monitoring
+dataset_version: 1.0.0
+name: Hydraulic Condition Monitoring
+description: >-
+  The data set was experimentally obtained with a hydraulic test rig.
+  This test rig consists of a primary working and a secondary cooling-filtration circuit which are connected via the oil tank.
+  The system cyclically repeats constant load cycles (duration 60 seconds) and
+  measures process values such as pressures, volume flows and temperatures
+  while the condition of four hydraulic components (cooler, valve, pump and accumulator) is quantitatively varied.
+citation: >-
+  Helwig, Nikolai and Pignanelli, Eliseo and Schütze, Andreas.
+  Condition Monitoring of a Complex Hydraulic System Using Multivariate Statistics.
+  2015 IEEE International Instrumentation and Measurement Technology Conference (I2MTC),
+  Pisa, Italy. https://doi.org/10.1109/I2MTC.2015.7151267
+license: CC-BY-4.0
+source_url: https://archive.ics.uci.edu/dataset/447/condition+monitoring+of+hydraulic+systems
+domains:
+  - industrial
+tags:
+  - condition-monitoring
+  - hydraulics
+  - pressure
+  - temperature
+  - volume-flow
+  - vibration
+  - fault-diagnosis
+  - uci
+  - classification
