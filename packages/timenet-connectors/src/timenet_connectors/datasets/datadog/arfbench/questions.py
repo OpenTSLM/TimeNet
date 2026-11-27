@@ -214,10 +214,10 @@ class ARFBenchQuestion:
     def _create_task(self, inputs: list[Record], modality: InputModality) -> ClassificationTask:
         """Create a test task that asks for the correct answer from the options of the question.
 
-        The options are the label set of the task. The set is ordered, so the stored set keeps the order of
-        the release. Questions with the same options in the same order share one set. The row index in
-        the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``. The
-        interpolation flags describe what an engineer saw. This method does not interpolate.
+        The options are the label set of the task. The set is not ordered, so questions with the same
+        options share one set, in whatever order they list them. The row index in the metadata pairs the
+        series task with the chart task of ``datadog/arfbench-charts``. The interpolation flags describe
+        what an engineer saw. This method does not interpolate.
 
         The question text does not print the options, so the prompt options have no spans. They hold the
         options in the order of the release. No option refers to another one, so no option is pinned and a
@@ -233,7 +233,7 @@ class ARFBenchQuestion:
             input_modalities=frozenset({InputModality.TEXT, modality}),
             split=Split.TEST,
             metadata={"question_index": self.index},
-            label_set=LabelSet(self.answer_options, ordered=True),
+            label_set=LabelSet(self.answer_options),
             prompt_options=PromptOptions(options=[PromptOption(label=option) for option in self.answer_options]),
             annotations=[
                 Annotation("task_category", value=self.task_category.value),

@@ -42,7 +42,8 @@ class LabelSet(SupportsAnnotate):
     """The allowed labels for a classification target.
 
     A target must contain one label unless ``multi_label=True``. By default the label order does not matter.
-    Use ``ordered=True`` for ordinal labels or for options whose order matters.
+    Use ``ordered=True`` for ordinal labels. The order in which a prompt shows its options belongs in the
+    ``prompt_options`` of the task.
 
     Tasks that ask the same kind of question share one label set::
 

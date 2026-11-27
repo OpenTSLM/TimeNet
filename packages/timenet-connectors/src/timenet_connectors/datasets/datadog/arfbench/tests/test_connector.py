@@ -110,7 +110,7 @@ def test_each_question_is_a_classification_task_over_its_options(release):
     }
 
 
-def test_questions_with_equal_options_in_equal_order_share_a_label_set(release):
+def test_questions_with_equal_options_share_a_label_set_and_keep_their_own_order(release):
     up_down = {**PRESENCE_ROW, "Unnamed: 0": "2", "options_str": '["Up", "Down"]', "correct_answer": "Up"}
     no_yes = {**PRESENCE_ROW, "Unnamed: 0": "3", "options_str": '["No", "Yes"]', "correct_answer": "No"}
     write_qa_csv(release["questions"].parent, [*ROWS, up_down, no_yes])
@@ -118,12 +118,14 @@ def test_questions_with_equal_options_in_equal_order_share_a_label_set(release):
 
     assert isinstance(presence, ClassificationTask) and isinstance(correlation, ClassificationTask)
     assert isinstance(up_down_task, ClassificationTask) and isinstance(no_yes_task, ClassificationTask)
-    assert presence.label_set.ordered
-    assert presence.label_set == correlation.label_set
+    assert not presence.label_set.ordered
+    assert presence.label_set == correlation.label_set == no_yes_task.label_set
     assert presence.label_set.annotations == ()
     assert up_down_task.label_set != presence.label_set
-    assert no_yes_task.label_set != presence.label_set
-    assert no_yes_task.label_set.names == ("No", "Yes")
+    # The order of the release is in the prompt options of each question, not in the label set.
+    assert presence.prompt_options is not None and no_yes_task.prompt_options is not None
+    assert presence.prompt_options.labels == ("Yes", "No")
+    assert no_yes_task.prompt_options.labels == ("No", "Yes")
 
 
 def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(release, tmp_path):
