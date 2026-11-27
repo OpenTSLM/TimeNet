@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: musitu/cmapss-fd001
+dataset_version: 0.1.0
+name: NASA C-MAPSS FD001 Predictive Maintenance
+description: >-
+  NASA Ames C-MAPSS simulated turbofan engine histories in 30-cycle
+  multivariate windows. Each task predicts remaining useful life in cycles.
+  Engine IDs do not cross the train/validation partition. NASA official test
+  engines are used for test-only endpoint evaluations.
+license: OTHER
+# NASA PCoE source page provides use/citation guidance, not an SPDX license grant.
+license_url: https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/
+source_url: https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/
+domains:
+  - industrial
+tags:
+  - predictive-maintenance
+  - time-series
+  - simulation
+  - rul

@@ -25,6 +25,7 @@ dependencies = [
     "httpx>=0.28",
     "jaxtyping>=0.3",
     "numpy>=2.1",
+    "pandas>=2.2",
     "pyarrow>=21",
     # [build] pulls PyYAML: connectors load and validate their card YAML at build time.
     # Fold assignments are persisted data; review dataset versions before upgrading.
