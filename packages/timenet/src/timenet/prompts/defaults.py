@@ -100,7 +100,9 @@ class _AionicRenderer(PromptRenderer):
         return prompt.text(*view.targets)
 
 
-class _LabelQuestion(_AionicRenderer):
+class LabelQuestionRenderer(_AionicRenderer):
+    """Aionic's question from the label set, with the options on one line. It ignores the task's own prompt."""
+
     name = "classification-label-question"
 
     @override
@@ -109,7 +111,9 @@ class _LabelQuestion(_AionicRenderer):
         return [f"Which label matches the input? {_options(view.label_set)}"]
 
 
-class _PromptQuestion(_AionicRenderer):
+class PromptQuestionRenderer(_AionicRenderer):
+    """Aionic's use of the task's own prompt as the question. It fails for a task without a prompt."""
+
     name = "classification-prompt-question"
 
     @override
@@ -118,7 +122,9 @@ class _PromptQuestion(_AionicRenderer):
         return [_prompt(view)]
 
 
-class _PromptWithOptions(_AionicRenderer):
+class PromptWithOptionsRenderer(_AionicRenderer):
+    """The task's own prompt, then the options on one line. It fails for a task without a prompt."""
+
     name = "classification-prompt-options"
 
     @override
@@ -127,7 +133,9 @@ class _PromptWithOptions(_AionicRenderer):
         return [_prompt(view), _options(view.label_set)]
 
 
-class _Described(_AionicRenderer):
+class DescribedRenderer(_AionicRenderer):
+    """The window, each Source and channel with its unit and rate, then the options with their descriptions."""
+
     name = "classification-described"
 
     @override
@@ -155,18 +163,10 @@ class _Described(_AionicRenderer):
         return ["Question: Which label matches the input?", "Options:", *options, _answer(view.label_set)]
 
 
-LABEL_QUESTION = _LabelQuestion()
-"""Aionic's question from the label set. It ignores the task's own prompt."""
-
-PROMPT_QUESTION = _PromptQuestion()
-"""Aionic's use of the task's own prompt as the question. It fails for a task without a prompt."""
-
-PROMPT_WITH_OPTIONS = _PromptWithOptions()
-"""The task's own prompt, then the options. It fails for a task without a prompt."""
-
-DESCRIBED = _Described()
-"""The window, each Source and channel with its quantity, unit and rate, then the options with their
-descriptions."""
-
-DEFAULT_RENDERERS: tuple[PromptRenderer, ...] = (LABEL_QUESTION, PROMPT_QUESTION, PROMPT_WITH_OPTIONS, DESCRIBED)
-"""All default renderers for classification tasks."""
+DEFAULT_RENDERERS: tuple[PromptRenderer, ...] = (
+    LabelQuestionRenderer(),
+    PromptQuestionRenderer(),
+    PromptWithOptionsRenderer(),
+    DescribedRenderer(),
+)
+"""One instance of each default renderer for classification tasks."""

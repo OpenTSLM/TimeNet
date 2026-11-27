@@ -7,10 +7,10 @@ from timenet.dataset.axis import OrdinalAxis, RegularAxis, TimeAxis
 from timenet.errors import TimeFValidationError
 from timenet.prompts import (
     DEFAULT_RENDERERS,
-    DESCRIBED,
-    LABEL_QUESTION,
-    PROMPT_QUESTION,
-    PROMPT_WITH_OPTIONS,
+    DescribedRenderer,
+    LabelQuestionRenderer,
+    PromptQuestionRenderer,
+    PromptWithOptionsRenderer,
     SeriesPart,
     SeriesTextPart,
     TextPart,
@@ -29,7 +29,7 @@ def _text(parts) -> str:
 
 
 def test_label_question_matches_aionic(capture):
-    x, y, z, question = render_input(capture.task, LABEL_QUESTION)
+    x, y, z, question = render_input(capture.task, LabelQuestionRenderer())
 
     assert isinstance(x, SeriesTextPart)
     assert x.text == "axis_note: x points along the forearm"
@@ -43,7 +43,7 @@ def test_label_question_matches_aionic(capture):
 
 
 def test_label_question_ignores_the_prompt(capture):
-    assert _text(render_input(capture.replace(prompt=_QUESTION), LABEL_QUESTION)).endswith(
+    assert _text(render_input(capture.replace(prompt=_QUESTION), LabelQuestionRenderer())).endswith(
         "Options: light, moderate-vigorous, sedentary, sleep. Answer with one label."
     )
 
@@ -51,28 +51,30 @@ def test_label_question_ignores_the_prompt(capture):
 def test_multi_label_answer_sentence(capture):
     task = capture.replace(targets=("sleep",), label_set=capture.label_set(multi_label=True))
 
-    assert _text(render_input(task, LABEL_QUESTION)).endswith("Answer with every label that applies, one per line.")
+    assert _text(render_input(task, LabelQuestionRenderer())).endswith(
+        "Answer with every label that applies, one per line."
+    )
 
 
 def test_prompt_question_uses_the_prompt(capture):
-    text = _text(render_input(capture.replace(prompt=_QUESTION), PROMPT_QUESTION))
+    text = _text(render_input(capture.replace(prompt=_QUESTION), PromptQuestionRenderer()))
 
     assert text.endswith(f"instructions: Use only the acceleration.\n{_QUESTION}")
 
 
 def test_prompt_question_needs_a_prompt(capture):
     with pytest.raises(TimeFValidationError, match="a task prompt"):
-        render_input(capture.task, PROMPT_QUESTION)
+        render_input(capture.task, PromptQuestionRenderer())
 
 
 def test_prompt_with_options(capture):
-    text = _text(render_input(capture.replace(prompt=_QUESTION), PROMPT_WITH_OPTIONS))
+    text = _text(render_input(capture.replace(prompt=_QUESTION), PromptWithOptionsRenderer()))
 
     assert text.endswith(f"{_QUESTION}\nOptions: light, moderate-vigorous, sedentary, sleep. Answer with one label.")
 
 
 def test_described(capture):
-    parts = render_input(capture.task, DESCRIBED, dataset=make_dataset().metadata)
+    parts = render_input(capture.task, DescribedRenderer(), dataset=make_dataset().metadata)
     text = _text(parts)
 
     assert sum(isinstance(part, SeriesPart | SeriesTextPart) for part in parts) == 3
@@ -105,7 +107,7 @@ def _step_count_task(time_axis: TimeAxis, label_set: LabelSet) -> Classification
 def test_described_leaves_out_empty_fields(capture):
     task = _step_count_task(OrdinalAxis(), capture.label_set(labels={"sleep": None, "awake": None}))
 
-    text = _text(render_input(task, DESCRIBED))
+    text = _text(render_input(task, DescribedRenderer()))
 
     for missing in ("unit", "Hz", "window", "(", "sleep:"):
         assert missing not in text
@@ -128,4 +130,4 @@ def test_default_names_are_unique():
 def test_described_rounds_the_rate(capture):
     task = _step_count_task(RegularAxis(period_us=Fraction(60_000_000)), capture.label_set())
 
-    assert "Channel steps: Step count, 0.0166667 Hz." in _text(render_input(task, DESCRIBED))
+    assert "Channel steps: Step count, 0.0166667 Hz." in _text(render_input(task, DescribedRenderer()))

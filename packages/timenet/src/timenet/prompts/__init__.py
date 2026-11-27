@@ -7,10 +7,10 @@ into its own format.
 
 from timenet.prompts.defaults import (
     DEFAULT_RENDERERS,
-    DESCRIBED,
-    LABEL_QUESTION,
-    PROMPT_QUESTION,
-    PROMPT_WITH_OPTIONS,
+    DescribedRenderer,
+    LabelQuestionRenderer,
+    PromptQuestionRenderer,
+    PromptWithOptionsRenderer,
 )
 from timenet.prompts.render import (
     Part,
@@ -27,13 +27,13 @@ from timenet.prompts.render import (
 
 __all__ = [
     "DEFAULT_RENDERERS",
-    "DESCRIBED",
-    "LABEL_QUESTION",
-    "PROMPT_QUESTION",
-    "PROMPT_WITH_OPTIONS",
+    "DescribedRenderer",
+    "LabelQuestionRenderer",
     "Part",
     "PromptBuilder",
+    "PromptQuestionRenderer",
     "PromptRenderer",
+    "PromptWithOptionsRenderer",
     "RenderedPrompt",
     "SeriesPart",
     "SeriesTextPart",

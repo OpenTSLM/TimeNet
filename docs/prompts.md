@@ -24,14 +24,14 @@ renders both sections, for training.
 
 ```python
 import timenet
-from timenet.prompts import LABEL_QUESTION, TextPart, render
+from timenet.prompts import LabelQuestionRenderer, TextPart, render
 from timenet.types import ClassificationTask
 
 client = timenet.TimeNet(sources=[".timenet-registry"])
 dataset = client.load("timenet/hello-world")
 task = dataset.tasks_of(ClassificationTask)[0]
 
-prompt = render(task, LABEL_QUESTION, dataset=dataset.metadata)
+prompt = render(task, LabelQuestionRenderer(), dataset=dataset.metadata)
 for part in prompt.input:
     if isinstance(part, TextPart):
         print(part.text)
@@ -57,10 +57,10 @@ renderer chooses between the task's own prompt and a question from the label set
 
 | Renderer | Question |
 | --- | --- |
-| `LABEL_QUESTION` | "Which label matches the input?" with the options on one line. It ignores the task's prompt. |
-| `PROMPT_QUESTION` | The task's own prompt. It fails for a task without a prompt. |
-| `PROMPT_WITH_OPTIONS` | The task's own prompt, then the options. It fails for a task without a prompt. |
-| `DESCRIBED` | The window, each Source and channel with its quantity, unit and rate, then the options with their descriptions. |
+| `LabelQuestionRenderer` | "Which label matches the input?" with the options on one line. It ignores the task's prompt. |
+| `PromptQuestionRenderer` | The task's own prompt. It fails for a task without a prompt. |
+| `PromptWithOptionsRenderer` | The task's own prompt, then the options. It fails for a task without a prompt. |
+| `DescribedRenderer` | The window, each Source and channel with its quantity, unit and rate, then the options with their descriptions. |
 
 All four reply with the rationale and an empty line, if the task has a rationale, then one label
 per line. `DEFAULT_RENDERERS` holds all four.
