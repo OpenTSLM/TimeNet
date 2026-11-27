@@ -38,7 +38,7 @@ def test_metadata():
     metadata = TimeSeriesExam1Connector().metadata()
     assert metadata.dataset_id == "autonlab/timeseriesexam1"
     assert str(metadata.license) == "MIT"
-    assert str(metadata.dataset_version) == "1.0.0"
+    assert str(metadata.dataset_version) == "1.1.0"
     assert metadata.license_url
     assert metadata.citation
 
@@ -108,6 +108,14 @@ def test_options_and_answers_survive_a_write(tmp_path):
         row = rows[task.metadata["id"]]
         assert set(task.label_set.names) == set(row["options"])
         assert [read_value(target) for target in task.targets or ()] == [row["answer"]]
+        # A stored label set keeps the order of the first row that uses it. The template keeps the order
+        # of each row and lists the options after the question. A shuffle changes only their order.
+        published = task.get_option_presentation(use_shuffled_label_key=False)
+        listed = "".join(f"- {option}\n" for option in row["options"])
+        assert published.prompt == f"{row['question']}\n\nOptions:\n{listed}\nAnswer with one option."
+        shown = task.get_option_presentation()
+        assert sorted(shown.option_labels) == sorted(row["options"])
+        assert shown.answers == (row["answer"],)
 
 
 @pytest.mark.parametrize(
