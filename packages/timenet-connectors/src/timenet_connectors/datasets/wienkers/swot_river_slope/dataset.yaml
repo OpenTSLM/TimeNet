@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: wienkers/swot-river-slope
+dataset_version: 0.2.0
+source_revision: RiverSP Version D, 2023–2024 Hydrocron snapshot v2
+name: SWOT Signed Coastal River Surface Slope
+description: >-
+  Signed SWOT river surface fall and elevation at 320 SWORD reaches, with
+  reported uncertainties and a next-pass forecasting endpoint. The 20,083
+  retained observations include 20,076 passes flagged suspect by RiverSP.
+  Tasks verify the first daily representative 2–21 days after issue,
+  conditional on an observation. Requiring nonnegative fall removes
+  571 of 19,783 measured reach-days in this sample.
+license: OTHER
+license_url: https://github.com/wienkers/revir/releases/download/swot-river-slope-v0.2.0/DATA_LICENSE.md
+access: open
+domains: [environment]
+tags: [SWOT, Hydrocron, hydrology, coastal, tides, forecasting, irregular-time-series]
+source_url: https://podaac.jpl.nasa.gov/dataset/SWOT_L2_HR_RiverSP_D
+citation: >-
+  Surface Water Ocean Topography (SWOT). 2025. SWOT Level 2 River Single-Pass
+  Vector Data Product, Version D. PO.DAAC, CA, USA. doi:10.5067/SWOT-RIVERSP-D.
+  SWORD v17b reach descriptors, Altenau et al. (2025),
+  doi:10.5281/zenodo.15299138 (CC BY 4.0).
