@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 yaml_schema_version: 1
 dataset_id: opentslm/sleep-cot
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: SleepEDF-CoT
 description: >-
   9,294 windows of the Fpz-Cz EEG from six Sleep-EDF recordings (7,434 train, 930 validation,
@@ -14,7 +14,8 @@ description: >-
   lower case, and the subject in the form of the physionet/sleep-edfx dataset. GPT-4o
   (gpt-4o-2024-08-06, temperature 0.3, seed 42) wrote each rationale from a plot of the window,
   the correct stage, and one dissimilar stage. The dataset does not keep that prompt, because it
-  names the correct stage. In 3 windows, the rationale concludes with the dissimilar stage. In 4 more, it ends without the "Answer:" form. The dataset keeps these
+  names the correct stage. A task has no prompt. It has a template that asks for the label and
+  lists the six stages. In 3 windows, the rationale concludes with the dissimilar stage. In 4 more, it ends without the "Answer:" form. The dataset keeps these
   windows as released.
 
   Sleep experts assigned a stage to each original EEG window. The released CSV gives a different
