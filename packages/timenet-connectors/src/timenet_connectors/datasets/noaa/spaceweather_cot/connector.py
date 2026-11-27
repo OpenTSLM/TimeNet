@@ -88,6 +88,38 @@ _KP_RE = re.compile(r"greatest expected 3 hr Kp for [^\n]*? is ([\d.]+)")
 _R1R2_RE = re.compile(r"\nR1-R2\s+(\d+)%")
 _S1_RE = re.compile(r"\nS1 or greater\s+(\d+)%")
 
+# The true issuance time is written inside each report, for example ":Issued: 2024 Jun 17 0030
+# UTC". It is not always the 0030/1230 slot the file is archived under: some reports were issued
+# hours late (the 202404021230 report at 20:20, the 202405010030 report at 10:55), and for those
+# the summary describes data outside a filename-anchored lookback window.
+_ISSUED_HEADER = re.compile(r"^:Issued: (\d{4}) (\w{3}) (\d{2}) (\d{4}) UTC", re.MULTILINE)
+_MONTHS = {
+    name: index
+    for index, name in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), start=1
+    )
+}
+
+
+def _parse_issued_at(text: str) -> datetime:
+    """Parse the true issuance time from a report's ``:Issued:`` header line.
+
+    Args:
+        text: The raw report text.
+
+    Returns:
+        The issuance timestamp, tz-aware UTC.
+
+    Raises:
+        TimeNetConnectorError: If the report has no parseable ``:Issued:`` header.
+    """
+    match = _ISSUED_HEADER.search(text)
+    if match is None or match.group(2) not in _MONTHS:
+        raise TimeNetConnectorError("report has no parseable ':Issued:' header line")
+    year, month, day, hhmm = int(match.group(1)), _MONTHS[match.group(2)], int(match.group(3)), match.group(4)
+    return datetime(year, month, day, int(hhmm[:2]), int(hhmm[2:]), tzinfo=UTC)
+
+
 _FLAGGED = MissingValues(reason=MissingReason.NOT_RECORDED, description="GOES quality flag marked this minute bad")
 _FILL = MissingValues(reason=MissingReason.NOT_RECORDED, description="OMNI2 reported its sentinel fill value here")
 
@@ -107,7 +139,17 @@ _SPEED_SPEC = TimeSeriesSpec(
 _DENSITY_SPEC = TimeSeriesSpec(
     spec_type="omni_proton_density", name="Proton density", unit_value=ureg.centimeter**-3, missing=_FILL
 )
-_KP_SPEC = TimeSeriesSpec(spec_type="omni_kp", name="Planetary Kp index", unit_value=ureg.dimensionless)
+_KP_NOT_CLOSED = MissingValues(
+    reason=MissingReason.NOT_APPLICABLE,
+    description=(
+        "Kp is a 3-hour index repeated in each of the interval's three hourly rows; this row's"
+        " interval had not ended yet at the issuance time, so the value is withheld rather than"
+        " leaked from the future"
+    ),
+)
+_KP_SPEC = TimeSeriesSpec(
+    spec_type="omni_kp", name="Planetary Kp index", unit_value=ureg.dimensionless, missing=_KP_NOT_CLOSED
+)
 
 _PROMPT = (
     "Given the past 24 hours of GOES X-ray flux and OMNI solar-wind and Kp measurements, "
@@ -256,7 +298,7 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         for issuance in raw.issuances:
             try:
                 self._add_issuance(dataset, issuance, xray, omni)
-            except (ValueError, KeyError) as exc:
+            except TimeNetConnectorError as exc:
                 raise TimeNetConnectorError(
                     f"invalid SpaceWeather-CoT issuance {issuance.issued_at.isoformat()}: {exc}"
                 ) from exc
@@ -269,12 +311,23 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         xray: "_GoesXray",
         omni: "_Omni2",
     ) -> None:
-        """Add one issuance's record, answer task, and scalar-prediction tasks to ``dataset``."""
-        window_start = issuance.issued_at - _LOOKBACK
-        xray_times, xray_values = xray.window(window_start, issuance.issued_at)
-        omni_times, omni_fields = omni.window(window_start, issuance.issued_at)
+        """Add one issuance's record, answer task, and scalar-prediction tasks to ``dataset``.
+
+        The lookback window anchors to the true issuance time parsed from the report's
+        ``:Issued:`` header, not the nominal archive slot in the file name: a report issued hours
+        late was written from data outside a filename-anchored window.
+
+        Raises:
+            TimeNetConnectorError: If the report has no parseable ``:Issued:`` header or no GOES
+                or OMNI2 samples fall in the issuance's lookback window.
+        """
+        discussion_text = issuance.discussion_path.read_text()
+        issued_at = _parse_issued_at(discussion_text)
+        window_start = issued_at - _LOOKBACK
+        xray_times, xray_values = xray.window(window_start, issued_at)
+        omni_times, omni_fields = omni.window(window_start, issued_at)
         if xray_times.size == 0 or not omni_times:
-            raise ValueError("no GOES or OMNI2 samples fall in this issuance's 24-hour lookback window")
+            raise TimeNetConnectorError("no GOES or OMNI2 samples fall in this issuance's 24-hour lookback window")
 
         xray_moments = [moment.replace(tzinfo=UTC) for moment in xray_times.astype("datetime64[us]").astype(object)]
         xray_offsets = time_offsets_from_datetimes(xray_moments, start_time=window_start)
@@ -291,13 +344,13 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         record = Record(
             sources=[Source("space weather", signals=signals)],
             annotations=[
-                Annotation("issued_at", value=issuance.issued_at.isoformat()),
+                Annotation("issued_at", value=issued_at.isoformat()),
                 Annotation("satellite", value="GOES-16"),
             ],
         )
         dataset.add_record(record)
 
-        summary_text, forecast_text = _parse_discussion(issuance.discussion_path.read_text())
+        summary_text, forecast_text = _parse_discussion(discussion_text)
         dataset.add_task(AnswerTask(inputs=[record], prompt=_PROMPT, rationale=summary_text, targets=forecast_text))
         numeric = _parse_three_day_forecast(issuance.forecast_path.read_text())
         dataset.add_tasks(
@@ -494,8 +547,10 @@ def _merge_goes_xray(readers: list["_GoesXray"]) -> "_GoesXray":
 _OMNI_BZ_GSM_COL, _OMNI_BZ_GSM_FILL = 16, 999.9
 _OMNI_DENSITY_COL, _OMNI_DENSITY_FILL = 23, 999.9
 _OMNI_SPEED_COL, _OMNI_SPEED_FILL = 24, 9999.0
-_OMNI_KP_COL = 38  # I3 code: tens digit is the Kp level, ones digit is {0: "o", 3: "+", 7: "-"} a third.
-_OMNI_KP_THIRDS = {0: 0.0, 3: 1 / 3, 7: -1 / 3}
+_OMNI_KP_COL = 38  # I3 code: tens digit is the Kp level, ones digit the third. NASA's omni2 format
+# doc: "(e.g. 3+ = 33, 6- = 57, 4 = 40, etc.)". "6-" is 6 minus a third, so a ones digit of 7 means
+# the level rounds UP to the next integer minus one third, i.e. tens + 2/3 — not tens - 1/3.
+_OMNI_KP_THIRDS = {0: 0.0, 3: 1 / 3, 7: 2 / 3}
 
 
 @dataclass(frozen=True)
@@ -505,11 +560,18 @@ class _Omni2:
     rows: dict[datetime, dict[str, float | None]]
 
     def window(self, start: datetime, end: datetime) -> tuple[list[datetime], dict[str, list[float | None]]]:
-        """Return the hourly timestamps and field values in ``[start, end)``.
+        """Return the hourly timestamps and field values fully observed before ``end``.
+
+        OMNI2's row for hour H averages the hour [H, H+1), so a row is only usable once its hour
+        has closed completely before the window end — otherwise the record would carry measurements
+        that did not exist yet at the issuance. Kp is stricter still: it is a 3-hour index repeated
+        in each of the interval's three hourly rows, so a row's Kp is only usable once that whole
+        3-hour interval had ended. Rows whose interval was still open carry ``None`` for Kp rather
+        than leaking up to two hours of a quantity closely related to the ``kp_max_3day`` target.
 
         Args:
             start: Window start, inclusive.
-            end: Window end, exclusive.
+            end: Window end; only hours and Kp intervals closed at or before this moment are used.
 
         Returns:
             The timestamps (tz-aware UTC) and a ``{field: values}`` mapping, aligned to them.
@@ -520,13 +582,29 @@ class _Omni2:
         if hour < naive_start:  # round up to the first hour at or after start, never before it
             hour += timedelta(hours=1)
         times, fields = [], {"bz_gsm": [], "speed": [], "density": [], "kp": []}
-        while hour < naive_end:
+        while hour + _OMNI_AVERAGING_PERIOD <= naive_end:
             if (row := self.rows.get(hour)) is not None:
                 times.append(hour.replace(tzinfo=UTC))
                 for key, values in fields.items():
-                    values.append(row[key])
+                    if key == "kp" and _kp_interval_end(hour) > naive_end:
+                        values.append(None)
+                    else:
+                        values.append(row[key])
             hour += timedelta(hours=1)
         return times, fields
+
+
+# OMNI2's hourly rows average the hour that starts at the row's timestamp.
+_OMNI_AVERAGING_PERIOD = timedelta(hours=1)
+# Kp is a 3-hour geomagnetic index over the UTC intervals 00-03, 03-06, ..., 21-24. OMNI2 repeats
+# each interval's value in all three of its hourly rows.
+_KP_INTERVAL = timedelta(hours=3)
+
+
+def _kp_interval_end(hour: datetime) -> datetime:
+    """Return when the 3-hour Kp interval containing ``hour`` closes (naive UTC)."""
+    interval_start = hour - timedelta(hours=hour.hour % 3)
+    return interval_start + _KP_INTERVAL
 
 
 def _decode_omni_kp(code: int) -> float:

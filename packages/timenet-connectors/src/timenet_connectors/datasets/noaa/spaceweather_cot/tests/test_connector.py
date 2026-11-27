@@ -9,16 +9,25 @@ from timenet.types import AnswerTask, ScalarPredictionTask, read_value
 from timenet_connectors.datasets.noaa.spaceweather_cot.connector import (
     SpaceWeatherCotConnector,
     SpaceWeatherRaw,
+    _decode_omni_kp,
     _Issuance,
+    _Omni2,
     _parse_discussion,
+    _parse_issued_at,
     _parse_three_day_forecast,
     _read_goes_xray,
     _read_omni2,
 )
 
 
+def _discussion_text(issued_at: datetime) -> str:
+    """The fixture Forecast Discussion, with its ``:Issued:`` header set to ``issued_at``."""
+    stamp = issued_at.strftime("%Y %b %d %H%M")
+    return _DISCUSSION_TEMPLATE.replace(":Issued: 2024 Jun 17 0030 UTC", f":Issued: {stamp} UTC")
+
+
 # A real (trimmed) Forecast Discussion, shaped exactly like NOAA SWPC's archived reports.
-_DISCUSSION_TEXT = """:Product: 06170030forecast_discussion.txt
+_DISCUSSION_TEMPLATE = """:Product: 06170030forecast_discussion.txt
 :Issued: 2024 Jun 17 0030 UTC
 # Prepared by the U.S. Dept. of Commerce, NOAA, Space Weather Prediction Center
 #
@@ -86,7 +95,7 @@ R3 or greater   10%           10%           10%
 
 
 def test_parse_discussion_splits_summary_and_forecast():
-    summary, forecast = _parse_discussion(_DISCUSSION_TEXT)
+    summary, forecast = _parse_discussion(_DISCUSSION_TEMPLATE)
     assert "Solar Activity: Only C-class events" in summary
     assert "Geospace: The geomagnetic field ranged from quiet to active" in summary
     assert "Solar Activity: Solar activity is likely to reach moderate levels" in forecast
@@ -156,27 +165,135 @@ def _omni_line(*, when: tuple[int, int, int], bz: float, speed: float, density: 
     return " ".join(fields)
 
 
-def test_read_omni2_decodes_kp_and_nulls_fill_values(tmp_path):
+def test_decode_omni_kp_matches_nasa_documented_examples():
+    # NASA's omni2 format doc: "Kp Planetary Geomagnetic Activity Index (e.g. 3+ = 33, 6- = 57,
+    # 4 = 40, etc.)". "6-" means 6 minus a third, i.e. 5.667 — the ones digit 7 rounds the level
+    # UP to the next integer minus one third, not down.
+    assert _decode_omni_kp(33) == pytest.approx(3 + 1 / 3)
+    assert _decode_omni_kp(57) == pytest.approx(5 + 2 / 3)
+    assert _decode_omni_kp(40) == pytest.approx(4.0)
+    # Code 07 is "1-" = 0.667. Kp can never be negative, which the tens-minus-a-third reading
+    # of this code would produce.
+    assert _decode_omni_kp(7) == pytest.approx(2 / 3)
+    assert _decode_omni_kp(0) == pytest.approx(0.0)
+
+
+# The first row of the pinned omni2_2024.dat (2024-01-01 00:00 UTC), verbatim. Expected values
+# come from NASA's format description, not from this connector's own column positions.
+_REAL_OMNI_LINE = (
+    "2024   1  0 2596 51 52  60  36   5.3   5.1  -7.3 322.9   4.0  -3.0  -0.6  -2.8  -1.3   0.1"
+    "   1.5   0.3   0.4   1.5   31114.   7.4  306.  -2.3   2.8 0.042  1.35    4691.   0.4    2."
+    "   0.3   1.3 0.007   0.40   1.75   7.9  7  55     0   20 999999.99 99999.99 99999.99"
+    " 99999.99 99999.99 99999.99  0   3 131.2   0.3    -9    11  5.0"
+)
+
+
+def test_read_omni2_parses_real_row_against_nasa_format_doc(tmp_path):
     path = tmp_path / "omni2_2024.dat"
-    lines = [
-        _omni_line(when=(2024, 169, 12), bz=-5.0, speed=400.0, density=6.0, kp_code=33),
-        _omni_line(when=(2024, 169, 13), bz=999.9, speed=9999.0, density=999.9, kp_code=57),
-    ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text(_REAL_OMNI_LINE + "\n")
     omni = _read_omni2(path)
-    first = omni.rows[datetime(2024, 6, 17, 12)]
-    assert first == {"bz_gsm": -5.0, "speed": 400.0, "density": 6.0, "kp": pytest.approx(3 + 1 / 3)}
-    second = omni.rows[datetime(2024, 6, 17, 13)]
-    assert second["bz_gsm"] is None
-    assert second["speed"] is None
-    assert second["density"] is None
-    assert second["kp"] == pytest.approx(5 - 1 / 3)  # code 57 -> tens=5, ones=7 ("-")
+    row = omni.rows[datetime(2024, 1, 1, 0)]
+    assert row["bz_gsm"] == pytest.approx(-1.3)
+    assert row["density"] == pytest.approx(7.4)
+    assert row["speed"] == pytest.approx(306.0)
+    assert row["kp"] == pytest.approx(2 / 3)  # code 7 is Kp "1-" = 0.667 per NASA's doc
+
+
+def test_read_omni2_nulls_fill_values(tmp_path):
+    path = tmp_path / "omni2_2024.dat"
+    path.write_text(_omni_line(when=(2024, 169, 13), bz=999.9, speed=9999.0, density=999.9, kp_code=33) + "\n")
+    omni = _read_omni2(path)
+    row = omni.rows[datetime(2024, 6, 17, 13)]
+    assert row["bz_gsm"] is None
+    assert row["speed"] is None
+    assert row["density"] is None
+    assert row["kp"] == pytest.approx(3 + 1 / 3)
+
+
+def _omni2_with_rows(rows: dict[datetime, dict[str, float | None]]) -> _Omni2:
+    return _Omni2(rows=rows)
+
+
+def _full_row(kp: float) -> dict[str, float | None]:
+    return {"bz_gsm": -1.0, "speed": 400.0, "density": 5.0, "kp": kp}
+
+
+def test_omni_window_excludes_hours_incomplete_at_window_end():
+    # OMNI2's row for hour H averages [H, H+1). At a 00:30 issuance the row labelled 00:00 still
+    # contains 30 minutes that had not happened yet, so only rows through 23:00 may be used.
+    rows = {
+        datetime(2024, 6, 16, 23): _full_row(2.0),
+        datetime(2024, 6, 17, 0): _full_row(3.0),
+    }
+    omni = _omni2_with_rows(rows)
+    start = datetime(2024, 6, 16, 0, 30, tzinfo=UTC)
+    end = datetime(2024, 6, 17, 0, 30, tzinfo=UTC)
+    times, fields = omni.window(start, end)
+    assert times == [datetime(2024, 6, 16, 23, tzinfo=UTC)]
+    assert fields["kp"] == [2.0]
+
+
+def test_omni_window_includes_hour_closing_exactly_at_window_end():
+    rows = {datetime(2024, 6, 16, 23): _full_row(2.0)}
+    omni = _omni2_with_rows(rows)
+    start = datetime(2024, 6, 16, 0, 30, tzinfo=UTC)
+    end = datetime(2024, 6, 17, 0, 0, tzinfo=UTC)  # the 23:00 row closes exactly here
+    times, _ = omni.window(start, end)
+    assert times == [datetime(2024, 6, 16, 23, tzinfo=UTC)]
+
+
+def test_omni_window_nulls_kp_whose_three_hour_interval_is_unfinished():
+    # Kp is a 3-hour index repeated in each hourly row. For an issuance at 20:20 the rows of
+    # hours 18 and 19 are complete hours, but their Kp interval (18:00-21:00) had not ended, so
+    # carrying it would leak up to 40 minutes of a quantity tied to the kp_max_3day target.
+    rows = {
+        datetime(2024, 6, 17, 17): _full_row(4.0),  # interval 15-18 ended at 18:00, fully past
+        datetime(2024, 6, 17, 18): _full_row(4.0),  # interval 18-21 ends at 21:00, after 20:20
+        datetime(2024, 6, 17, 19): _full_row(4.0),
+    }
+    omni = _omni2_with_rows(rows)
+    start = datetime(2024, 6, 16, 20, 20, tzinfo=UTC)
+    end = datetime(2024, 6, 17, 20, 20, tzinfo=UTC)
+    times, fields = omni.window(start, end)
+    assert times == [
+        datetime(2024, 6, 17, 17, tzinfo=UTC),
+        datetime(2024, 6, 17, 18, tzinfo=UTC),
+        datetime(2024, 6, 17, 19, tzinfo=UTC),
+    ]
+    assert fields["kp"] == [4.0, None, None]
+    assert fields["bz_gsm"] == [-1.0, -1.0, -1.0]  # hourly fields are unaffected
+
+
+def test_omni_window_keeps_kp_for_interval_closing_exactly_at_window_end():
+    rows = {datetime(2024, 6, 17, 18): _full_row(4.0)}  # interval 18-21 ends at 21:00
+    omni = _omni2_with_rows(rows)
+    start = datetime(2024, 6, 17, 0, 0, tzinfo=UTC)
+    end = datetime(2024, 6, 17, 21, 0, tzinfo=UTC)
+    _, fields = omni.window(start, end)
+    assert fields["kp"] == [4.0]
+
+
+def test_parse_issued_at_reads_the_report_header():
+    text = ":Product: 06170030forecast_discussion.txt\n:Issued: 2024 Jun 17 0030 UTC\n# comment\n"
+    assert _parse_issued_at(text) == datetime(2024, 6, 17, 0, 30, tzinfo=UTC)
+
+
+def test_parse_issued_at_reads_late_issuance_times():
+    # Real examples from the archive: the 202404021230 report was issued at 20:20 and the
+    # 202405010030 report at 10:55. The file name does not carry the true issuance time.
+    text = ":Product: 04021230forecast_discussion.txt\n:Issued: 2024 Apr 02 2020 UTC\n"
+    assert _parse_issued_at(text) == datetime(2024, 4, 2, 20, 20, tzinfo=UTC)
+
+
+def test_parse_issued_at_rejects_a_missing_header():
+    with pytest.raises(TimeNetConnectorError, match="Issued"):
+        _parse_issued_at(":Product: 06170030forecast_discussion.txt\nno header here\n")
 
 
 def _build_raw(tmp_path: Path, issued_at: datetime) -> SpaceWeatherRaw:
     """Build a minimal but shape-correct :class:`SpaceWeatherRaw` for one issuance."""
     discussion_path = tmp_path / "discussion.txt"
-    discussion_path.write_text(_DISCUSSION_TEXT)
+    discussion_path.write_text(_discussion_text(issued_at))
     forecast_path = tmp_path / "forecast.txt"
     forecast_path.write_text(_FORECAST_TEXT)
 
@@ -185,16 +302,18 @@ def _build_raw(tmp_path: Path, issued_at: datetime) -> SpaceWeatherRaw:
     _write_goes_fixture(xray_path, start=window_start, minutes=[0, 60, 120], flags=[0, 0, 0])
 
     omni_path = tmp_path / "omni2_2024.dat"
+    # Rows at hours comfortably inside the lookback window: an hour is only usable once it has
+    # closed completely before the issuance, so rows near the window edges are excluded.
     lines = [
         _omni_line(
-            when=(window_start.year, window_start.timetuple().tm_yday, window_start.hour),
+            when=(window_start.year, window_start.timetuple().tm_yday, (window_start.hour + 3) % 24),
             bz=-5.0,
             speed=400.0,
             density=6.0,
             kp_code=33,
         ),
         _omni_line(
-            when=(issued_at.year, issued_at.timetuple().tm_yday, issued_at.hour),
+            when=(window_start.year, window_start.timetuple().tm_yday, (window_start.hour + 4) % 24),
             bz=-3.0,
             speed=420.0,
             density=5.0,
@@ -256,3 +375,29 @@ def test_convert_raises_when_window_has_no_samples(tmp_path):
     _write_goes_fixture(raw.xray_paths[0], start=datetime(2020, 1, 1), minutes=[0], flags=[0])
     with pytest.raises(TimeNetConnectorError, match="no GOES or OMNI2 samples"):
         SpaceWeatherCotConnector().convert(raw)
+
+
+def test_convert_anchors_window_to_issued_header_not_file_name(tmp_path):
+    # The file is archived under the nominal 0030 slot, but the report header says it was really
+    # issued at 10:55 (a real archive case: 202405010030). The lookback window must anchor to the
+    # true issuance time, because that is what the forecaster actually saw.
+    nominal = datetime(2024, 6, 17, 0, 30, tzinfo=UTC)
+    real = datetime(2024, 6, 17, 10, 55, tzinfo=UTC)
+    raw = _build_raw(tmp_path, nominal)
+    # Rewrite the discussion with the late :Issued: header, and place one OMNI row at hour 9:
+    # inside the true window ([Jun 16 10:55, Jun 17 10:55]) but after the nominal one ends.
+    raw.issuances[0].discussion_path.write_text(_discussion_text(real))
+    omni_lines = [
+        _omni_line(when=(2024, 169, 9), bz=-7.0, speed=500.0, density=8.0, kp_code=33),
+    ]
+    raw.omni_paths[0].write_text("\n".join(omni_lines) + "\n")
+    # GOES fixture must cover the true window too; rebuild it around the real issuance.
+    _write_goes_fixture(raw.xray_paths[0], start=real - timedelta(hours=24), minutes=[0, 60, 120], flags=[0, 0, 0])
+
+    dataset = SpaceWeatherCotConnector().convert(raw)
+    (record,) = dataset.records
+    annotations = {annotation.key: annotation.value for annotation in record.annotations}
+    assert annotations["issued_at"] == real.isoformat()
+    bz = next(signal for signal in record.signals if signal.name == "bz_gsm")
+    values = bz.to_arrow().to_pylist()
+    assert -7.0 in values  # the hour-9 row is present only if the true issuance time anchored the window
