@@ -134,6 +134,21 @@ def test_open_edf_refuses_a_file_that_lost_part_of_a_record(tmp_path):
         reader.open_edf(path)
 
 
+def test_open_edf_keeps_a_file_with_bytes_after_its_last_record(tmp_path, caplog):
+    # CHB-MIT's chb17b_69.edf holds every record its header states, then 256 zero bytes: fewer
+    # than one record holds.
+    path = _write_psg(tmp_path)
+    expected = reader.read_signal(reader.open_edf(path), 0)
+    record_bytes = (_FAST_RATE + _SLOW_RATE) * 2
+    path.write_bytes(path.read_bytes() + bytes(record_bytes - 2))
+
+    file = reader.open_edf(path)
+
+    assert file.header.num_records == _NUM_RECORDS
+    np.testing.assert_array_equal(reader.read_signal(file, 0), expected)
+    assert "bytes after the last one" in caplog.text
+
+
 def test_open_edf_keeps_a_file_whose_two_start_dates_disagree(tmp_path):
     # A release states the start date twice, and the two fields can hold different dates.
     # edfio warns about that, and the reader must pass the warning on and read the file.
