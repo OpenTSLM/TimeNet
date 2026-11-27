@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: uci/hapt
+dataset_version: 2.1.0
+name: HAPT
+description: >-
+  Smartphone-Based Recognition of Human Activities and Postural Transitions, version 2.1. The
+  release holds 61 continuous trials from 30 subjects. Each trial is a 50 Hz stream from a
+  Samsung Galaxy S II worn on the waist: three accelerometer axes in g and three gyroscope axes in
+  rad/s. RawData/labels.txt marks 1,214 contiguous segments with one of twelve activity ids: six
+  basic activities (walking, walking upstairs, walking downstairs, sitting, standing, lying) and
+  six postural transitions (stand-to-sit, sit-to-stand, sit-to-lie, lie-to-sit, stand-to-lie,
+  lie-to-stand). The connector keeps one Record per trial and attaches one scoped
+  ClassificationTask per labeled segment. Splits follow the official UCI subject partition: the
+  nine test subjects are Split.TEST, four deterministic train subjects (id divisible by five) are
+  Split.VALIDATION, and the remaining seventeen train subjects are Split.TRAIN. Accelerometer
+  values stay in g (standard gravity), the unit the release states.
+license: OTHER
+license_url: https://archive.ics.uci.edu/dataset/341/smartphone-based+recognition+of+human+activities+and+postural+transitions
+source_url: https://archive.ics.uci.edu/static/public/341/smartphone+based+recognition+of+human+activities+and+postural+transitions.zip
+citation: >-
+  Reyes-Ortiz, J. L., Anguita, D., Oneto, L., and Parra, X. (2015). Transition-Aware Human Activity
+  Recognition Using Smartphones. Neurocomputing. https://doi.org/10.1016/j.neucom.2015.04.005
+  Dataset: https://doi.org/10.24432/C54P4W
+domains:
+  - activity
+  - motion
+tags:
+  - uci
+  - har
+  - imu
+  - accelerometer
+  - gyroscope
+  - classification
+  - transitions
