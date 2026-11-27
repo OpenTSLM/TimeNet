@@ -25,6 +25,11 @@ def _lines(items: tuple[ContextItem, ...]) -> list[str]:
     return [item.line for item in items]
 
 
+def _series(parts: Parts, channel: ChannelView) -> None:
+    """Add a channel's series with the text of the selected annotations on its Signal."""
+    parts.series(channel, text="\n".join(_lines(channel.context)))
+
+
 def _inputs(view: ClassificationInputView, parts: Parts) -> None:
     """Add Aionic's layout.
 
@@ -33,7 +38,7 @@ def _inputs(view: ClassificationInputView, parts: Parts) -> None:
     """
     for record in view.records:
         for channel in record.channels:
-            parts.series(channel, text="\n".join(_lines(channel.context)))
+            _series(parts, channel)
         parts.text(*_lines(record.context))
     parts.text(*_lines(view.context))
 
@@ -43,6 +48,11 @@ def _answer(label_set: LabelSetView) -> str:
     if label_set.multi_label:
         return "Answer with every label that applies, one per line."
     return "Answer with one label."
+
+
+def _options(label_set: LabelSetView) -> str:
+    """Return the options on one line and the answer sentence, as Aionic writes them."""
+    return f"Options: {label_set.options_line}. {_answer(label_set)}"
 
 
 def _prompt(view: ClassificationInputView) -> str:
@@ -93,7 +103,7 @@ class _LabelQuestion(_AionicRenderer):
     @override
     def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
         """Add the question from the label set, with the options on one line."""
-        parts.text(f"Which label matches the input? Options: {view.label_set.options_line}. {_answer(view.label_set)}")
+        parts.text(f"Which label matches the input? {_options(view.label_set)}")
 
 
 class _PromptQuestion(_AionicRenderer):
@@ -111,7 +121,7 @@ class _PromptWithOptions(_AionicRenderer):
     @override
     def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
         """Add the task's own prompt, then the options on one line."""
-        parts.text(_prompt(view), f"Options: {view.label_set.options_line}. {_answer(view.label_set)}")
+        parts.text(_prompt(view), _options(view.label_set))
 
 
 class _Described(_AionicRenderer):
@@ -128,7 +138,7 @@ class _Described(_AionicRenderer):
                 parts.text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
                 for channel in source.channels:
                     parts.text(_channel_line(channel))
-                    parts.series(channel, text="\n".join(_lines(channel.context)))
+                    _series(parts, channel)
             parts.text(*_lines(record.context))
         parts.text(*_lines(view.context))
         self.add_question(view, parts)

@@ -3,7 +3,7 @@ from fractions import Fraction
 import pytest
 
 from timenet.dataset import Record, Signal, Source
-from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.dataset.axis import OrdinalAxis, RegularAxis, TimeAxis
 from timenet.errors import TimeFValidationError
 from timenet.prompts import (
     DEFAULT_RENDERERS,
@@ -18,7 +18,7 @@ from timenet.prompts import (
     render_input,
 )
 from timenet.testing import make_dataset
-from timenet.types import ClassificationTask, TimeSeriesSpec
+from timenet.types import ClassificationTask, LabelSet, TimeSeriesSpec
 
 
 _QUESTION = "What is the subject doing?"
@@ -90,14 +90,20 @@ def test_described(capture):
         assert hidden not in text
 
 
-def test_described_leaves_out_empty_fields(capture):
-    steps = TimeSeriesSpec(spec_type="count", name="Step count", unit_value=None, dtype="int32")
-    signal = Signal(spec=steps, time_axis=OrdinalAxis(), name="steps", data=[1, 2, 3])
-    task = ClassificationTask(
-        inputs=[Record(sources=[Source("pedometer", signals=[signal])])],
-        targets="sleep",
-        label_set=capture.label_set(labels={"sleep": None, "awake": None}),
+def _step_count_task(time_axis: TimeAxis, label_set: LabelSet) -> ClassificationTask:
+    steps = Signal(
+        spec=TimeSeriesSpec(spec_type="count", name="Step count", unit_value=None, dtype="int32"),
+        time_axis=time_axis,
+        name="steps",
+        data=[1, 2, 3],
     )
+    return ClassificationTask(
+        inputs=[Record(sources=[Source("pedometer", signals=[steps])])], targets="sleep", label_set=label_set
+    )
+
+
+def test_described_leaves_out_empty_fields(capture):
+    task = _step_count_task(OrdinalAxis(), capture.label_set(labels={"sleep": None, "awake": None}))
 
     text = _text(render_input(task, DESCRIBED))
 
@@ -121,16 +127,6 @@ def test_default_names_are_unique_and_versioned():
 
 
 def test_described_rounds_the_rate(capture):
-    per_minute = Signal(
-        spec=TimeSeriesSpec(spec_type="count", name="Step count", unit_value=None, dtype="int32"),
-        time_axis=RegularAxis(period_us=Fraction(60_000_000)),
-        name="steps",
-        data=[1, 2, 3],
-    )
-    task = ClassificationTask(
-        inputs=[Record(sources=[Source("watch", signals=[per_minute])])],
-        targets="sleep",
-        label_set=capture.label_set(),
-    )
+    task = _step_count_task(RegularAxis(period_us=Fraction(60_000_000)), capture.label_set())
 
     assert "Channel steps: Step count, 0.0166667 Hz." in _text(render_input(task, DESCRIBED))

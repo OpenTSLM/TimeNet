@@ -7,6 +7,7 @@ from timenet.errors import TimeFValidationError
 from timenet.prompts import Parts, PromptRenderer, SeriesPart, SeriesTextPart, TextPart, render, render_input
 from timenet.prompts.views import ClassificationInputView, ClassificationTargetView
 from timenet.testing import make_dataset
+from timenet.types import AnswerTask
 
 
 class _Question(PromptRenderer):
@@ -84,3 +85,10 @@ def test_dataset_card_reaches_the_view(capture):
             parts.text(view.dataset.name or "")
 
     assert render_input(capture.task, Dataset(), dataset=make_dataset().metadata) == (TextPart("Hello World"),)
+
+
+def test_other_task_types_are_rejected(capture):
+    task = AnswerTask(inputs=[capture.record], prompt="What?", targets="sleep")
+
+    with pytest.raises(TimeFValidationError, match="ClassificationTask"):
+        render_input(task, _Question())

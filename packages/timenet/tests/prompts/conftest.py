@@ -46,14 +46,11 @@ def acceleration(name: str, *, metadata: dict | None = None) -> Signal:
 
 
 @pytest.fixture
-def make():
-    """Factories for label sets and acceleration signals."""
-    return SimpleNamespace(label_set=label_set, acceleration=acceleration)
-
-
-@pytest.fixture
 def capture():
-    """A CAPTURE-24-like task: 30 s of wrist acceleration, scoped to the window from 10 s to 20 s."""
+    """A CAPTURE-24-like task: 30 s of wrist acceleration, scoped to the window from 10 s to 20 s.
+
+    The namespace also holds the factories for label sets and acceleration signals.
+    """
     x = acceleration("x", metadata={"placement": "dominant wrist", "calibration": "c1"})
     y, z = acceleration("y"), acceleration("z")
     source = Source(
@@ -61,7 +58,7 @@ def capture():
         signals=[z, x, y],
         metadata={"device": "Axivity AX3", "placement": "dominant wrist", "serial": "12345"},
     )
-    activity = source.annotate(Annotation("activity", value="7030 sleeping;MET 0.95", span=TimeInterval.seconds(0, 30)))
+    source.annotate(Annotation("activity", value="7030 sleeping;MET 0.95", span=TimeInterval.seconds(0, 30)))
     axis_note = x.annotate(Annotation("axis_note", value="x points along the forearm"))
     record = Record(sources=[source], metadata={"file": "P001.csv.gz"})
     record.annotate(Annotation("subject_ids", value=["P001"]))
@@ -80,14 +77,10 @@ def capture():
     return SimpleNamespace(
         task=task,
         record=record,
-        source=source,
         x=x,
         y=y,
-        z=z,
-        activity=activity,
-        axis_note=axis_note,
         age_band=age_band,
-        instructions=instructions,
         replace=lambda **changes: replace(task, **changes),
         label_set=label_set,
+        acceleration=acceleration,
     )

@@ -13,7 +13,6 @@ from timenet.prompts.views import ContextItem, LabelView, WindowView, build_inpu
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
-    AnswerTask,
     ClassificationTask,
     StepInterval,
     TimeInterval,
@@ -85,7 +84,7 @@ def test_window_is_a_stripped_copy(capture):
     np.testing.assert_array_equal(window.to_numpy(), capture.x.to_numpy()[1000:2000])
 
 
-def test_irregular_window_starts_at_zero(make):
+def test_irregular_window_starts_at_zero(capture):
     heart_rate = TimeSeriesSpec(spec_type="heart_rate", name="Heart rate", unit_value=None)
     signal = Signal.from_irregular(
         [60.0, 61.0, 62.0, 63.0],
@@ -95,7 +94,7 @@ def test_irregular_window_starts_at_zero(make):
     )
     record = Record(sources=[Source("watch", signals=[signal])])
     task = ClassificationTask(
-        inputs=[record], scope=TimeInterval.seconds(5, 10), targets="sleep", label_set=make.label_set()
+        inputs=[record], scope=TimeInterval.seconds(5, 10), targets="sleep", label_set=capture.label_set()
     )
 
     view = build_input_view(task)
@@ -119,13 +118,13 @@ def test_scope_on_one_signal(capture):
     assert [item.key for item in record.context] == ["axis_note", "age_band"]
 
 
-def test_two_inputs_and_a_nested_source(make):
-    child = Source("child", signals=[make.acceleration("a")])
+def test_two_inputs_and_a_nested_source(capture):
+    child = Source("child", signals=[capture.acceleration("a")])
     note = child.annotate(Annotation("note", value="on the ankle"))
-    first = Record(sources=[Source("parent", sources=[child], signals=[make.acceleration("b")])])
-    second = Record(sources=[Source("solo", signals=[make.acceleration("c")])])
+    first = Record(sources=[Source("parent", sources=[child], signals=[capture.acceleration("b")])])
+    second = Record(sources=[Source("solo", signals=[capture.acceleration("c")])])
     task = ClassificationTask(
-        inputs=[second, first], targets="sleep", label_set=make.label_set(), input_annotations=[note]
+        inputs=[second, first], targets="sleep", label_set=capture.label_set(), input_annotations=[note]
     )
 
     records = build_input_view(task).values.records
@@ -145,67 +144,43 @@ def test_text_list_annotation(capture):
     assert item.line == "steps:\n1. sit down\n2. stand up"
 
 
-def _point_scope(c):
-    return c.replace(scope=TimePoint.seconds(1))
-
-
-def _repeated_input(c):
-    return c.replace(inputs=[c.record, c.record])
-
-
-def _input_is_target(c):
-    return c.replace(targets=None, target_annotations=[c.age_band])
-
-
-def _scoped_annotation(c):
-    spike = c.x.annotate(Annotation("spike", value="big", span=TimeInterval.seconds(11, 12)))
-    return c.replace(input_annotations=[spike])
-
-
-def _blank_annotation(c):
-    return c.replace(input_annotations=[c.record.annotate(Annotation("note", value="  "))])
-
-
-def _number_annotation(c):
-    return c.replace(input_annotations=[c.record.annotate(Annotation("age", value=64))])
-
-
-def _broken_list(c):
-    return c.replace(input_annotations=[c.record.annotate(Annotation("steps", value=["a", "b\nc"]))])
-
-
-def _blank_prompt(c):
-    return c.replace(prompt="  ")
-
-
-def _scope_outside(c):
-    return c.replace(scope=TimeInterval.seconds(100, 110))
-
-
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (_point_scope, "point"),
-        (_repeated_input, "more than once"),
-        (_input_is_target, "input and target"),
-        (_scoped_annotation, "span"),
-        (_blank_annotation, "blank"),
-        (_number_annotation, "text"),
-        (_broken_list, "line break"),
-        (_blank_prompt, "prompt"),
-        (_scope_outside, "no input signal"),
+        pytest.param(lambda c: c.replace(scope=TimePoint.seconds(1)), "point", id="point-scope"),
+        pytest.param(lambda c: c.replace(inputs=[c.record, c.record]), "more than once", id="repeated-input"),
+        pytest.param(
+            lambda c: c.replace(targets=None, target_annotations=[c.age_band]), "input and target", id="input-is-target"
+        ),
+        pytest.param(
+            lambda c: c.replace(
+                input_annotations=[c.x.annotate(Annotation("spike", value="big", span=TimeInterval.seconds(11, 12)))]
+            ),
+            "span",
+            id="scoped-annotation",
+        ),
+        pytest.param(
+            lambda c: c.replace(input_annotations=[c.record.annotate(Annotation("note", value="  "))]),
+            "blank",
+            id="blank-annotation",
+        ),
+        pytest.param(
+            lambda c: c.replace(input_annotations=[c.record.annotate(Annotation("age", value=64))]),
+            "text",
+            id="number-annotation",
+        ),
+        pytest.param(
+            lambda c: c.replace(input_annotations=[c.record.annotate(Annotation("steps", value=["a", "b\nc"]))]),
+            "line break",
+            id="list-item-with-line-break",
+        ),
+        pytest.param(lambda c: c.replace(prompt="  "), "prompt", id="blank-prompt"),
+        pytest.param(lambda c: c.replace(scope=TimeInterval.seconds(100, 110)), "no input signal", id="scope-outside"),
     ],
 )
 def test_input_view_rejects(capture, change, message):
     with pytest.raises(TimeFValidationError, match=message):
         build_input_view(change(capture))
-
-
-def test_other_task_types_are_rejected(capture):
-    task = AnswerTask(inputs=[capture.record], prompt="What?", targets="sleep")
-
-    with pytest.raises(TimeFValidationError, match="ClassificationTask"):
-        build_input_view(task)
 
 
 def _target_view(task: ClassificationTask) -> views.ClassificationTargetView:
@@ -260,39 +235,33 @@ def test_options_line_rejects_a_comma():
         _ = labels.options_line
 
 
-def _both_targets(c):
-    return c.replace(target_annotations=[c.record.annotate(Annotation("label", value="sleep"))])
-
-
-def _no_target(c):
-    return c.replace(targets=None)
-
-
-def _label_with_line_break(c):
-    return c.replace(targets="a\nb", label_set=c.label_set(labels={"a\nb": None}))
-
-
-def _repeated_label(c):
-    return c.replace(targets=("light", "light"), label_set=c.label_set(multi_label=True))
-
-
-def _blank_rationale(c):
-    return c.replace(rationale="  ")
-
-
-def _list_target(c):
-    return c.replace(targets=None, target_annotations=[c.record.annotate(Annotation("labels", value=["sleep"]))])
-
-
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (_both_targets, "both"),
-        (_no_target, "needs"),
-        (_label_with_line_break, "line break"),
-        (_repeated_label, "repeat"),
-        (_blank_rationale, "rationale"),
-        (_list_target, "text list"),
+        pytest.param(
+            lambda c: c.replace(target_annotations=[c.record.annotate(Annotation("label", value="sleep"))]),
+            "both",
+            id="targets-and-target-annotations",
+        ),
+        pytest.param(lambda c: c.replace(targets=None), "needs", id="no-target"),
+        pytest.param(
+            lambda c: c.replace(targets="a\nb", label_set=c.label_set(labels={"a\nb": None})),
+            "line break",
+            id="label-with-line-break",
+        ),
+        pytest.param(
+            lambda c: c.replace(targets=("light", "light"), label_set=c.label_set(multi_label=True)),
+            "repeat",
+            id="repeated-label",
+        ),
+        pytest.param(lambda c: c.replace(rationale="  "), "rationale", id="blank-rationale"),
+        pytest.param(
+            lambda c: c.replace(
+                targets=None, target_annotations=[c.record.annotate(Annotation("labels", value=["sleep"]))]
+            ),
+            "text list",
+            id="text-list-target",
+        ),
     ],
 )
 def test_target_view_rejects(capture, change, message):
@@ -300,7 +269,7 @@ def test_target_view_rejects(capture, change, message):
         _target_view(change(capture))
 
 
-def test_channels_share_the_window_start(make):
+def test_channels_share_the_window_start(capture):
     heart_rate = TimeSeriesSpec(spec_type="heart_rate", name="Heart rate", unit_value=None)
     a = Signal.from_irregular([1.0, 2.0], time_offsets_us=[7_000_000, 9_000_000], spec=heart_rate, name="a")
     b = Signal.from_irregular(
@@ -308,7 +277,7 @@ def test_channels_share_the_window_start(make):
     )
     record = Record(sources=[Source("watch", signals=[a, b])])
     task = ClassificationTask(
-        inputs=[record], scope=TimeInterval.seconds(5, 10), targets="sleep", label_set=make.label_set()
+        inputs=[record], scope=TimeInterval.seconds(5, 10), targets="sleep", label_set=capture.label_set()
     )
 
     view = build_input_view(task)
@@ -319,8 +288,8 @@ def test_channels_share_the_window_start(make):
     assert first.time_axis == IrregularAxis(first_us=2_000_000, last_us=4_000_000)
 
 
-def test_unscoped_segments_keep_their_distance(make):
-    early = make.acceleration("early")
+def test_unscoped_segments_keep_their_distance(capture):
+    early = capture.acceleration("early")
     late = Signal(
         spec=early.spec,
         time_axis=RegularAxis.from_rate_hz(100, offset_us=100_000_000),
@@ -328,7 +297,7 @@ def test_unscoped_segments_keep_their_distance(make):
         data=np.zeros(10, dtype=np.float32),
     )
     record = Record(sources=[Source("device", signals=[early, late])])
-    task = ClassificationTask(inputs=[record], targets="sleep", label_set=make.label_set())
+    task = ClassificationTask(inputs=[record], targets="sleep", label_set=capture.label_set())
 
     view = build_input_view(task)
     windows = [view.windows[id(channel)] for channel in view.values.records[0].channels]

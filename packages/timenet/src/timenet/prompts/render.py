@@ -6,7 +6,7 @@ and add text and series to a :class:`Parts` builder.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, TypeAlias, cast
+from typing import ClassVar, TypeAlias
 
 from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
@@ -14,6 +14,7 @@ from timenet.prompts.views import (
     ChannelView,
     ClassificationInputView,
     ClassificationTargetView,
+    TaskView,
     build_input_view,
     build_target_view,
 )
@@ -125,12 +126,10 @@ def render_input(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetada
         The input parts.
 
     Raises:
-        TimeFValidationError: If the task does not fit the renderer or breaks a rule of the views.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by build_input_view and the renderer
-    view = build_input_view(task, dataset)
-    parts = Parts(view.windows)
-    renderer.add_input(view.values, parts)
-    return parts.build()
+        TimeFValidationError: If the task is not a classification task, does not fit the renderer, or breaks a
+            rule of the views.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _render_input
+    return _render_input(_classification(task), renderer, dataset)[1]
 
 
 def render(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | None = None) -> RenderedPrompt:
@@ -145,12 +144,36 @@ def render(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | N
         The input parts and the target parts.
 
     Raises:
-        TimeFValidationError: If the task does not fit the renderer or breaks a rule of the views.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by the view builders and the renderer
+        TimeFValidationError: If the task is not a classification task, does not fit the renderer, or breaks a
+            rule of the views.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
+    task = _classification(task)
+    view, input_parts = _render_input(task, renderer, dataset)
+    target_parts = Parts(view.windows)
+    renderer.add_target(build_target_view(task, view.values), target_parts)
+    return RenderedPrompt(input=input_parts, target=target_parts.build())
+
+
+def _classification(task: Task) -> ClassificationTask:
+    """Return the task as a classification task.
+
+    Raises:
+        TimeFValidationError: If it is another task type.
+    """
+    if not isinstance(task, ClassificationTask):
+        raise TimeFValidationError(f"prompt renderers support ClassificationTask only, got {type(task).__name__}")
+    return task
+
+
+def _render_input(
+    task: ClassificationTask, renderer: PromptRenderer, dataset: DatasetMetadata | None
+) -> tuple[TaskView, tuple[Part, ...]]:
+    """Build the input view and render the input.
+
+    Returns:
+        The view, for the target, and the input parts.
+    """
     view = build_input_view(task, dataset)
-    # build_input_view accepts only classification tasks.
-    target_view = build_target_view(cast("ClassificationTask", task), view.values)
-    input_parts, target_parts = Parts(view.windows), Parts(view.windows)
-    renderer.add_input(view.values, input_parts)
-    renderer.add_target(target_view, target_parts)
-    return RenderedPrompt(input=input_parts.build(), target=target_parts.build())
+    parts = Parts(view.windows)
+    renderer.add_input(view.values, parts)
+    return view, parts.build()

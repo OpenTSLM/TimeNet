@@ -9,9 +9,7 @@ from dataclasses import dataclass, fields
 from fractions import Fraction
 from typing import NamedTuple
 
-import pyarrow as pa
-
-from timenet.dataset import Signal
+from timenet.dataset import Record, Signal
 from timenet.dataset.axis import IrregularAxis, RegularAxis, TimeAxis
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping
@@ -21,13 +19,14 @@ from timenet.types import (
     DatasetMetadata,
     LabelSet,
     Span,
-    Task,
     TextHandle,
     TextListHandle,
     TimeInterval,
     ureg,
+    us_to_seconds,
 )
 from timenet.types.clock import US_PER_S
+from timenet.types.handles import NumpyArray
 from timenet.types.units import normalize_unit
 
 
@@ -181,7 +180,7 @@ class TaskView(NamedTuple):
     """The stripped window of each channel, by the ``id()`` of its ``ChannelView``."""
 
 
-def build_input_view(task: Task, dataset: DatasetMetadata | None = None) -> TaskView:
+def build_input_view(task: ClassificationTask, dataset: DatasetMetadata | None = None) -> TaskView:
     """Build the input view of a classification task.
 
     The views follow Aionic's renderer: each Signal claims its selected annotations first, then each
@@ -195,67 +194,32 @@ def build_input_view(task: Task, dataset: DatasetMetadata | None = None) -> Task
         The view and the stripped window of each channel.
 
     Raises:
-        TimeFValidationError: If the task is not a classification task, its scope is a point or covers
-            no input Signal, its inputs are empty or repeat, an annotation is input and target, a selected
-            annotation is not text without a span, or its prompt is blank.
+        TimeFValidationError: If the task's scope is a point or covers no input Signal, its inputs are empty
+            or repeat, an annotation is input and target, a selected annotation is not text without a span,
+            or its prompt is blank.
     """
-    if not isinstance(task, ClassificationTask):
-        raise TimeFValidationError(f"prompt renderers support ClassificationTask only, got {type(task).__name__}")
     scope = task.scope
-    if scope is not None and scope.is_point:
-        raise TimeFValidationError("a task scoped to a point names no window of its inputs")
     _check_inputs(task)
-    prompt = None if task.prompt is None else task.prompt.read()
-    if prompt is not None and not prompt.strip():
-        raise TimeFValidationError("the task's prompt is blank")
-
     pending = list(task.input_annotations)
     cut: list[tuple[ChannelView, Signal]] = []
-    records = []
-    for record in task.inputs:
-        sources = []
-        for source in record.walk_sources():
-            channels = []
-            for signal in sorted(source.signals, key=lambda signal: signal.name):
-                window = _window(signal, scope)
-                if window is None:
-                    continue
-                channel = ChannelView(
-                    name=signal.name,
-                    spec_name=signal.spec.name,
-                    spec_type=signal.spec.spec_type,
-                    unit=normalize_unit(signal.spec.unit_value),
-                    sampling_rate_hz=_sampling_rate_hz(signal.time_axis),
-                    n_values=window.n_values,
-                    context=_context(_claim(pending, signal.annotations)),
-                )
-                cut.append((channel, window))
-                channels.append(channel)
-            if channels:
-                sources.append(
-                    SourceView(name=source.name, metadata=_allowed(source.metadata), channels=tuple(channels))
-                )
-        context = _context(_claim(pending, record.walk_annotations()))
-        records.append(RecordView(sources=tuple(sources), context=context))
+    records = tuple(_record_view(record, scope, pending, cut) for record in task.inputs)
     if scope is not None and not cut:
         raise TimeFValidationError(f"the task's scope {scope!r} covers no input signal")
     zero_us = _window_start_us(scope, [window for _, window in cut])
-    windows = {id(channel): _stripped(window, zero_us) for channel, window in cut}
-
     values = ClassificationInputView(
         dataset=DatasetView(
             name=None if dataset is None else dataset.name,
             description=None if dataset is None else dataset.description,
         ),
         window=WindowView(
-            duration_s=(scope.end_us - scope.start_us) / US_PER_S if isinstance(scope, TimeInterval) else None
+            duration_s=us_to_seconds(scope.end_us - scope.start_us) if isinstance(scope, TimeInterval) else None
         ),
-        records=tuple(records),
+        records=records,
         context=_context(pending),
-        prompt=prompt,
+        prompt=_read_text(task.prompt, "prompt"),
         label_set=_label_set_view(task.label_set),
     )
-    return TaskView(values=values, windows=windows)
+    return TaskView(values=values, windows={id(channel): _stripped(window, zero_us) for channel, window in cut})
 
 
 def build_target_view(task: ClassificationTask, view: ClassificationInputView) -> ClassificationTargetView:
@@ -267,26 +231,21 @@ def build_target_view(task: ClassificationTask, view: ClassificationInputView) -
     Raises:
         TimeFValidationError: If the task has both targets and target annotations or neither, a label is not
             text, is blank, holds a line break or repeats, or the rationale is blank.
-    """
-    labels = _target_labels(task)
-    for label in labels:
-        if "\n" in label:
-            raise TimeFValidationError(f"label {label!r} holds a line break, but the target lists one label per line")
-    if len(set(labels)) != len(labels):
-        raise TimeFValidationError(f"the target repeats a label: {labels!r}")
-    rationale = None if task.rationale is None else task.rationale.read()
-    if rationale is not None and not rationale.strip():
-        raise TimeFValidationError("the task's rationale is blank")
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     inputs = {field.name: getattr(view, field.name) for field in fields(view)}
-    return ClassificationTargetView(**inputs, targets=tuple(labels), rationale=rationale)
+    return ClassificationTargetView(
+        **inputs, targets=_target_labels(task), rationale=_read_text(task.rationale, "rationale")
+    )
 
 
-def _check_inputs(task: Task) -> None:
-    """Make sure that the task has unique input Records and no annotation as input and target.
+def _check_inputs(task: ClassificationTask) -> None:
+    """Make sure that the task has a window, unique input Records and no annotation as input and target.
 
     Raises:
         TimeFValidationError: If a check fails.
     """
+    if task.scope is not None and task.scope.is_point:
+        raise TimeFValidationError("a task scoped to a point names no window of its inputs")
     if not task.inputs:
         raise TimeFValidationError("the task needs at least one input Record")
     if len({id(record) for record in task.inputs}) != len(task.inputs):
@@ -297,12 +256,63 @@ def _check_inputs(task: Task) -> None:
             raise TimeFValidationError(f"annotation {annotation.key!r} cannot be used as input and target")
 
 
+def _read_text(text: TextHandle | None, what: str) -> str | None:
+    """Read the task's prompt or rationale.
+
+    Returns:
+        The text, or ``None`` if the task has none.
+
+    Raises:
+        TimeFValidationError: If the text is blank.
+    """
+    if text is None:
+        return None
+    value = text.read()
+    if not value.strip():
+        raise TimeFValidationError(f"the task's {what} is blank")
+    return value
+
+
+def _record_view(
+    record: Record, scope: Span | None, pending: list[Annotation], cut: list[tuple[ChannelView, Signal]]
+) -> RecordView:
+    """Build the view of one input Record, and add each channel and its window to ``cut``.
+
+    Returns:
+        The view, with the Sources that have a channel in the window.
+    """
+    sources = []
+    for source in record.walk_sources():
+        channels = []
+        for signal in sorted(source.signals, key=lambda signal: signal.name):
+            window = _window(signal, scope)
+            if window is None:
+                continue
+            channel = ChannelView(
+                name=signal.name,
+                spec_name=signal.spec.name,
+                spec_type=signal.spec.spec_type,
+                unit=normalize_unit(signal.spec.unit_value),
+                sampling_rate_hz=_sampling_rate_hz(signal.time_axis),
+                n_values=window.n_values,
+                context=_context(_claim(pending, signal.annotations)),
+            )
+            cut.append((channel, window))
+            channels.append(channel)
+        if channels:
+            sources.append(SourceView(name=source.name, metadata=_allowed(source.metadata), channels=tuple(channels)))
+    return RecordView(sources=tuple(sources), context=_context(_claim(pending, record.walk_annotations())))
+
+
 def _claim(pending: list[Annotation], owned: Iterable[Annotation]) -> list[Annotation]:
     """Remove the pending annotations that are among ``owned``, compared by identity.
 
     Returns:
         The removed annotations, in the order of selection.
     """
+    if not pending:
+        # Records can carry thousands of annotations, so skip the walk when nothing is left to claim.
+        return []
     owned_ids = {id(annotation) for annotation in owned}
     claimed = [annotation for annotation in pending if id(annotation) in owned_ids]
     pending[:] = [annotation for annotation in pending if id(annotation) not in owned_ids]
@@ -358,20 +368,6 @@ def _window(signal: Signal, scope: Span | None) -> Signal | None:
     return signal.slice(scope, clip=True)
 
 
-def _first_offset_us(window: Signal) -> int | None:
-    """Return the time offset of a window's first value.
-
-    Returns:
-        The offset in microseconds, or ``None`` for an ordinal Signal.
-    """
-    axis = window.time_axis
-    if isinstance(axis, RegularAxis):
-        return axis.time_offset_us(0)
-    if isinstance(axis, IrregularAxis):
-        return axis.first_us
-    return None
-
-
 def _window_start_us(scope: Span | None, windows: list[Signal]) -> int:
     """Return the time that becomes zero for every channel of the task, so that channels stay aligned.
 
@@ -380,8 +376,7 @@ def _window_start_us(scope: Span | None, windows: list[Signal]) -> int:
     """
     if isinstance(scope, TimeInterval):
         return scope.start_us
-    firsts = [first for first in map(_first_offset_us, windows) if first is not None]
-    return min(firsts, default=0)
+    return min((span[0] for window in windows if (span := window.span_us) is not None), default=0)
 
 
 def _stripped(window: Signal, zero_us: int) -> Signal:
@@ -391,7 +386,7 @@ def _stripped(window: Signal, zero_us: int) -> Signal:
     the window's place in the recording.
 
     Returns:
-        A lazy Signal that reads the window's values.
+        A lazy Signal on the window's values.
     """
     axis: TimeAxis = window.time_axis
     time_offsets = None
@@ -399,16 +394,13 @@ def _stripped(window: Signal, zero_us: int) -> Signal:
         axis = RegularAxis(period_us=axis.period_us, offset_us=axis.time_offset_us(0) - zero_us)
     elif isinstance(axis, IrregularAxis):
         axis = IrregularAxis(first_us=axis.first_us - zero_us, last_us=axis.last_us - zero_us)
-        shifted = pa.array(window.time_offsets_us() - zero_us, type=pa.int64())
-
-        def time_offsets() -> pa.Array:
-            return shifted
-
+        time_offsets = NumpyArray(window.time_offsets_us() - zero_us)
     return Signal.from_loader(
         spec=window.spec,
         time_axis=axis,
         name=window.name,
-        loader=lambda: window.read_steps(0, window.n_values),
+        # The window's own handle keeps reads of a range lazy and holds none of the window's metadata.
+        loader=window._values,
         n_values=window.n_values,
         time_offsets_loader=time_offsets,
         metadata=_allowed(window.metadata),
@@ -455,7 +447,7 @@ def _label_set_view(label_set: LabelSet) -> LabelSetView:
     )
 
 
-def _target_labels(task: ClassificationTask) -> list[str]:
+def _target_labels(task: ClassificationTask) -> tuple[str, ...]:
     """Read the task's labels from its targets or its target annotations.
 
     Returns:
@@ -463,7 +455,7 @@ def _target_labels(task: ClassificationTask) -> list[str]:
 
     Raises:
         TimeFValidationError: If the task has both kinds of targets or neither, a target annotation has a span or
-            holds a text list, or a label is not text or is blank.
+            holds a text list, or a label is not text, is blank, holds a line break or repeats.
     """
     if task.targets is not None and task.target_annotations:
         raise TimeFValidationError("the task cannot have both targets and target annotations")
@@ -485,5 +477,9 @@ def _target_labels(task: ClassificationTask) -> list[str]:
         label = value.read()
         if not label.strip():
             raise TimeFValidationError("a label is blank")
+        if "\n" in label:
+            raise TimeFValidationError(f"label {label!r} holds a line break, but the target lists one label per line")
         labels.append(label)
-    return labels
+    if len(set(labels)) != len(labels):
+        raise TimeFValidationError(f"the target repeats a label: {labels!r}")
+    return tuple(labels)
