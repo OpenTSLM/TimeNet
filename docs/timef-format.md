@@ -65,6 +65,8 @@ Signals can reference the same immutable `TimeAxis`. See
 | `task_record_refs` | Ordered task-to-record object relationships. |
 | `task_annotation_refs` | Ordered task-to-annotation occurrence relationships. |
 | `task_dependencies` | Ordered task derivation relationships. |
+| `classification_templates` | The templates of classification tasks with their options, one row per distinct template. |
+| `task_classification_templates` | The template of each classification task that has one. |
 | `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
 | `annotation_occurrences` | One attachment of content to an object, with its span. |
 | `signal_chunks` | Payload source and locations of Signal values in Parquet or Zarr. |
@@ -203,6 +205,18 @@ The annotations of a set are rows of `annotation_occurrences` with `object_type`
 
 The `labels` field holds one `{name, description}` entry per label, in the label order of the first
 equal set that the writer meets. If a label has no description, its `description` is `NULL`.
+
+A classification task can have a [template](data-model/tasks.md#templates) that writes its prompt and
+its answer. Each row in `classification_templates` stores one template: the Jinja `source`, the
+`options` in the order of the source dataset, the key style in the five `key_*` columns, the
+`allowable_enumerators`, and `reproduces_published_prompt`. An option holds its `label`, its `text`
+and `pinned`. The `text` is `NULL` where the option shows the name of its label. The five key
+columns are all `NULL` if the options have no keys. Equal templates are one row, so a release stores
+a template once even if thousands of tasks use it. `task_classification_templates` names the
+template of a task by `classification_template_id`. A task without a row has no template.
+
+Control schema version 4 adds these two tables. TimeNet still reads version 3, and a task of such a
+release has no template. A TimeNet that reads only version 3 does not read a version 4 release.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores entity IDs directly: `record_id` for a Record, `signal_id` for a

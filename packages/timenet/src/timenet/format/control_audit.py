@@ -17,15 +17,16 @@ from timenet.format.annotation_value_kind import AnnotationValueKind
 from timenet.format.control_schema import (
     ANNOTATED_OBJECT_TYPES,
     ANNOTATED_OWNER_TABLES,
-    CONTROL_TABLES,
     EXTERNAL_OWNER_TABLES,
+    TABLES,
     Table,
+    tables_of_schema_version,
 )
 from timenet.format.duckdb import check_control_schema
 from timenet.format.stored_values import PackedField, PackedValueKind
 from timenet.format.task_codec import ANNOTATION_FIELDS, RECORD_FIELDS, TaskRelationshipField
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
-from timenet.types import ObjectKind, TaskType
+from timenet.types import ClassificationEnumerator, ObjectKind, TaskType
 
 
 def _sql_in(values: Iterable[str]) -> str:
@@ -149,8 +150,8 @@ The rules below start with this ``WITH`` clause. A packed label stores its value
 The rules do not compare packed labels because the catalog holds only their placeholders."""
 
 
-class _LabelRule(NamedTuple):
-    """One rule that the stored labels of a classification task must follow."""
+class _TaskRule(NamedTuple):
+    """One rule that the stored rows of a task must follow."""
 
     problem: str
     """What is wrong with a task that breaks the rule, for the error message."""
@@ -161,14 +162,14 @@ class _LabelRule(NamedTuple):
 
 
 _LABEL_RULES = (
-    _LabelRule(
+    _TaskRule(
         "has a label that is not text or not in its label set",
         f"""{_LABELED_TARGETS}
         SELECT x.task_id FROM targets x JOIN labeled l USING (task_id)
         WHERE x.is_text IS NOT TRUE OR (NOT x.packed AND NOT list_contains(l.labels, x.label))
         LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     ),
-    _LabelRule(
+    _TaskRule(
         "does not have exactly one label, but its label set is not multi-label",
         f"""{_LABELED_TARGETS}
         SELECT l.task_id FROM labeled l LEFT JOIN targets x USING (task_id)
@@ -176,7 +177,7 @@ _LABEL_RULES = (
         GROUP BY l.task_id HAVING count(x.task_id) <> 1
         LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     ),
-    _LabelRule(
+    _TaskRule(
         "repeats a label",
         f"""{_LABELED_TARGETS}
         SELECT task_id FROM targets WHERE NOT packed
@@ -184,6 +185,47 @@ _LABEL_RULES = (
         LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     ),
 )
+
+_ENUMERATORS = _sql_in(ClassificationEnumerator)
+
+_TEMPLATE_RULES = (
+    _TaskRule(
+        "has a classification template, but is not a classification task",
+        f"""SELECT l.task_id FROM task_classification_templates l JOIN tasks t USING (task_id)
+        WHERE t.task_type <> '{TaskType.CLASSIFICATION}'
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - the tag comes from an internal enum value
+    ),
+    _TaskRule(
+        "has a template with an option for a label that is not in its label set",
+        """SELECT l.task_id
+        FROM task_classification_templates l
+        JOIN classification_templates c USING (classification_template_id)
+        JOIN tasks t USING (task_id)
+        JOIN label_sets s ON s.label_set_id = t.label_set_id
+        WHERE NOT list_has_all([label.name FOR label IN s.labels], [option.label FOR option IN c.options])
+        LIMIT 1""",
+    ),
+)
+"""The rules that the tasks with a classification template must follow."""
+
+_INVALID_TEMPLATE = f"""
+    SELECT classification_template_id FROM classification_templates
+    WHERE source = ''
+       OR len(options) = 0
+       OR len(list_distinct([option.label FOR option IN options])) <> len(options)
+       OR key_enumerator NOT IN ({_ENUMERATORS})
+       OR len(allowable_enumerators) = 0
+       OR EXISTS (SELECT 1 FROM unnest(allowable_enumerators) AS e(value) WHERE value NOT IN ({_ENUMERATORS}))
+       OR (key_enumerator IS NOT NULL AND NOT list_contains(allowable_enumerators, key_enumerator))
+       OR (key_enumerator IS NULL) <> (key_marker_prefix IS NULL)
+       OR (key_enumerator IS NULL) <> (key_marker_suffix IS NULL)
+       OR (key_enumerator IS NULL) <> (key_reference_prefix IS NULL)
+       OR (key_enumerator IS NULL) <> (key_reference_suffix IS NULL)
+    LIMIT 1
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
+"""A classification template without options, with a repeated label, or with a key style that does not agree.
+
+The rule does not parse the Jinja source. The reader does that when it builds the template."""
 
 _OWNERLESS = {
     object_type: (
@@ -337,6 +379,22 @@ def _audit_task_labels(connection: duckdb.DuckDBPyConnection) -> None:
             raise TimeFFormatError(f"classification task {task_id!r} {rule.problem}")
 
 
+def _audit_classification_templates(connection: duckdb.DuckDBPyConnection) -> None:
+    """Make sure that the stored classification templates and their tasks follow the rules of their tables.
+
+    Raises:
+        TimeFFormatError: If a template or a task breaks one of the rules.
+    """
+    invalid = connection.execute(_INVALID_TEMPLATE).fetchone()
+    if invalid is not None:
+        raise TimeFFormatError(f"classification template {invalid[0]!r} has invalid options or an invalid key style")
+    for rule in _TEMPLATE_RULES:
+        broken = connection.execute(rule.query).fetchone()
+        if broken is not None:
+            (task_id,) = broken
+            raise TimeFFormatError(f"task {task_id!r} {rule.problem}")
+
+
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
     """Scan every control table and raise an error at the first broken rule.
 
@@ -351,8 +409,10 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
             Also if Sources do not form separate trees for each Record.
             Also if an axis or chunk length differs from its Signal.
             Also if classification labels break a rule of their label set.
+            Also if a classification template or its task breaks a rule of the template tables.
     """
-    for table in CONTROL_TABLES:
+    schema_version = check_control_schema(connection)
+    for table in tables_of_schema_version(schema_version):
         _audit_unique_keys(connection, table)
         _audit_foreign_keys(connection, table)
 
@@ -360,7 +420,6 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     if invalid is not None:
         raise TimeFFormatError(f"control database contains an invalid {invalid[0]} value")
 
-    check_control_schema(connection)
     invalid_modality = connection.execute(
         f"""SELECT task_id FROM tasks
            WHERE len(input_modalities) = 0
@@ -395,6 +454,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     _audit_imported_objects(connection)
 
     _audit_task_labels(connection)
+    if schema_version >= TABLES["classification_templates"].added_in_schema_version:
+        _audit_classification_templates(connection)
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
