@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: binance/spot-klines
+dataset_version: 1.0.0
+name: Binance Spot Klines (hourly)
+description: >-
+  Hourly spot candles (open, high, low, close, volume, quote volume and trade count) for BTC, ETH,
+  BNB, SOL and XRP against USDT on Binance, January 2023 to December 2025, one record per pair.
+  Every day carries rule-based tasks over the seven-day window that ends with it: how far the price
+  moved, how volatile it was and how much traded, each against the six days before, plus a
+  plain-English explanation with its reasoning. Splits follow the calendar: train to December 2024,
+  validation January to June 2025, test July to December 2025.
+license: OTHER
+license_url: https://github.com/binance/binance-public-data/blob/master/TERMS_AND_CONDITIONS.md
+source_url: https://data.binance.vision/
+domains:
+  - finance
+tags:
+  - crypto
+  - market-data
+  - ohlcv
+  - classification
+  - explanation
