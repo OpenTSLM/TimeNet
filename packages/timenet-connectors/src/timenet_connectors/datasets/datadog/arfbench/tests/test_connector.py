@@ -86,6 +86,14 @@ def test_each_question_is_a_classification_task_over_its_options(release):
     assert isinstance(presence, ClassificationTask) and isinstance(correlation, ClassificationTask)
     assert [label.name for label in correlation.label_set.labels] == ["Yes", "No"]
     assert not correlation.label_set.multi_label
+    # The question does not print the options, so the prompt options hold them without spans, in release order.
+    published = correlation.get_option_presentation(use_shuffled_label_key=False)
+    assert published.prompt == CORRELATION_ROW["question"]
+    assert published.prompt_options.labels == ("Yes", "No")
+    assert published.prompt_options.spans == ()
+    assert published.get_answer() == ("No",)
+    orders = {correlation.get_option_presentation(seed=seed).prompt_options.labels for seed in range(10)}
+    assert orders == {("Yes", "No"), ("No", "Yes")}
     # The task reads the cited metrics in citation order.
     assert [record.metadata["source_record_id"] for record in correlation.inputs] == [
         "arfbench-35997_0",
@@ -124,7 +132,7 @@ def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(rele
     dataset.derive_schema()
     with TimeFWriter(tmp_path / "built", dataset, values_backend=connector.values_backend) as output:
         output.write()
-    with TimeFReader(open_local_version(tmp_path / "built/datadog/arfbench/1.0.0")) as reader:
+    with TimeFReader(open_local_version(tmp_path / "built/datadog/arfbench/1.1.0")) as reader:
         reader.verify()
         assert reader.values_backend == "parquet"
         back = {record.metadata["source_record_id"]: record for record in reader.iter_records()}
@@ -138,6 +146,8 @@ def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(rele
     assert [task.metadata["question_index"] for task in tasks] == [0, 1]
     assert isinstance(tasks[1], ClassificationTask)
     assert [label.name for label in tasks[1].label_set.labels] == ["Yes", "No"]
+    assert tasks[1].prompt_options is not None
+    assert tasks[1].prompt_options.labels == ("Yes", "No")
 
 
 @pytest.mark.parametrize(

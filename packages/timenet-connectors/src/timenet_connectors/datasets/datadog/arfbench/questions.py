@@ -9,7 +9,15 @@ import json
 from typing import TYPE_CHECKING, Self, TypeVar
 
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, ClassificationTask, InputModality, LabelSet, Split
+from timenet.types import (
+    Annotation,
+    ClassificationTask,
+    InputModality,
+    LabelSet,
+    PromptOption,
+    PromptOptions,
+    Split,
+)
 
 
 if TYPE_CHECKING:
@@ -206,10 +214,14 @@ class ARFBenchQuestion:
     def _create_task(self, inputs: list[Record], modality: InputModality) -> ClassificationTask:
         """Create a test task that asks for the correct answer from the options of the question.
 
-        The options are the label set of the task. The set is ordered, because the order of the options is
-        part of the question. Questions with the same options in the same order share one set. The row
-        index in the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``.
-        The interpolation flags describe what an engineer saw. This method does not interpolate.
+        The options are the label set of the task. The set is ordered, so the stored set keeps the order of
+        the release. Questions with the same options in the same order share one set. The row index in
+        the metadata pairs the series task with the chart task of ``datadog/arfbench-charts``. The
+        interpolation flags describe what an engineer saw. This method does not interpolate.
+
+        The question text does not print the options, so the prompt options have no spans. They hold the
+        options in the order of the release. No option refers to another one, so no option is pinned and a
+        consumer can print them in another order.
 
         Returns:
             The task, not yet added to a dataset.
@@ -222,6 +234,7 @@ class ARFBenchQuestion:
             split=Split.TEST,
             metadata={"question_index": self.index},
             label_set=LabelSet(self.answer_options, ordered=True),
+            prompt_options=PromptOptions(options=[PromptOption(label=option) for option in self.answer_options]),
             annotations=[
                 Annotation("task_category", value=self.task_category.value),
                 Annotation("difficulty", value=self.difficulty.value),
