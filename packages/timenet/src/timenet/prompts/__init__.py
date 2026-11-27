@@ -13,8 +13,8 @@ from timenet.prompts.defaults import (
     PromptWithOptionsRenderer,
 )
 from timenet.prompts.render import (
-    Part,
     PromptBuilder,
+    PromptPart,
     PromptRenderer,
     RenderedPrompt,
     SeriesPart,
@@ -29,8 +29,8 @@ __all__ = [
     "DEFAULT_RENDERERS",
     "DescribedRenderer",
     "LabelQuestionRenderer",
-    "Part",
     "PromptBuilder",
+    "PromptPart",
     "PromptQuestionRenderer",
     "PromptRenderer",
     "PromptWithOptionsRenderer",

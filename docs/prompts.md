@@ -78,7 +78,7 @@ holds only plain values. The input view has these fields:
 | --- | --- |
 | `dataset.name`, `dataset.description` | From the dataset card, or empty without a card |
 | `window.duration_s` | The duration of the task's scope, or empty without a scope or for a scope in steps |
-| `records` | One entry for each input Record, in the task's order |
+| `input_records` | One entry for each input Record, in the task's order |
 | `record.sources` | The Sources that have a channel in the window, each with `name`, `metadata` and `channels` |
 | `record.channels` | The channels of all Sources of the Record |
 | `channel` | `name`, `spec_name`, `spec_type`, `unit`, `unit_symbol`, `sampling_rate_hz`, `n_values` and `context` |
@@ -125,26 +125,26 @@ class Short(PromptRenderer):
         self, view: ClassificationInputView
     ) -> PromptBuilder:
         prompt = PromptBuilder()
-        for record in view.records:
+        for record in view.input_records:
             for channel in record.channels:
-                prompt.series(channel)
-        return prompt.text(f"Pick one: {view.label_set.options_line}.")
+                prompt.add_series(channel)
+        return prompt.add_text(f"Pick one: {view.label_set.options_line}.")
 
     def render_target_prompt(
         self, view: ClassificationTargetView
     ) -> PromptBuilder:
-        return PromptBuilder().text(", ".join(view.targets))
+        return PromptBuilder().add_text(", ".join(view.targets))
 ```
 
 Pass an instance, such as `render(task, Short())`.
 
 `PromptBuilder` has two methods. Both return the builder, so calls can be chained:
 
-- `text(*lines)` adds lines of text. All lines between two series become one `TextPart`, joined
+- `add_text(*lines)` adds lines of text. All lines between two series become one `TextPart`, joined
   with line breaks and stripped. Blank text is left out.
-- `series(channel, text="")` adds a channel of the view. `render()` replaces it with the channel's
-  window, as a `SeriesPart`, or a `SeriesTextPart` if `text` is not empty. A channel that is not
-  from the view fails with a `TimeFValidationError`.
+- `add_series(channel, text="")` adds a channel of the view. `render()` replaces it with the
+  channel's window, as a `SeriesPart`, or a `SeriesTextPart` if `text` is not empty. A channel
+  that is not from the view fails with a `TimeFValidationError`.
 
 `render_input_prompt()` gets a `ClassificationInputView`, which has no `targets` or `rationale`,
 so it cannot reach the answer. `render_target_prompt()` gets a `ClassificationTargetView`, which

@@ -26,7 +26,7 @@ def test_input_view_of_a_scoped_task(capture):
 
     assert values.dataset.name == "Hello World"
     assert values.window == WindowView(duration_s=10.0)
-    [record] = values.records
+    [record] = values.input_records
     [source] = record.sources
     assert source.name == "Axivity AX3"
     assert source.metadata == {"device": "Axivity AX3", "placement": "dominant wrist"}
@@ -75,7 +75,7 @@ def test_input_view_holds_only_plain_values(capture):
 
 def test_window_is_a_stripped_copy(capture):
     view = build_input_view(capture.task)
-    window = view.windows[id(view.values.records[0].channels[0])]
+    window = view.windows[id(view.values.input_records[0].channels[0])]
 
     assert window.n_values == 1000
     assert window.annotations == ()
@@ -98,7 +98,7 @@ def test_irregular_window_starts_at_zero(capture):
     )
 
     view = build_input_view(task)
-    [channel] = view.values.records[0].channels
+    [channel] = view.values.input_records[0].channels
 
     assert channel.sampling_rate_hz is None
     assert channel.unit is None
@@ -110,7 +110,7 @@ def test_scope_on_one_signal(capture):
     task = capture.replace(scope=StepInterval(time_series=capture.y, start=0, stop=100))
 
     values = build_input_view(task).values
-    [record] = values.records
+    [record] = values.input_records
 
     assert [channel.name for channel in record.channels] == ["y"]
     assert record.channels[0].n_values == 100
@@ -127,7 +127,7 @@ def test_two_inputs_and_a_nested_source(capture):
         inputs=[second, first], targets="sleep", label_set=capture.label_set(), input_annotations=[note]
     )
 
-    records = build_input_view(task).values.records
+    records = build_input_view(task).values.input_records
 
     assert [[source.name for source in record.sources] for record in records] == [["solo"], ["parent", "child"]]
     assert [channel.name for channel in records[1].channels] == ["b", "a"]
@@ -138,7 +138,7 @@ def test_text_list_annotation(capture):
     steps = capture.record.annotate(Annotation("steps", value=["sit down", "stand up"]))
     task = capture.replace(input_annotations=[steps])
 
-    [item] = build_input_view(task).values.records[0].context
+    [item] = build_input_view(task).values.input_records[0].context
 
     assert item == ContextItem(key="steps", text="1. sit down\n2. stand up", is_list=True)
     assert item.line == "steps:\n1. sit down\n2. stand up"
@@ -281,7 +281,7 @@ def test_channels_share_the_window_start(capture):
     )
 
     view = build_input_view(task)
-    first, second = (view.windows[id(channel)] for channel in view.values.records[0].channels)
+    first, second = (view.windows[id(channel)] for channel in view.values.input_records[0].channels)
 
     np.testing.assert_array_equal(first.time_offsets_us(), [2_000_000, 4_000_000])
     np.testing.assert_array_equal(second.time_offsets_us(), [500_000, 1_000_000, 4_500_000])
@@ -300,7 +300,7 @@ def test_unscoped_segments_keep_their_distance(capture):
     task = ClassificationTask(inputs=[record], targets="sleep", label_set=capture.label_set())
 
     view = build_input_view(task)
-    windows = [view.windows[id(channel)] for channel in view.values.records[0].channels]
+    windows = [view.windows[id(channel)] for channel in view.values.input_records[0].channels]
 
     axes = [window.time_axis for window in windows]
     assert axes == [

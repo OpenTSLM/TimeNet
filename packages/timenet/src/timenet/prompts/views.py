@@ -155,7 +155,7 @@ class ClassificationInputView:
 
     dataset: DatasetView
     window: WindowView
-    records: tuple[RecordView, ...]
+    input_records: tuple[RecordView, ...]
     """The input Records, in the task's order."""
     context: tuple[ContextItem, ...]
     """The selected input annotations outside the input Records."""
@@ -214,7 +214,7 @@ def build_input_view(task: ClassificationTask, dataset: DatasetMetadata | None =
         window=WindowView(
             duration_s=us_to_seconds(scope.end_us - scope.start_us) if isinstance(scope, TimeInterval) else None
         ),
-        records=records,
+        input_records=records,
         context=_context(pending),
         prompt=_read_text(task.prompt, "prompt"),
         label_set=_label_set_view(task.label_set),

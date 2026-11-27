@@ -43,15 +43,15 @@ class SeriesTextPart:
     text: str
 
 
-Part: TypeAlias = TextPart | SeriesPart | SeriesTextPart
+PromptPart: TypeAlias = TextPart | SeriesPart | SeriesTextPart
 
 
 @dataclass(frozen=True)
 class RenderedPrompt:
     """The parts of the input and of the expected reply."""
 
-    input: tuple[Part, ...]
-    target: tuple[Part, ...]
+    input: tuple[PromptPart, ...]
+    target: tuple[PromptPart, ...]
 
 
 @dataclass(frozen=True)
@@ -73,17 +73,19 @@ class PromptBuilder:
     def __init__(self) -> None:
         self._items: list[str | _Series] = []
 
-    def text(self, *lines: str) -> Self:
-        """Add lines of text.
-
-        Returns:
-            The builder, so that calls can be chained.
-        """
+    def add_text(self, *lines: str) -> Self:
+        """Add lines of text to the prompt."""
         self._items.extend(lines)
         return self
 
-    def series(self, channel: ChannelView, text: str = "") -> Self:
-        """Add a channel's window, with ``text`` if it is not empty.
+    def add_series(self, channel: ChannelView, text: str = "") -> Self:
+        """Add a channel's window.
+
+        Args:
+            channel: A channel of the view that the renderer got.
+            text: Text that belongs to this series, such as the selected annotations on its Signal. With
+                text, the part is a ``SeriesTextPart`` that keeps the two together. Without it, the part is
+                a ``SeriesPart``.
 
         Returns:
             The builder, so that calls can be chained.
@@ -91,7 +93,7 @@ class PromptBuilder:
         self._items.append(_Series(channel, text))
         return self
 
-    def build(self, windows: dict[int, Signal]) -> tuple[Part, ...]:
+    def build(self, windows: dict[int, Signal]) -> tuple[PromptPart, ...]:
         """Resolve each channel to its window and return the parts. :func:`render` calls this.
 
         Args:
@@ -103,7 +105,7 @@ class PromptBuilder:
         Raises:
             TimeFValidationError: If a channel is not a channel of the view that the renderer got.
         """
-        parts: list[Part] = []
+        parts: list[PromptPart] = []
         lines: list[str] = []
 
         def flush() -> None:
@@ -119,7 +121,7 @@ class PromptBuilder:
             window = windows.get(id(item.channel))
             if window is None:
                 raise TimeFValidationError(
-                    "series() takes a channel of the task's view, such as records[0].channels[0]"
+                    "add_series() takes a channel of the task's view, such as input_records[0].channels[0]"
                 )
             flush()
             parts.append(SeriesTextPart(window, item.text) if item.text else SeriesPart(window))
@@ -142,7 +144,9 @@ class PromptRenderer(ABC):
         """Build the expected reply."""
 
 
-def render_input(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | None = None) -> tuple[Part, ...]:
+def render_input(
+    task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | None = None
+) -> tuple[PromptPart, ...]:
     """Render only the input. This never reads the targets or the rationale.
 
     Args:
@@ -194,7 +198,7 @@ def _classification(task: Task) -> ClassificationTask:
 
 def _render_input(
     task: ClassificationTask, renderer: PromptRenderer, dataset: DatasetMetadata | None
-) -> tuple[TaskView, tuple[Part, ...]]:
+) -> tuple[TaskView, tuple[PromptPart, ...]]:
     """Build the input view and render the input.
 
     Returns:

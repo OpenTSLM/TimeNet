@@ -33,11 +33,14 @@ def _inputs(view: ClassificationInputView) -> PromptBuilder:
         The builder.
     """
     prompt = PromptBuilder()
-    for record in view.records:
+    for record in view.input_records:
         for channel in record.channels:
-            prompt.series(channel, text=_annotation_text(channel))
-        prompt.text(*(item.line for item in record.context))
-    return prompt.text(*(item.line for item in view.context))
+            prompt.add_series(channel, text=_annotation_text(channel))
+        for item in record.context:
+            prompt.add_text(item.line)
+    for item in view.context:
+        prompt.add_text(item.line)
+    return prompt
 
 
 def _answer(label_set: LabelSetView) -> str:
@@ -73,13 +76,13 @@ def _channel_line(channel: ChannelView) -> str:
     return f"Channel {channel.name}: {', '.join(details)}."
 
 
-class _AionicRenderer(PromptRenderer):
-    """Aionic's layout, then a question that each subclass writes, and Aionic's reply."""
+class _DefaultRendererBase(PromptRenderer):
+    """The base of the default renderers: Aionic's layout, then a question from each subclass, and Aionic's reply."""
 
     @override
     def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
         """Build the series and the selected annotations as Aionic does, then the question."""
-        return _inputs(view).text(*self.question(view))
+        return _inputs(view).add_text(*self.question(view))
 
     @abstractmethod
     def question(self, view: ClassificationInputView) -> list[str]:
@@ -90,11 +93,11 @@ class _AionicRenderer(PromptRenderer):
         """Build Aionic's reply: the rationale and an empty line, then one label per line."""
         prompt = PromptBuilder()
         if view.rationale is not None:
-            prompt.text(view.rationale, "")
-        return prompt.text(*view.targets)
+            prompt.add_text(view.rationale, "")
+        return prompt.add_text(*view.targets)
 
 
-class LabelQuestionRenderer(_AionicRenderer):
+class LabelQuestionRenderer(_DefaultRendererBase):
     """Aionic's question from the label set, with the options on one line. It ignores the task's own prompt."""
 
     name = "classification-label-question"
@@ -105,7 +108,7 @@ class LabelQuestionRenderer(_AionicRenderer):
         return [f"Which label matches the input? {_options(view.label_set)}"]
 
 
-class PromptQuestionRenderer(_AionicRenderer):
+class PromptQuestionRenderer(_DefaultRendererBase):
     """Aionic's use of the task's own prompt as the question. It fails for a task without a prompt."""
 
     name = "classification-prompt-question"
@@ -116,7 +119,7 @@ class PromptQuestionRenderer(_AionicRenderer):
         return [_prompt(view)]
 
 
-class PromptWithOptionsRenderer(_AionicRenderer):
+class PromptWithOptionsRenderer(_DefaultRendererBase):
     """The task's own prompt, then the options on one line. It fails for a task without a prompt."""
 
     name = "classification-prompt-options"
@@ -127,7 +130,7 @@ class PromptWithOptionsRenderer(_AionicRenderer):
         return [_prompt(view), _options(view.label_set)]
 
 
-class DescribedRenderer(_AionicRenderer):
+class DescribedRenderer(_DefaultRendererBase):
     """The window, each Source and channel with its unit and rate, then the options with their descriptions."""
 
     name = "classification-described"
@@ -137,15 +140,18 @@ class DescribedRenderer(_AionicRenderer):
         """Build the window, each Source and channel before its series, the annotations, then the question."""
         prompt = PromptBuilder()
         if view.window.duration_s:
-            prompt.text(f"Input: {view.window.duration_s:g} s window.")
-        for record in view.records:
+            prompt.add_text(f"Input: {view.window.duration_s:g} s window.")
+        for record in view.input_records:
             for source in record.sources:
                 metadata = ", ".join(f"{key}: {value}" for key, value in source.metadata.items())
-                prompt.text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
+                prompt.add_text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
                 for channel in source.channels:
-                    prompt.text(_channel_line(channel)).series(channel, text=_annotation_text(channel))
-            prompt.text(*(item.line for item in record.context))
-        return prompt.text(*(item.line for item in view.context), *self.question(view))
+                    prompt.add_text(_channel_line(channel)).add_series(channel, text=_annotation_text(channel))
+            for item in record.context:
+                prompt.add_text(item.line)
+        for item in view.context:
+            prompt.add_text(item.line)
+        return prompt.add_text(*self.question(view))
 
     @override
     def question(self, view: ClassificationInputView) -> list[str]:
