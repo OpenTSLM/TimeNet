@@ -136,9 +136,10 @@ such as cross-task derivations, do not run. Each task carries its own `inputs`.
 **The stream reads no file.** It expands the sleep-stage annotations that the records already
 carry. A second read of the hypnograms can let the tasks and the annotations disagree.
 
-**The connector invents no prompt.** The release states no question in words. A consumer who wants
-a prompted form composes it from the task type and the label set, and different consumers word it
-differently.
+**No task has a prompt.** The release states no question in words. Each classification task has
+the default template of its label set instead. The template asks which label matches the input and
+lists the labels, so each consumer shows the task in the same way and can show the labels in another
+order. The other task types have no template.
 
 ## Inconsistencies
 
