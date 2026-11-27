@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="830" viewBox="0 0 1100 830">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10" fill="#475569"/></marker>
+    <style>text{font-family:Arial,sans-serif;fill:#172033}.title{font-size:26px;font-weight:bold}.head{font-size:19px;font-weight:bold}.body{font-size:16px}.small{font-size:14px}.arrow{stroke:#475569;stroke-width:2;fill:none;marker-end:url(#arrow)}.box{rx:12;stroke-width:1.5}</style>
+  </defs>
+  <rect width="1100" height="830" fill="#fff"/>
+  <text x="36" y="42" class="title">Time-MMD: source files, shared data, scoped tasks</text>
+  <rect x="36" y="66" width="1028" height="126" class="box" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="58" y="97" class="head">INPUT: six pinned CSV files</text>
+  <text x="58" y="126" class="body"><tspan font-weight="bold">Economy:</tspan> 447 observations × 3 numerical channels</text>
+  <text x="58" y="155" class="body"><tspan font-weight="bold">Energy:</tspan> 1,622 observations × 9 numerical channels</text>
+  <text x="590" y="126" class="body">Each domain: report.csv + search.csv</text>
+  <text x="590" y="155" class="body">Fields: start_date, end_date, fact, preds</text>
+  <path d="M550,192 V242" class="arrow"/>
+  <rect x="36" y="250" width="1028" height="300" class="box" fill="#eff6ff" stroke="#60a5fa"/>
+  <text x="58" y="282" class="head">OUTPUT: one TimeFDataset, adityalab/time-mmd</text>
+  <rect x="58" y="303" width="470" height="226" class="box" fill="#fff" stroke="#93c5fd"/>
+  <text x="78" y="333" class="head">Economy Record</text>
+  <text x="78" y="361" class="body">Goods-trade Source → Exports, Imports, OT</text>
+  <text x="78" y="390" class="body">447 dated values each; million USD; monthly dates</text>
+  <rect x="552" y="303" width="490" height="226" class="box" fill="#fff" stroke="#93c5fd"/>
+  <text x="572" y="333" class="head">Energy Record</text>
+  <text x="572" y="361" class="body">Gasoline Source → national OT + 8 regional Signals</text>
+  <text x="572" y="390" class="body">1,622 values each; USD/US gallon; weekly dates</text>
+  <rect x="68" y="423" width="450" height="94" class="box" fill="#fffbeb" stroke="#fbbf24"/>
+  <text x="78" y="450" class="head">5,498 annotations owned by this Record</text>
+  <text x="78" y="475" class="small">Original fact/preds, row provenance and coverage.</text>
+  <text x="78" y="498" class="small">Availability unknown; excluded from default task inputs.</text>
+  <rect x="562" y="423" width="470" height="94" class="box" fill="#fffbeb" stroke="#fbbf24"/>
+  <text x="572" y="450" class="head">5,336 annotations owned by this Record</text>
+  <text x="572" y="475" class="small">Original fact/preds, row provenance and coverage.</text>
+  <text x="572" y="498" class="small">Availability unknown; excluded from default task inputs.</text>
+  <path d="M282,550 V572 H796 V550" stroke="#475569" stroke-width="2" fill="none"/>
+  <path d="M282,572 V600" class="arrow"/>
+  <path d="M796,572 V600" class="arrow"/>
+  <rect x="36" y="608" width="496" height="156" class="box" fill="#f0fdf4" stroke="#4ade80"/>
+  <text x="56" y="638" class="head">AnswerTask</text>
+  <text x="56" y="667" class="body"><tspan font-weight="bold">Input:</tspan> 64 OT values + question</text>
+  <text x="56" y="695" class="body">Compare first-eight and last-eight means</text>
+  <text x="56" y="723" class="body"><tspan font-weight="bold">Target:</tspan> higher / lower / within tolerance</text>
+  <rect x="556" y="608" width="508" height="156" class="box" fill="#f0fdf4" stroke="#4ade80"/>
+  <text x="576" y="638" class="head">ForecastingTask</text>
+  <text x="576" y="667" class="body"><tspan font-weight="bold">Input:</tspan> same 64 OT values + instruction</text>
+  <text x="576" y="695" class="body"><tspan font-weight="bold">Output shape:</tspan> one next-observation number</text>
+  <text x="576" y="723" class="body"><tspan font-weight="bold">Target:</tspan> actual next OT, in original units</text>
+  <text x="36" y="799" class="small">Model adapter: select scoped history and keep targets out of the model input.</text>
+</svg>
