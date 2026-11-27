@@ -14,8 +14,10 @@ from timenet.format.control_schema import schema_ddl
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 3
-"""Schema version written into :data:`CONTROL_FILE`, and the newest that this TimeNet reads."""
+CONTROL_SCHEMA_VERSION = 4
+"""Schema version written into :data:`CONTROL_FILE`, and the newest that this TimeNet reads.
+
+Version 4 adds the tables of the classification templates."""
 
 OLDEST_READABLE_CONTROL_SCHEMA_VERSION = 3
 """The oldest schema version of :data:`CONTROL_FILE` that this TimeNet reads.

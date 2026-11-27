@@ -20,6 +20,7 @@ from timenet.errors import TimeFFormatError
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
 from timenet.format.task_target_row import TargetValueRow
 from timenet.types import (
+    ClassificationTemplate,
     EntityId,
     InputModality,
     LocalizationMode,
@@ -200,6 +201,64 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
         return {"mode": LocalizationMode(columns.get("mode") or LocalizationMode.SPARSE)}
     return {}
+
+
+def encode_classification_template(template_id: int, template: ClassificationTemplate) -> dict[str, object]:
+    """Encode a classification template as one ``classification_templates`` row.
+
+    Returns:
+        One value per column of the table. The five key columns are ``None`` if the options have no keys.
+    """
+    style = template.key_style
+    return {
+        "classification_template_id": template_id,
+        "source": template.prompt_template.source,
+        "options": [option.model_dump() for option in template.options],
+        "key_enumerator": None if style is None else style.enumerator.value,
+        "key_marker_prefix": None if style is None else style.marker_prefix,
+        "key_marker_suffix": None if style is None else style.marker_suffix,
+        "key_reference_prefix": None if style is None else style.reference_prefix,
+        "key_reference_suffix": None if style is None else style.reference_suffix,
+        "allowable_enumerators": sorted(enumerator.value for enumerator in template.allowable_enumerators),
+        "reproduces_published_prompt": template.reproduces_published_prompt,
+    }
+
+
+def decode_classification_template(row: Mapping[str, Any]) -> ClassificationTemplate:
+    """Decode one ``classification_templates`` row.
+
+    Args:
+        row: The row, by column name.
+
+    Returns:
+        The template.
+
+    Raises:
+        TimeFFormatError: If the stored template is not valid.
+    """
+    style = None
+    if row["key_enumerator"] is not None:
+        style = {
+            "enumerator": row["key_enumerator"],
+            "marker_prefix": row["key_marker_prefix"],
+            "marker_suffix": row["key_marker_suffix"],
+            "reference_prefix": row["key_reference_prefix"],
+            "reference_suffix": row["key_reference_suffix"],
+        }
+    try:
+        return ClassificationTemplate.model_validate(
+            {
+                "prompt_template": {"source": row["source"]},
+                "options": row["options"],
+                "key_style": style,
+                "allowable_enumerators": row["allowable_enumerators"],
+                "reproduces_published_prompt": row["reproduces_published_prompt"],
+            }
+        )
+    except ValidationError as exc:
+        raise TimeFFormatError(
+            f"the stored classification template {row['classification_template_id']!r} is not valid: {exc}"
+        ) from exc
 
 
 def decode_target(  # ruff: ignore[too-many-return-statements] - each target kind has one direct decoding branch

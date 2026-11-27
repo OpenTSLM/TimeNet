@@ -68,22 +68,26 @@ def test_a_newer_control_schema_names_the_file_and_both_versions(tmp_path):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '4'")
+        connection.execute("UPDATE control_metadata SET value = ?", [str(CONTROL_SCHEMA_VERSION + 1)])
 
         with pytest.raises(TimeFFormatVersionError) as caught:
             check_control_schema(connection)
 
-    assert str(caught.value) == f"{path} uses control schema version 4, but the newest that this timenet reads is 3."
+    assert str(caught.value) == (
+        f"{path} uses control schema version {CONTROL_SCHEMA_VERSION + 1}, "
+        f"but the newest that this timenet reads is {CONTROL_SCHEMA_VERSION}."
+    )
     assert caught.value.subject is FormatVersionSubject.CONTROL_SCHEMA
 
 
 def test_a_newer_in_memory_control_schema_names_no_file():
     with duckdb.connect() as connection:
         create_control_schema(connection)
-        connection.execute("UPDATE control_metadata SET value = '4'")
+        connection.execute("UPDATE control_metadata SET value = ?", [str(CONTROL_SCHEMA_VERSION + 1)])
 
         with pytest.raises(
-            TimeFFormatVersionError, match=r"^an in-memory control database uses control schema version 4, but"
+            TimeFFormatVersionError,
+            match=rf"^an in-memory control database uses control schema version {CONTROL_SCHEMA_VERSION + 1}, but",
         ):
             check_control_schema(connection)
 

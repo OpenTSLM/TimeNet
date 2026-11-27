@@ -33,13 +33,19 @@ from timenet.format.stored_values import (
     offsets_digest,
 )
 from timenet.format.table_writer import insert_rows
-from timenet.format.task_codec import TaskRelationshipField, encode_span, encode_task_payload
+from timenet.format.task_codec import (
+    TaskRelationshipField,
+    encode_classification_template,
+    encode_span,
+    encode_task_payload,
+)
 from timenet.format.task_target_row import TargetValueRow
 from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
     ArrayHandle,
     ClassificationTask,
+    ClassificationTemplate,
     LabelSet,
     ObjectKind,
     Task,
@@ -264,6 +270,42 @@ class _LabelSetRows:
         insert_rows(connection, TABLES["label_sets"], [row for _, row, _ in self._sets.values()])
         for label_set_id, _, occurrences in self._sets.values():
             annotations.extend((ObjectKind.LABEL_SET, label_set_id, annotation) for annotation in occurrences)
+
+
+class _ClassificationTemplateRows:
+    """The ``classification_templates`` rows of one write, one row for each distinct template.
+
+    Equal templates get one id, in the order that tasks first use them.
+    """
+
+    def __init__(self, ids: Iterator[int]) -> None:
+        """Start with no templates.
+
+        Args:
+            ids: The storage ids for new templates.
+        """
+        self._new_ids = ids
+        self._ids: dict[ClassificationTemplate, int] = {}
+
+    def register(self, template: ClassificationTemplate) -> int:
+        """Add a template.
+
+        Returns:
+            The stored id of the template.
+        """
+        template_id = self._ids.get(template)
+        if template_id is None:
+            template_id = self._ids[template] = next(self._new_ids)
+        return template_id
+
+    def write(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Insert the rows.
+
+        Args:
+            connection: The open write transaction.
+        """
+        rows = [encode_classification_template(template_id, template) for template, template_id in self._ids.items()]
+        insert_rows(connection, TABLES["classification_templates"], rows)
 
 
 class DuckDBControlWriter:
@@ -559,11 +601,13 @@ class DuckDBControlWriter:
         annotation_refs: list[_AnnotationRef] = []
         task_counts: dict[str, int] = {}
         label_sets = _LabelSetRows(self._storage_ids["label_set"])
+        templates = _ClassificationTemplateRows(self._storage_ids["classification_template"])
         index = _TaskValidationIndex(dataset)
         for batch in _task_batches(tasks_source):
             task_rows: list[dict[str, object]] = []
             target_rows: list[dict[str, object]] = []
             record_ref_rows: list[dict[str, object]] = []
+            template_rows: list[dict[str, object]] = []
             for task in batch:
                 TimeFDataset._check_record_refs(task, index)
                 TimeFDataset._check_signal_refs(task, index)
@@ -601,9 +645,8 @@ class DuckDBControlWriter:
                     for position, target in enumerate(task.targets or ())
                 )
                 if isinstance(task, ClassificationTask) and task.template is not None:
-                    # Without this check, the template would be lost on a write without an error.
-                    raise TimeFValidationError(
-                        f"task {task_id!r} has a template, and TimeF has no table for templates yet"
+                    template_rows.append(
+                        {"task_id": task_id, "classification_template_id": templates.register(task.template)}
                     )
                 annotations.extend((ObjectKind.TASK, task_id, annotation) for annotation in task.annotations)
                 for field, records in self._task_record_refs(task):
@@ -624,10 +667,12 @@ class DuckDBControlWriter:
             insert_rows(connection, TABLES["tasks"], task_rows)
             insert_rows(connection, TABLES["task_targets"], target_rows)
             insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
+            insert_rows(connection, TABLES["task_classification_templates"], template_rows)
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
         # Tasks refer to a label set by its id, so the sets can follow the tasks that use them.
         label_sets.write(connection, annotations)
+        templates.write(connection)
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()

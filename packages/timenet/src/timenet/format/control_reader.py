@@ -23,7 +23,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -39,6 +39,7 @@ from timenet.format.task_codec import (
     ANNOTATION_FIELDS,
     RECORD_FIELDS,
     TaskRelationshipField,
+    decode_classification_template,
     decode_input_modalities,
     decode_span,
     decode_split,
@@ -49,6 +50,7 @@ from timenet.types import (
     TASKS,
     Annotation,
     ArrayHandle,
+    ClassificationTemplate,
     InputModality,
     Label,
     LabelSet,
@@ -591,6 +593,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self.path = Path(path)
         self._fetch = fetch
         self._connection: duckdb.DuckDBPyConnection | None = None
+        self._schema_version = 0
+        """The schema version of the database, which :meth:`_connect` sets."""
         self._open()
         self.external = external
         self._packed_values_stored: bool | None = None
@@ -693,7 +697,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
         try:
-            check_control_schema(connection)
+            self._schema_version = check_control_schema(connection)
         except BaseException:
             connection.close()
             raise
@@ -1891,6 +1895,40 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 raise TimeFFormatError(f"the stored label set {label_set_id!r} is not valid: {exc}") from exc
         return label_sets
 
+    def _classification_template_ids(self, task_ids: list[int] | None) -> dict[int, int]:
+        """Read which template each task of one batch, or each task, has.
+
+        A database of a schema version before the template tables holds no template.
+
+        Returns:
+            The template id by task ID, for the tasks that have a template.
+        """
+        table = TABLES["task_classification_templates"]
+        if self._schema_version < table.added_in_schema_version:
+            return {}
+        where, parameters = self._task_filter(task_ids)
+        # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+        return dict(self._query(f"SELECT task_id, classification_template_id FROM {table.name} {where}", parameters))
+
+    def _read_classification_templates(self, template_ids: Collection[int]) -> dict[int, ClassificationTemplate]:
+        """Read the classification templates with these ids.
+
+        Returns:
+            The templates by id.
+
+        Raises:
+            TimeFFormatError: If a stored template is not valid.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by decode_classification_template
+        table = TABLES["classification_templates"]
+        columns = ", ".join(table.column_names)
+        rows = self._query(
+            # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+            f"SELECT {columns} FROM {table.name} WHERE classification_template_id IN (SELECT unnest(?))",
+            [sorted(template_ids)],
+        )
+        decoded = (dict(zip(table.column_names, row, strict=True)) for row in rows)
+        return {row["classification_template_id"]: decode_classification_template(row) for row in decoded}
+
     def _target_rows(self, task_ids: list[int] | None) -> list[_TargetRow]:
         """Read the target rows for one batch of tasks, or every task, in task and position order.
 
@@ -2308,6 +2346,8 @@ class _TaskBuilder:
         self.retained: _TasksById = {}
         self._label_sets: dict[int, LabelSet] = {}
         """The stored label sets by id, which the read builds once and all its tasks share."""
+        self._classification_templates: dict[int, ClassificationTemplate] = {}
+        """The stored classification templates by id, which the read builds once and all its tasks share."""
         # The lookups of the caller's objects that a stream's batches share, or None for one pass.
         self._given: _Lookups | None = None
         self._dataset_annotations_indexed = dataset_annotations is not None
@@ -2474,6 +2514,26 @@ class _TaskBuilder:
             raise TimeFFormatError(f"classification task {task_id!r} refers to missing label set {label_set_id!r}")
         return label_set
 
+    def _classification_templates_of_tasks(self, task_ids: list[EntityId] | None) -> dict[int, ClassificationTemplate]:
+        """Return the stored template of each task of one batch that has one.
+
+        The read builds each template once. Tasks that use the same template share one object.
+
+        Returns:
+            The shared templates, by task ID.
+
+        Raises:
+            TimeFFormatError: If a task names a template that is not stored.
+        """
+        template_ids = self.reader._classification_template_ids(task_ids)
+        new_ids = set(template_ids.values()) - self._classification_templates.keys()
+        if new_ids:
+            self._classification_templates.update(self.reader._read_classification_templates(new_ids))
+        missing = sorted(set(template_ids.values()) - self._classification_templates.keys())
+        if missing:
+            raise TimeFFormatError(f"tasks refer to the missing classification templates {missing}")
+        return {task_id: self._classification_templates[template_id] for task_id, template_id in template_ids.items()}
+
     def _task(self, task_id: EntityId, built: _TasksById) -> Task:
         """Return a task from this batch or the retained parents.
 
@@ -2505,6 +2565,7 @@ class _TaskBuilder:
             "task_annotation_refs", "occurrence_id", ANNOTATION_FIELDS, task_ids
         )
         target_rows = reader._target_rows(task_ids)
+        templates = self._classification_templates_of_tasks(task_ids)
         task_annotations: _AnnotationsByOwner = {}
         if self.tasks_annotated:
             task_annotations = reader._read_annotations({ObjectKind.TASK: task_ids})
@@ -2580,6 +2641,7 @@ class _TaskBuilder:
             }
             if task_type is TaskType.CLASSIFICATION:
                 kwargs["label_set"] = self._label_set(row.task_id, row.label_set_id)
+                kwargs["template"] = templates.get(row.task_id)
             elif row.label_set_id is not None:
                 raise TimeFFormatError(
                     f"{task_type} task {row.task_id!r} has a label set, but only a classification task can have one"

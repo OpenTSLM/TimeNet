@@ -39,6 +39,10 @@ class ColumnType(Enum):
         "STRUCT(name VARCHAR, description VARCHAR)[]",
         pa.list_(pa.struct([("name", pa.string()), ("description", pa.string())])),
     )
+    TEMPLATE_OPTION_LIST = (
+        "STRUCT(label VARCHAR, text VARCHAR, pinned BOOLEAN)[]",
+        pa.list_(pa.struct([("label", pa.string()), ("text", pa.string()), ("pinned", pa.bool_())])),
+    )
 
     def __init__(self, sql: str, arrow: pa.DataType) -> None:
         self.sql = sql
@@ -87,6 +91,8 @@ class Table:
     unique: tuple[tuple[str, ...], ...] = ()
     """Column sets that identify one row."""
     foreign_keys: tuple[ForeignKey, ...] = ()
+    added_in_schema_version: int = 3
+    """The first schema version whose databases hold the table. Version 3 is the oldest version that TimeNet reads."""
 
     @property
     def column_names(self) -> tuple[str, ...]:
@@ -387,6 +393,42 @@ TASK_DEPENDENCIES = Table(
     ),
 )
 
+CLASSIFICATION_TEMPLATES = Table(
+    "classification_templates",
+    (
+        _key("classification_template_id"),
+        _required("source"),
+        _required("options", ColumnType.TEMPLATE_OPTION_LIST),
+        Column("key_enumerator", ColumnType.VARCHAR),
+        Column("key_marker_prefix", ColumnType.VARCHAR),
+        Column("key_marker_suffix", ColumnType.VARCHAR),
+        Column("key_reference_prefix", ColumnType.VARCHAR),
+        Column("key_reference_suffix", ColumnType.VARCHAR),
+        _required("allowable_enumerators", ColumnType.VARCHAR_LIST),
+        _required("reproduces_published_prompt", ColumnType.BOOLEAN),
+    ),
+    unique=(("classification_template_id",),),
+    added_in_schema_version=4,
+)
+"""Each row stores one template of classification tasks, with its options.
+
+The ``source`` column holds the Jinja source of the template. The ``options`` column holds one entry per option,
+in the order of the source dataset. The ``text`` of an entry is NULL where the option shows the name of its
+label. The five key columns hold the key style of the options, and all five are NULL if the options have no
+keys. The writer gives each distinct template one id, in the order that tasks first use it."""
+
+TASK_CLASSIFICATION_TEMPLATES = Table(
+    "task_classification_templates",
+    (_key("task_id"), _key("classification_template_id")),
+    unique=(("task_id",),),
+    foreign_keys=(
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("classification_template_id", "classification_templates", "classification_template_id"),
+    ),
+    added_in_schema_version=4,
+)
+"""Each row names the template of one classification task. A task without a row has no template."""
+
 EXTERNAL_OWNER_TABLES: dict[ObjectKind, tuple[str, str]] = {
     ObjectKind.TASK: ("tasks", "task_id"),
     ObjectKind.ANNOTATION_CONTENT: ("annotation_contents", "content_id"),
@@ -455,11 +497,18 @@ CONTROL_TABLES: tuple[Table, ...] = (
     TASK_RECORD_REFS,
     TASK_ANNOTATION_REFS,
     TASK_DEPENDENCIES,
+    CLASSIFICATION_TEMPLATES,
+    TASK_CLASSIFICATION_TEMPLATES,
 )
 """Every control table, in creation order."""
 
 TABLES: dict[str, Table] = {table.name: table for table in CONTROL_TABLES}
 """The control tables by name."""
+
+
+def tables_of_schema_version(schema_version: int) -> tuple[Table, ...]:
+    """Return the control tables that a database of a schema version holds, in creation order."""
+    return tuple(table for table in CONTROL_TABLES if table.added_in_schema_version <= schema_version)
 
 
 def schema_ddl() -> str:
