@@ -21,6 +21,7 @@ for one issuance and simply excludes it, while still failing loudly on any other
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 import re
 
@@ -113,13 +114,21 @@ def _split_for(issued_at: datetime) -> Split | None:
     return None
 
 
-_SECTIONS = ("Solar Activity", "Energetic Particle", "Solar Wind", "Geospace")
+# Marks the start of a section's 24-hour summary; every report has exactly four, always in
+# the fixed ForecastSection order, so the sections are split on this marker rather than on the
+# sometimes-missing header lines.
 _SUMMARY_MARKER = re.compile(r"^\s*\.24 hr Summary\.\.\.\s*\n", re.MULTILINE)
-_FORECAST_MARKER = re.compile(r"\.Forecast\.\.\.\s*\n")
-# NOAA titled the second section "Energetic Particle" in most issues but "Energetic
-# Particles" in others (notably early 2024); both spellings name the same section.
+# A section splits into exactly two parts on its forecast marker: the summary and the forecast.
+_PARTS_PER_SECTION = 2
+# Marks the start of a section's forecast. Line-anchored because the word never appears in prose;
+# the leading dot is missing in some reports, and one report omits the newline after it.
+_FORECAST_MARKER = re.compile(r"^\.?Forecast\.\.\.", re.MULTILINE)
+# A section's title line. NOAA titled the second section "Energetic Particle" in most issues but
+# "Energetic Particles" in others (notably early 2024); both spellings name the same section.
 _SECTION_HEADER = re.compile(r"^(Solar Activity|Energetic Particles?|Solar Wind|Geospace)\s*$", re.MULTILINE)
 
+# Captures NOAA's own numeric predictions from a 3-Day Forecast: the greatest expected 3-hour Kp
+# over the three days, and each day's R1-R2 radio-blackout and S1 radiation-storm percentages.
 _KP_RE = re.compile(r"greatest expected 3 hr Kp for [^\n]*? is ([\d.]+)")
 _R1R2_RE = re.compile(r"\nR1-R2\s+(\d+)%")
 _S1_RE = re.compile(r"\nS1 or greater\s+(\d+)%")
@@ -428,9 +437,15 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
     ) -> None:
         """Create one issuance's answer task and scalar-prediction tasks for ``record``."""
         issued_at, split, discussion_text = prepared.issued_at, prepared.split, prepared.discussion_text
-        summary_text, forecast_text = _parse_discussion(discussion_text)
+        discussion = ForecastDiscussion.from_report_text(discussion_text)
         dataset.add_task(
-            AnswerTask(inputs=[record], prompt=_PROMPT, rationale=summary_text, targets=forecast_text, split=split)
+            AnswerTask(
+                inputs=[record],
+                prompt=_PROMPT,
+                rationale=discussion.summary_text(),
+                targets=discussion.forecast_text(),
+                split=split,
+            )
         )
         numeric = _parse_three_day_forecast(prepared.issuance.forecast_path.read_text())
         scalar_tasks = [
@@ -488,78 +503,86 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         dataset.add_tasks(scalar_tasks)
 
 
-def _section_bounds(text: str, headers: list[re.Match[str]]) -> list[tuple[str, int, int]]:
-    """Resolve each section's ``(name, body_start, body_end)`` span from its header matches.
+class ForecastSection(StrEnum):
+    """The sections of a Forecast Discussion, in report order."""
 
-    Some issues omit the "Solar Activity" header line entirely; the report body still opens
-    directly with its ``.24 hr Summary...`` text, so that case is detected and treated as an
-    implicit first section rather than a malformed report.
-
-    Args:
-        text: The raw Forecast Discussion report text.
-        headers: Every section-header match found in ``text``, in order.
-
-    Returns:
-        One ``(name, body_start, body_end)`` tuple per expected section, in :data:`_SECTIONS` order.
-
-    Raises:
-        TimeNetConnectorError: If the headers found don't match one of the two known shapes.
-    """
-    names = ["Energetic Particle" if h.group(1) == "Energetic Particles" else h.group(1) for h in headers]
-    if names == list(_SECTIONS):
-        bounds = []
-        for index, header in enumerate(headers):
-            end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
-            bounds.append((_SECTIONS[index], header.end(), end))
-        return bounds
-    if names == list(_SECTIONS[1:]):
-        summary_match = _SUMMARY_MARKER.search(text)
-        if summary_match is None or summary_match.start() >= headers[0].start():
-            raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
-        bounds = [("Solar Activity", summary_match.start(), headers[0].start())]
-        for index, header in enumerate(headers):
-            end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
-            bounds.append((_SECTIONS[index + 1], header.end(), end))
-        return bounds
-    if names == list(_SECTIONS[:3]):
-        # The "Geospace" header is sometimes omitted entirely; its content still follows Solar
-        # Wind's forecast as a second, unlabeled ".24 hr Summary.../.Forecast..." cycle.
-        tail_start = headers[2].end()
-        tail_summaries = list(_SUMMARY_MARKER.finditer(text, tail_start))
-        expected_cycles = 2  # Solar Wind's own summary, plus Geospace's unlabeled one
-        if len(tail_summaries) < expected_cycles:
-            raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
-        split_at = tail_summaries[1].start()
-        bounds = []
-        for index, header in enumerate(headers):
-            end = headers[index + 1].start() if index + 1 < len(headers) else split_at
-            bounds.append((_SECTIONS[index], header.end(), end))
-        bounds.append(("Geospace", split_at, len(text)))
-        return bounds
-    raise TimeNetConnectorError(f"expected section headers {list(_SECTIONS)} in order, found {names}")
+    SOLAR_ACTIVITY = "Solar Activity"
+    ENERGETIC_PARTICLE = "Energetic Particle"
+    SOLAR_WIND = "Solar Wind"
+    GEOSPACE = "Geospace"
 
 
-def _parse_discussion(text: str) -> tuple[str, str]:
-    """Split a Forecast Discussion's four sections into a joined summary and a joined forecast.
+@dataclass(frozen=True)
+class SectionReport:
+    """The summary and the forecast of one section of a Forecast Discussion."""
 
-    Args:
-        text: The raw Forecast Discussion report text.
+    section: ForecastSection
+    summary: str
+    forecast: str
 
-    Returns:
-        ``(summary_text, forecast_text)``, each the four sections' matching subsection joined with
-        its section name.
-    """
-    headers = list(_SECTION_HEADER.finditer(text))
-    bounds = _section_bounds(text, headers)
-    summaries, forecasts = [], []
-    for name, start, end in bounds:
-        block = text[start:end]
-        forecast_split = _FORECAST_MARKER.split(block, maxsplit=1)
-        summary_part = _SUMMARY_MARKER.sub("", forecast_split[0], count=1)
-        forecast_part = forecast_split[1] if len(forecast_split) > 1 else ""
-        summaries.append(f"{name}: {summary_part.strip()}")
-        forecasts.append(f"{name}: {forecast_part.strip()}")
-    return "\n\n".join(summaries), "\n\n".join(forecasts)
+    @classmethod
+    def from_section_text(cls, section: "ForecastSection", text: str) -> "SectionReport":
+        """Split one section's text on its forecast marker into summary and forecast.
+
+        Args:
+            section: Which section this text belongs to.
+            text: The section's raw text, with any header lines already removed.
+
+        Returns:
+            The parsed section.
+
+        Raises:
+            TimeNetConnectorError: If the section has no forecast marker. An empty forecast must
+                never silently pass as valid, because the forecast is the task's target.
+        """
+        parts = _FORECAST_MARKER.split(text, maxsplit=1)
+        if len(parts) != _PARTS_PER_SECTION:
+            raise TimeNetConnectorError(f"{section.value}: no '.Forecast...' marker")
+        summary, forecast = parts
+        return cls(section=section, summary=summary.strip(), forecast=forecast.strip())
+
+
+@dataclass(frozen=True)
+class ForecastDiscussion:
+    """The four sections of one Forecast Discussion, in report order."""
+
+    sections: tuple[SectionReport, ...]
+
+    @classmethod
+    def from_report_text(cls, text: str) -> "ForecastDiscussion":
+        """Parse a Forecast Discussion into its four sections.
+
+        Every report has exactly four ".24 hr Summary..." markers, always in the fixed section
+        order, even when individual section header lines are missing. The text is therefore split
+        on the summary markers rather than on the headers, and the headers are only stripped from
+        each resulting block.
+
+        Args:
+            text: The raw Forecast Discussion report text.
+
+        Returns:
+            The parsed discussion.
+
+        Raises:
+            TimeNetConnectorError: If the report does not have exactly four summaries.
+        """
+        _, *blocks = _SUMMARY_MARKER.split(text)
+        if len(blocks) != len(ForecastSection):
+            raise TimeNetConnectorError(f"expected {len(ForecastSection)} summaries, found {len(blocks)}")
+        return cls(
+            sections=tuple(
+                SectionReport.from_section_text(section, _SECTION_HEADER.sub("", block))
+                for section, block in zip(ForecastSection, blocks, strict=True)
+            )
+        )
+
+    def summary_text(self) -> str:
+        """Return the four sections' summaries, each prefixed with its section name."""
+        return "\n\n".join(f"{s.section.value}: {s.summary}" for s in self.sections)
+
+    def forecast_text(self) -> str:
+        """Return the four sections' forecasts, each prefixed with its section name."""
+        return "\n\n".join(f"{s.section.value}: {s.forecast}" for s in self.sections)
 
 
 def _parse_three_day_forecast(text: str) -> dict[str, float]:

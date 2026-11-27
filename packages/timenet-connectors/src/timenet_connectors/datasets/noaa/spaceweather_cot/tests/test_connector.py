@@ -7,12 +7,12 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.types import AnswerTask, ScalarPredictionTask, Split, read_value
 from timenet_connectors.datasets.noaa.spaceweather_cot.connector import (
+    ForecastDiscussion,
     SpaceWeatherCotConnector,
     SpaceWeatherRaw,
     _decode_omni_kp,
     _Issuance,
     _Omni2,
-    _parse_discussion,
     _parse_issued_at,
     _parse_three_day_forecast,
     _read_goes_xray,
@@ -96,16 +96,35 @@ R3 or greater   10%           10%           10%
 
 
 def test_parse_discussion_splits_summary_and_forecast():
-    summary, forecast = _parse_discussion(_DISCUSSION_TEMPLATE)
+    discussion = ForecastDiscussion.from_report_text(_DISCUSSION_TEMPLATE)
+    summary, forecast = discussion.summary_text(), discussion.forecast_text()
     assert "Solar Activity: Only C-class events" in summary
     assert "Geospace: The geomagnetic field ranged from quiet to active" in summary
     assert "Solar Activity: Solar activity is likely to reach moderate levels" in forecast
     assert "Geospace: The geomagnetic field is expected to be at quiet to unsettled" in forecast
 
 
-def test_parse_discussion_rejects_wrong_sections():
-    with pytest.raises(TimeNetConnectorError, match="section headers"):
-        _parse_discussion("Solar Activity\n.24 hr Summary...\nx\n.Forecast...\ny\n")
+def test_parse_discussion_rejects_a_wrong_number_of_summaries():
+    with pytest.raises(TimeNetConnectorError, match="summaries"):
+        ForecastDiscussion.from_report_text("Solar Activity\n.24 hr Summary...\nx\n.Forecast...\ny\n")
+
+
+def test_parse_discussion_rejects_a_section_without_forecast_marker():
+    text = _DISCUSSION_TEMPLATE.replace(".Forecast...", "Forecast missing here", 1)
+    with pytest.raises(TimeNetConnectorError, match="Forecast"):
+        ForecastDiscussion.from_report_text(text)
+
+
+def test_parse_discussion_tolerates_real_marker_variants():
+    # Real archive variants: the forecast marker without its leading dot (8 reports), and the
+    # forecast beginning on the marker's own line (202406250030). Both must still parse.
+    dotted = _DISCUSSION_TEMPLATE.replace(".Forecast...", "Forecast...")
+    inline = _DISCUSSION_TEMPLATE.replace(
+        ".Forecast...\nSolar activity is likely", ".Forecast...Solar activity is likely"
+    )
+    for variant in (dotted, inline):
+        discussion = ForecastDiscussion.from_report_text(variant)
+        assert "Solar activity is likely to reach moderate levels" in discussion.sections[0].forecast
 
 
 def test_parse_three_day_forecast_extracts_numeric_fields():
