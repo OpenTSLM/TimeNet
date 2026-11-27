@@ -22,6 +22,7 @@ from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split
 from timenet_connectors.download import Artifact, download_files
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
 from timenet_connectors.splitting import DatasetSplits, PrecomputedSplitter
+from timenet_connectors.templates import get_default_template_of_label_set
 
 
 SLEEP_COT_URL = "https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R/download"
@@ -45,6 +46,9 @@ SLEEP_STAGE = LabelSet(
     ],
     annotations=[Annotation("name", value="sleep_stage")],
 )
+SLEEP_STAGE_TEMPLATE = get_default_template_of_label_set(SLEEP_STAGE)
+"""The template that every task shares. A task has no prompt, so the template asks for the stage and lists
+the labels."""
 # OpenTSLM converted the microvolts of Sleep-EDF to volts and kept every second sample of 100 Hz.
 EEG = TimeSeriesSpec(spec_type="eeg", name="EEG", unit_value=ureg.volt, dtype="float64")
 SAMPLED_AT_50_HZ = RegularAxis.from_rate_hz(50)
@@ -154,6 +158,7 @@ class SleepCotRow:
             inputs=(record,),
             targets=self.label,
             label_set=SLEEP_STAGE,
+            template=SLEEP_STAGE_TEMPLATE,
             rationale=self.rationale,
             split=split,
         )
