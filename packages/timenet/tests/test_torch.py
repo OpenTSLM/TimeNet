@@ -132,14 +132,17 @@ def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
-    materialized = TimeFTorchDataset(TimeFReader(open_local_version(version_dir)).read())
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        materialized = TimeFTorchDataset(reader.read())
+        expected_batch = materialized.__getitems__([0, 2])
+        (unloaded,) = (task for task in materialized.__getitems__([0])[0]["tasks"] if task.id == answer_id)
     with TimeFReader(open_local_version(version_dir)) as reader:
         lazy = TimeFTorchDataset.from_reader(reader)
         assert len(lazy) == len(materialized) == len(dataset.records)
         batch = lazy.__getitems__([0, 2])
         single = lazy[0]
 
-    for expected, item in zip(materialized.__getitems__([0, 2]), batch, strict=True):
+    for expected, item in zip(expected_batch, batch, strict=True):
         assert item["record_id"] == expected["record_id"]
         assert [task.id for task in item["tasks"]] == sorted(task.id for task in expected["tasks"])
         assert all(torch.equal(a, b) for a, b in zip(item["series"], expected["series"], strict=True))
@@ -148,7 +151,6 @@ def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
     # The batch's records arrive with their values loaded, and its tasks with their text.
     assert all(signal._values.is_loaded for task in batch[0]["tasks"] for signal in task.inputs[0].signals)
     (answer,) = (task for task in batch[0]["tasks"] if task.id == answer_id)
-    (unloaded,) = (task for task in materialized.__getitems__([0])[0]["tasks"] if task.id == answer_id)
     assert answer.prompt is not None
     assert unloaded.prompt is not None
     assert not unloaded.prompt.is_loaded

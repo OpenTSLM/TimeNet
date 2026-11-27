@@ -136,10 +136,13 @@ def test_a_stored_array_pickles_its_reader_and_signal_without_values(stored, arr
 
     back = pickle.loads(pickled)
     assert type(back) is StoredArray
-    assert (back.signal_id, back.spec) == (handle.signal_id, handle.spec)
-    assert back._location == handle._location
-    assert not back.is_loaded
-    assert back.read().equals(expected[signals[0].id])
+    # The restored handle holds a reader of its own, which nothing else closes.
+    assert isinstance(back.reader, TimeFReader)
+    with back.reader:
+        assert (back.signal_id, back.spec) == (handle.signal_id, handle.spec)
+        assert back._location == handle._location
+        assert not back.is_loaded
+        assert back.read().equals(expected[signals[0].id])
     assert len(array_reads) == 2
 
 
