@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+#
+# One panel Record of public oil-market fundamentals on a shared 1920-01-01 origin: EIA survey
+# series (weekly US crude stocks, monthly US crude production, monthly international production by
+# country and region), JODI-Oil crude flows by area, CFTC positioning in WTI futures, the Federal
+# Reserve Board's broad dollar index, and the Caldara-Iacoviello geopolitical risk index. Each
+# EIA Short-Term Energy Outlook publication is its own Record holding that vintage's forward WTI
+# forecast path. The panel carries NO price series: EIA republishes WTI and Brent spot prices and
+# NYMEX settles under licence from Refinitiv (LSEG) and CME, so a companion credentialed dataset,
+# sethlei/oil-fundamentals-prices, fetches those from EIA's API with the user's own key and adds
+# the forecasting tasks. This dataset has no tasks.
+#
+# Values are as revised on the snapshot date (2026-11-11), not point-in-time. Every signal carries
+# publisher, upstream id, cadence, unit label, access date, measured publication lag and citation
+# as annotations. Months are stamped at month start. Missing weekly stock values are declared
+# not_recorded; EIA international "--" entries are not_applicable (country did not exist in the
+# period) or not_recorded (data row initialized), from EIA's own data flag.
+yaml_schema_version: 1
+dataset_id: sethlei/oil-fundamentals
+dataset_version: 1.0.0
+name: Oil fundamentals panel
+description: >-
+  Public oil-market fundamentals as one panel on a shared 1920 origin: EIA weekly US crude stocks
+  (1982-), monthly US crude production (1920-), monthly international petroleum production for 229
+  countries and 35 aggregates (1993-), 268 EIA STEO forecast vintages of WTI (2004-2026, forward
+  months only), JODI-Oil crude production, refinery intake, closing stocks, imports and exports for
+  up to 106 areas (2002-), CFTC disaggregated positioning in WTI futures (2010-), the Federal Reserve
+  Board's nominal broad dollar index (1973-), and the Caldara-Iacoviello geopolitical risk index
+  (1985-). Snapshot of 2026-11-11, latest-revised values. No price series and no tasks: see
+  sethlei/oil-fundamentals-prices, which fetches EIA's licensed spot and futures series with the
+  user's own EIA API key.
+license: OTHER
+license_url: https://huggingface.co/datasets/sethlei/oil-fundamentals/blob/main/SOURCES.md
+source_url: https://huggingface.co/datasets/sethlei/oil-fundamentals
+source_revision: f0a8c82103c17a1e76f518721d59d1654a316bfd
+citation: >-
+  U.S. Energy Information Administration (weekly petroleum status, monthly crude production,
+  international energy statistics, Short-Term Energy Outlook archives), accessed 2026-11-11.
+  International Energy Forum, Joint Organisations Data Initiative (JODI) Oil World Database,
+  www.jodidata.org, accessed 2026-11-11. U.S. Commodity Futures Trading Commission, Commitments of
+  Traders, disaggregated futures only, accessed 2026-11-11. Board of Governors of the Federal
+  Reserve System, Nominal Broad U.S. Dollar Index (DTWEXBGS, DTWEXM), retrieved from FRED, Federal
+  Reserve Bank of St. Louis, 2026-11-11. Caldara, D. and Iacoviello, M. (2022). Measuring
+  Geopolitical Risk. American Economic Review 112(4), 1194-1225; data downloaded from
+  https://www.matteoiacoviello.com/gpr.htm on 2026-11-11.
+access: open
+domains:
+  - energy
+  - economics
+  - finance
+tags:
+  - oil
+  - commodities
+  - fundamentals
+  - macro
+  - forecasting
+  - eia
+  - jodi
+  - cftc
+  - huggingface
