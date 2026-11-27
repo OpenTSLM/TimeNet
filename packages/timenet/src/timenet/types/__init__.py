@@ -28,7 +28,7 @@ from timenet.types.spans import (
     TimeSpan,
 )
 from timenet.types.specs import MissingReason, MissingValues, TimeSeriesSpec
-from timenet.types.splits import Split, parse_split
+from timenet.types.splits import Split
 from timenet.types.tasks import (
     TASKS,
     AnswerTask,
@@ -103,7 +103,6 @@ __all__ = [
     "check_id",
     "normalize_unit",
     "offset_us",
-    "parse_split",
     "read_value",
     "read_values",
     "seconds_to_us",

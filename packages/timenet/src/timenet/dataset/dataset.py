@@ -38,7 +38,7 @@ from timenet.types.ids import IdCounters
 from timenet.types.load_plan import LoadPlan
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
-from timenet.types.splits import Split, parse_split, parse_splits
+from timenet.types.splits import Split, parse_splits
 from timenet.values_backends import ValuesBackend
 
 
@@ -1154,7 +1154,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         if features not in {"timestep", "series"}:
             raise TimeFValidationError(f"features must be 'timestep' or 'series', got {features!r}")
         resolved = task if task is not None else self._infer_target_task()
-        rows, targets = self._rows_and_targets(resolved, None if split is None else parse_split(split))
+        rows, targets = self._rows_and_targets(resolved, None if split is None else Split.from_name(split))
         # Build only the representation that the caller asked for. This skips the Arrow list
         # array on the NumPy path, and skips the concat of every point on the series+NumPy path.
         try:
