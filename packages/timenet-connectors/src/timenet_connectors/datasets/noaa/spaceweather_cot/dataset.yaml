@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: noaa/spaceweather-cot
+dataset_version: 0.1.0
+name: SpaceWeather-CoT
+description: >-
+  NOAA Space Weather Prediction Center Forecast Discussions paired with the solar and
+  geomagnetic time series behind them: GOES-16 X-ray flux (solar flares) and OMNI2 hourly
+  solar-wind and Kp index values. Each record covers one 12-hourly issuance's 24-hour
+  lookback window, anchored to the true issuance time in each report's ":Issued:" header.
+  The forecaster's own "24 hr Summary" text is a grounded, human-written rationale (not an
+  LLM-generated caption) for the forecaster's own "Forecast" text, so the chain-of-thought
+  in this dataset is the real forecast process, not distilled from a language model. The
+  paired 3-Day Forecast product supplies NOAA's own numeric probability forecasts (max Kp,
+  radio blackout and solar radiation storm chances) as scalar targets. Those targets are
+  NOAA's forecasts, not outcomes, so they can only score how well NOAA is imitated; for a
+  true model-vs-NOAA comparison each record also carries the observed outcomes over the 72
+  hours after the issuance (greatest observed Kp, and greatest observed X-ray flux where
+  GOES coverage is complete). Within the X-ray series, only minutes flagged ``good_data``
+  are kept: eclipse minutes read Earth's shadow rather than the Sun, bad-data minutes are
+  instrument noise, and interpolated minutes are NOAA's gap-filling estimates rather than
+  observations, so all three are nulled out (roughly 1-2% eclipse, 1% bad-data and 0.1%
+  interpolated minutes across 2024-2025). Tasks are stratified by time into train (before December
+  2024), validation (December 2024) and test (January 2025 onward) splits with a 3-day
+  forecast-horizon gap at each boundary; issuances inside a gap are left out so no window
+  or forecast period ever straddles two splits. Two honesty notes: OMNI2 and the GOES
+  science files are cleaned products published after the fact, not the real-time data the
+  forecaster worked with, and the inputs do not include the energetic particle fluxes the
+  "Energetic Particle" section and the S1 radiation-storm target are about, so a model
+  cannot learn those from the inputs alone. This 0.1.0 release covers March 2024 through
+  April 6, 2025 (the start of the Forecast Discussion archive through the end of GOES-16
+  science-quality X-ray data; GOES-19 succeeded GOES-16 as the operational primary). Within
+  that range the archive itself is incomplete: NOAA never published discussions for 2024-05-15
+  through 2024-06-16 and 2024-08-31 through 2024-10-09, and two further issuances (2024-08-07
+  12:30, 2025-02-11 12:30) lack their 3-Day Forecast report, so 656 of the 804 nominal slots
+  exist. Every issuance is hash-pinned in the connector's checked-in manifest, so a correction
+  NOAA publishes later fails the build loudly instead of silently changing the dataset.
+license: CC0-1.0
+source_url: https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/discussion/
+domains:
+  - environment
+tags:
+  - space-weather
+  - solar-flares
+  - geomagnetic
+  - forecasting
+  - chain-of-thought
+  - noaa
+  - nasa
