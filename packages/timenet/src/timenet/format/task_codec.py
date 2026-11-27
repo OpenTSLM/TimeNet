@@ -24,6 +24,7 @@ from timenet.types import (
     InputModality,
     LocalizationMode,
     ObjectKind,
+    PromptOptions,
     ScalarPredictionTask,
     Span,
     Split,
@@ -200,6 +201,100 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
         return {"mode": LocalizationMode(columns.get("mode") or LocalizationMode.SPARSE)}
     return {}
+
+
+def encode_prompt_options(task_id: EntityId, prompt_options: PromptOptions) -> dict[str, object]:
+    """Encode the prompt options of a classification task as one ``task_prompt_options`` row.
+
+    Returns:
+        One value per column of the table. The five key columns are ``None`` if the options have no keys.
+    """
+    style = prompt_options.key_style
+    return {
+        "task_id": task_id,
+        "options": [
+            {
+                "label": option.label,
+                "marker_start": None if option.marker is None else option.marker.start,
+                "marker_end": None if option.marker is None else option.marker.end,
+                "text_start": None if option.text is None else option.text.start,
+                "text_end": None if option.text is None else option.text.end,
+                "pinned": option.pinned,
+            }
+            for option in prompt_options.options
+        ],
+        "key_enumerator": None if style is None else style.enumerator.value,
+        "key_marker_prefix": None if style is None else style.marker_prefix,
+        "key_marker_suffix": None if style is None else style.marker_suffix,
+        "key_reference_prefix": None if style is None else style.reference_prefix,
+        "key_reference_suffix": None if style is None else style.reference_suffix,
+        "key_references": [
+            {
+                "option_position": reference.option_position,
+                "span_start": reference.span.start,
+                "span_end": reference.span.end,
+            }
+            for reference in prompt_options.key_references
+        ],
+        "allowable_enumerators": sorted(enumerator.value for enumerator in prompt_options.allowable_enumerators),
+    }
+
+
+def _decode_prompt_span(start: int | None, end: int | None) -> dict[str, int | None] | None:
+    """Decode the start and end columns of a prompt span.
+
+    Returns:
+        The fields of the span, or ``None`` if both columns are NULL.
+    """
+    return None if start is None and end is None else {"start": start, "end": end}
+
+
+def decode_prompt_options(row: Mapping[str, Any]) -> PromptOptions:
+    """Decode one ``task_prompt_options`` row.
+
+    Args:
+        row: The row, by column name.
+
+    Returns:
+        The prompt options of the task.
+
+    Raises:
+        TimeFFormatError: If the stored prompt options are not valid.
+    """
+    style = None
+    if row["key_enumerator"] is not None:
+        style = {
+            "enumerator": row["key_enumerator"],
+            "marker_prefix": row["key_marker_prefix"],
+            "marker_suffix": row["key_marker_suffix"],
+            "reference_prefix": row["key_reference_prefix"],
+            "reference_suffix": row["key_reference_suffix"],
+        }
+    try:
+        return PromptOptions.model_validate(
+            {
+                "options": [
+                    {
+                        "label": option["label"],
+                        "marker": _decode_prompt_span(option["marker_start"], option["marker_end"]),
+                        "text": _decode_prompt_span(option["text_start"], option["text_end"]),
+                        "pinned": option["pinned"],
+                    }
+                    for option in row["options"]
+                ],
+                "key_style": style,
+                "key_references": [
+                    {
+                        "option_position": reference["option_position"],
+                        "span": _decode_prompt_span(reference["span_start"], reference["span_end"]),
+                    }
+                    for reference in row["key_references"]
+                ],
+                "allowable_enumerators": row["allowable_enumerators"],
+            }
+        )
+    except ValidationError as exc:
+        raise TimeFFormatError(f"the stored prompt options of task {row['task_id']!r} are not valid: {exc}") from exc
 
 
 def decode_target(  # ruff: ignore[too-many-return-statements] - each target kind has one direct decoding branch

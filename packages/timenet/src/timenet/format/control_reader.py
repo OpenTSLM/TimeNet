@@ -23,7 +23,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -40,6 +40,7 @@ from timenet.format.task_codec import (
     RECORD_FIELDS,
     TaskRelationshipField,
     decode_input_modalities,
+    decode_prompt_options,
     decode_span,
     decode_split,
     decode_target,
@@ -53,6 +54,7 @@ from timenet.types import (
     Label,
     LabelSet,
     MissingValues,
+    PromptOptions,
     Task,
     TaskType,
     TimeInterval,
@@ -591,6 +593,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self.path = Path(path)
         self._fetch = fetch
         self._connection: duckdb.DuckDBPyConnection | None = None
+        self._schema_version = 0
+        """The schema version of the database, which :meth:`_connect` sets."""
         self._open()
         self.external = external
         self._packed_values_stored: bool | None = None
@@ -693,7 +697,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
         try:
-            check_control_schema(connection)
+            self._schema_version = check_control_schema(connection)
         except BaseException:
             connection.close()
             raise
@@ -1891,6 +1895,27 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 raise TimeFFormatError(f"the stored label set {label_set_id!r} is not valid: {exc}") from exc
         return label_sets
 
+    def _read_prompt_options(self, task_ids: list[int] | None) -> dict[int, PromptOptions]:
+        """Read the prompt options of one batch of tasks, or of every task.
+
+        A database of a schema version before the ``task_prompt_options`` table holds no prompt options.
+
+        Returns:
+            The prompt options by task ID, for the tasks that have them.
+
+        Raises:
+            TimeFFormatError: If stored prompt options are not valid.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by decode_prompt_options
+        table = TABLES["task_prompt_options"]
+        if self._schema_version < table.added_in_schema_version:
+            return {}
+        where, parameters = self._task_filter(task_ids)
+        columns = ", ".join(table.column_names)
+        # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+        rows = self._query(f"SELECT {columns} FROM {table.name} {where}", parameters)
+        decoded = (dict(zip(table.column_names, row, strict=True)) for row in rows)
+        return {row["task_id"]: decode_prompt_options(row) for row in decoded}
+
     def _target_rows(self, task_ids: list[int] | None) -> list[_TargetRow]:
         """Read the target rows for one batch of tasks, or every task, in task and position order.
 
@@ -2505,6 +2530,7 @@ class _TaskBuilder:
             "task_annotation_refs", "occurrence_id", ANNOTATION_FIELDS, task_ids
         )
         target_rows = reader._target_rows(task_ids)
+        prompt_options = reader._read_prompt_options(task_ids)
         task_annotations: _AnnotationsByOwner = {}
         if self.tasks_annotated:
             task_annotations = reader._read_annotations({ObjectKind.TASK: task_ids})
@@ -2580,6 +2606,7 @@ class _TaskBuilder:
             }
             if task_type is TaskType.CLASSIFICATION:
                 kwargs["label_set"] = self._label_set(row.task_id, row.label_set_id)
+                kwargs["prompt_options"] = prompt_options.get(row.task_id)
             elif row.label_set_id is not None:
                 raise TimeFFormatError(
                     f"{task_type} task {row.task_id!r} has a label set, but only a classification task can have one"

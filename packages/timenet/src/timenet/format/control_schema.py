@@ -39,6 +39,26 @@ class ColumnType(Enum):
         "STRUCT(name VARCHAR, description VARCHAR)[]",
         pa.list_(pa.struct([("name", pa.string()), ("description", pa.string())])),
     )
+    PROMPT_OPTION_LIST = (
+        "STRUCT(label VARCHAR, marker_start BIGINT, marker_end BIGINT, text_start BIGINT, text_end BIGINT, "
+        "pinned BOOLEAN)[]",
+        pa.list_(
+            pa.struct(
+                [
+                    ("label", pa.string()),
+                    ("marker_start", pa.int64()),
+                    ("marker_end", pa.int64()),
+                    ("text_start", pa.int64()),
+                    ("text_end", pa.int64()),
+                    ("pinned", pa.bool_()),
+                ]
+            )
+        ),
+    )
+    KEY_REFERENCE_LIST = (
+        "STRUCT(option_position BIGINT, span_start BIGINT, span_end BIGINT)[]",
+        pa.list_(pa.struct([("option_position", pa.int64()), ("span_start", pa.int64()), ("span_end", pa.int64())])),
+    )
 
     def __init__(self, sql: str, arrow: pa.DataType) -> None:
         self.sql = sql
@@ -87,6 +107,8 @@ class Table:
     unique: tuple[tuple[str, ...], ...] = ()
     """Column sets that identify one row."""
     foreign_keys: tuple[ForeignKey, ...] = ()
+    added_in_schema_version: int = 3
+    """The first schema version whose databases hold the table. Version 3 is the oldest version that TimeNet reads."""
 
     @property
     def column_names(self) -> tuple[str, ...]:
@@ -387,6 +409,31 @@ TASK_DEPENDENCIES = Table(
     ),
 )
 
+TASK_PROMPT_OPTIONS = Table(
+    "task_prompt_options",
+    (
+        _key("task_id"),
+        _required("options", ColumnType.PROMPT_OPTION_LIST),
+        Column("key_enumerator", ColumnType.VARCHAR),
+        Column("key_marker_prefix", ColumnType.VARCHAR),
+        Column("key_marker_suffix", ColumnType.VARCHAR),
+        Column("key_reference_prefix", ColumnType.VARCHAR),
+        Column("key_reference_suffix", ColumnType.VARCHAR),
+        _required("key_references", ColumnType.KEY_REFERENCE_LIST),
+        _required("allowable_enumerators", ColumnType.VARCHAR_LIST),
+    ),
+    unique=(("task_id",),),
+    foreign_keys=(ForeignKey("task_id", "tasks", "task_id"),),
+    added_in_schema_version=4,
+)
+"""Each row stores how the prompt of one classification task shows its options.
+
+A task without a row does not say where its options are. The ``options`` column holds one entry per option, in
+the order of the prompt. An entry names its label of the label set of the task. The start and end columns of an
+entry are positions in the prompt text, and they are NULL where the option has no such span. The five key
+columns hold the key style of the options, and all five are NULL if the options have no keys. The row refers
+to its task by the public task ID and holds no storage ID."""
+
 EXTERNAL_OWNER_TABLES: dict[ObjectKind, tuple[str, str]] = {
     ObjectKind.TASK: ("tasks", "task_id"),
     ObjectKind.ANNOTATION_CONTENT: ("annotation_contents", "content_id"),
@@ -455,11 +502,17 @@ CONTROL_TABLES: tuple[Table, ...] = (
     TASK_RECORD_REFS,
     TASK_ANNOTATION_REFS,
     TASK_DEPENDENCIES,
+    TASK_PROMPT_OPTIONS,
 )
 """Every control table, in creation order."""
 
 TABLES: dict[str, Table] = {table.name: table for table in CONTROL_TABLES}
 """The control tables by name."""
+
+
+def tables_of_schema_version(schema_version: int) -> tuple[Table, ...]:
+    """Return the control tables that a database of a schema version holds, in creation order."""
+    return tuple(table for table in CONTROL_TABLES if table.added_in_schema_version <= schema_version)
 
 
 def schema_ddl() -> str:

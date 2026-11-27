@@ -33,7 +33,12 @@ from timenet.format.stored_values import (
     offsets_digest,
 )
 from timenet.format.table_writer import insert_rows
-from timenet.format.task_codec import TaskRelationshipField, encode_span, encode_task_payload
+from timenet.format.task_codec import (
+    TaskRelationshipField,
+    encode_prompt_options,
+    encode_span,
+    encode_task_payload,
+)
 from timenet.format.task_target_row import TargetValueRow
 from timenet.json import validate_json_value
 from timenet.types import (
@@ -564,6 +569,7 @@ class DuckDBControlWriter:
             task_rows: list[dict[str, object]] = []
             target_rows: list[dict[str, object]] = []
             record_ref_rows: list[dict[str, object]] = []
+            prompt_option_rows: list[dict[str, object]] = []
             for task in batch:
                 TimeFDataset._check_record_refs(task, index)
                 TimeFDataset._check_signal_refs(task, index)
@@ -601,10 +607,7 @@ class DuckDBControlWriter:
                     for position, target in enumerate(task.targets or ())
                 )
                 if isinstance(task, ClassificationTask) and task.prompt_options is not None:
-                    # Without this check, the prompt options would be lost on a write without an error.
-                    raise TimeFValidationError(
-                        f"task {task_id!r} has prompt options, and TimeF has no table for prompt options yet"
-                    )
+                    prompt_option_rows.append(encode_prompt_options(task_id, task.prompt_options))
                 annotations.extend((ObjectKind.TASK, task_id, annotation) for annotation in task.annotations)
                 for field, records in self._task_record_refs(task):
                     for position, record_id in enumerate(records):
@@ -624,6 +627,7 @@ class DuckDBControlWriter:
             insert_rows(connection, TABLES["tasks"], task_rows)
             insert_rows(connection, TABLES["task_targets"], target_rows)
             insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
+            insert_rows(connection, TABLES["task_prompt_options"], prompt_option_rows)
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
         # Tasks refer to a label set by its id, so the sets can follow the tasks that use them.

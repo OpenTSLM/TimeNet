@@ -65,6 +65,7 @@ Signals can reference the same immutable `TimeAxis`. See
 | `task_record_refs` | Ordered task-to-record object relationships. |
 | `task_annotation_refs` | Ordered task-to-annotation occurrence relationships. |
 | `task_dependencies` | Ordered task derivation relationships. |
+| `task_prompt_options` | How the prompt of a classification task shows its options, one row per task. |
 | `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
 | `annotation_occurrences` | One attachment of content to an object, with its span. |
 | `signal_chunks` | Payload source and locations of Signal values in Parquet or Zarr. |
@@ -203,6 +204,18 @@ The annotations of a set are rows of `annotation_occurrences` with `object_type`
 
 The `labels` field holds one `{name, description}` entry per label, in the label order of the first
 equal set that the writer meets. If a label has no description, its `description` is `NULL`.
+
+A classification task can say how its prompt shows its options. Such a task has one row in
+`task_prompt_options`, with the task ID as its key. The `options` field holds one entry per option,
+in the order of the prompt: its `label`, the start and end of its marker and of its text in the
+prompt, and `pinned`. A start and an end are positions in the prompt text, and they are `NULL` where
+the option has no such span. The five `key_*` columns hold the key style, and all five are `NULL`
+if the options have no keys. `key_references` holds the other places in the prompt that name a key.
+`allowable_enumerators` holds the enumerators that can replace the enumerator of the key style.
+
+Control schema version 4 adds this table. TimeNet still reads version 3, and a task of such a
+release has no prompt options. A TimeNet that reads only version 3 does not read a version 4
+release.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores entity IDs directly: `record_id` for a Record, `signal_id` for a
