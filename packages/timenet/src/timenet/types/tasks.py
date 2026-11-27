@@ -5,6 +5,7 @@ from copy import copy as shallow_copy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from functools import lru_cache
+import random
 from typing import TYPE_CHECKING, ClassVar, Self, TypeAlias, TypeGuard, TypeVar, cast, final
 
 import pint
@@ -13,6 +14,7 @@ from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._fields import TupleField, ValueField, as_tuple
 from timenet.types.annotations import Annotation, SupportsAnnotate, _copy_annotation, value_type_of
+from timenet.types.classification_templates import ClassificationTemplate, OptionPresentation
 from timenet.types.ids import EntityId, assigned_id
 from timenet.types.label_sets import LabelSet
 from timenet.types.modalities import InputModality
@@ -374,21 +376,31 @@ class ClassificationTask(Task):
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
     label_set: LabelSet
     """The allowed labels and whether a target can contain more than one label."""
+    template: ClassificationTemplate | None = None
+    """A template that writes the prompt and the answer of the task, with its options. ``None`` if the task has none.
+
+    The prompt and the targets of the task stay as the source publishes them. With a template, a consumer can
+    show the options in another order or with other keys (see :meth:`get_option_presentation`)."""
 
     def __post_init__(self) -> None:
         """Set the common fields to their standard form and make sure that the label set has the right type.
 
         Raises:
-            TimeFValidationError: If ``label_set`` is not a LabelSet.
+            TimeFValidationError: If ``label_set`` is not a LabelSet, or ``template`` is neither a
+                ClassificationTemplate nor ``None``.
         """
         super().__post_init__()
         if not isinstance(self.label_set, LabelSet):
             raise TimeFValidationError(
                 f"ClassificationTask label_set must be a LabelSet, got {type(self.label_set).__name__}"
             )
+        if self.template is not None and not isinstance(self.template, ClassificationTemplate):
+            raise TimeFValidationError(
+                f"ClassificationTask template must be a ClassificationTemplate, got {type(self.template).__name__}"
+            )
 
     def check_targets(self) -> None:
-        """Make sure that the target labels follow the rules of the label set.
+        """Make sure that the target labels follow the rules of the label set, and the template fits the task.
 
         The labels come from the targets stored directly on the task or from its target annotations.
         Each label must be text.
@@ -397,20 +409,116 @@ class ClassificationTask(Task):
 
         Raises:
             TimeFValidationError: If a label is not text or the labels break a rule of the label set.
+                Also if the template does not fit the task (see :meth:`check_template`).
         """
-        name = f"ClassificationTask {self.id!r}"
+        labels = self._read_target_labels()
+        try:
+            self.label_set.check_targets(labels)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
+        self.check_template()
+
+    def _read_target_labels(self) -> list[str]:
+        """Read the target labels from the targets of the task or from its target annotations.
+
+        Returns:
+            The labels, in the order that the task stores them.
+
+        Raises:
+            TimeFValidationError: If a label is not text.
+        """
         values = self.targets if self.targets is not None else [one.value for one in self.target_annotations]
         labels: list[str] = []
         for value in values:
             if not isinstance(value, TextHandle):
                 raise TimeFValidationError(
-                    f"{name} has {self.label_set}, so each label must be text, not {type(value).__name__}"
+                    f"ClassificationTask {self.id!r} has {self.label_set}, so each label must be text, "
+                    f"not {type(value).__name__}"
                 )
             labels.append(value.read())
+        return labels
+
+    def check_template(self) -> None:
+        """Make sure that the template fits the label set, the prompt, and the targets of the task.
+
+        These rules apply:
+
+        - Each option of the template stands for a label of the label set, and each target label has an option.
+        - The template can be written with the options and the keys of the source.
+        - If the template says that it reproduces the published prompt, it writes the stored prompt and the
+          stored targets exactly.
+        - If the options have keys, the task has no rationale. A rationale can name a key, and TimeNet does
+          not find such a name.
+
+        Raises:
+            TimeFValidationError: If the template breaks one of these rules.
+        """
+        template = self.template
+        if template is None:
+            return
+        name = f"ClassificationTask {self.id!r}"
+        unknown = sorted(set(template.labels) - set(self.label_set.names))
+        if unknown:
+            raise TimeFValidationError(
+                f"{name} has template options for labels that are not in {self.label_set}: {unknown}"
+            )
+        if template.key_style is not None and self.rationale is not None:
+            raise TimeFValidationError(
+                f"{name} has a rationale, so the options of its template cannot have keys. A rationale can name a key"
+            )
+        targets = self._read_target_labels()
+        prompt = None if self.prompt is None else self.prompt.read()
         try:
-            self.label_set.check_targets(labels)
+            published = template.get_presentation_in_published_form(
+                targets, multi_label=self.label_set.multi_label, prompt=prompt
+            )
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
+        if not template.reproduces_published_prompt:
+            return
+        if published.prompt != prompt:
+            raise TimeFValidationError(
+                f"{name} has a template that says it reproduces the published prompt, but it writes "
+                f"{published.prompt!r} and the stored prompt is {prompt!r}"
+            )
+        if sorted(published.answers) != sorted(targets):
+            raise TimeFValidationError(
+                f"{name} has a template that says it reproduces the published prompt, but it writes the answer "
+                f"{list(published.answers)} and the stored targets are {targets}"
+            )
+
+    def get_option_presentation(self, *, use_shuffled_label_key: bool = True, seed: int = 0) -> OptionPresentation:
+        """Return the prompt and the answer of the task, as a consumer shows them to a model.
+
+        By default, the options are in a random order, and their keys are in a random style of the
+        allowable enumerators. As a result, each key is the correct answer equally often in a dataset.
+        The random choices depend only on ``seed`` and the ID of the task, so the same call gives the
+        same presentation. Pass another seed, for example the number of the epoch, for another one.
+
+        Args:
+            use_shuffled_label_key: If ``False``, the options are in the order of the source and have
+                the keys of the source.
+            seed: The seed of the random choices.
+
+        Returns:
+            The presentation.
+
+        Raises:
+            TimeFValidationError: If the task has no template, or it is not in a dataset and thus has
+                no ID for the random choices.
+        """
+        if self.template is None:
+            raise TimeFValidationError(f"{type(self).__name__} has no template, so it cannot show its options")
+        targets = self._read_target_labels()
+        prompt = None if self.prompt is None else self.prompt.read()
+        multi_label = self.label_set.multi_label
+        if not use_shuffled_label_key:
+            return self.template.get_presentation_in_published_form(targets, multi_label=multi_label, prompt=prompt)
+        # ruff: ignore[suspicious-non-cryptographic-random-usage] - the choices only vary how a prompt is shown
+        rng = random.Random(f"{seed}:{self.id}")
+        return self.template.get_presentation_with_shuffled_label_keys(
+            targets, multi_label=multi_label, prompt=prompt, rng=rng
+        )
 
     def walk_annotations(self) -> Iterator[Annotation]:
         """Yield the annotation occurrences of the task, then those of its label set.

@@ -39,6 +39,15 @@ class ClassificationEnumerator(StrEnum):
     ROMAN_NUMERIC_UPPERCASE = "roman_numeric_uppercase"
     """``I``, ``II``, ``III``. The series has 3999 symbols."""
 
+    @property
+    def noun(self) -> str:
+        """The word for one symbol of the series, for a prompt such as ``Answer with the letter``."""
+        if self in {ClassificationEnumerator.LATIN_UPPERCASE, ClassificationEnumerator.LATIN_LOWERCASE}:
+            return "letter"
+        if self is ClassificationEnumerator.NUMERIC:
+            return "number"
+        return "Roman numeral"
+
     def has_symbols_for_option_count(self, option_count: int) -> bool:
         """Return whether the series has a symbol for each of ``option_count`` options."""
         if self in {ClassificationEnumerator.LATIN_UPPERCASE, ClassificationEnumerator.LATIN_LOWERCASE}:

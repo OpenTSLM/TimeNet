@@ -264,6 +264,119 @@ label set rejects a Python set, because its order changes from one run to the ne
 The stored set gets one integer id, `label_set_id`. In one read, the reader gives tasks that use the
 same set a shared object.
 
+#### Templates
+
+A classification task stores its prompt and its targets as the source publishes them. In several
+datasets one key is the correct answer much more often than the others, so a model can learn the key
+instead of the option. A `template` lets a consumer show the same task with its options in another
+order and with other keys.
+
+A template is written in a small part of the [Jinja](https://jinja.palletsprojects.com/) language.
+It has a `prompt` block and an `answer` block:
+
+```python
+from timenet.types import (
+    ClassificationEnumerator,
+    ClassificationTask,
+    ClassificationTemplate,
+    LabelSet,
+    OptionKeyStyle,
+    PromptTemplate,
+    TemplateOption,
+)
+
+SOURCE = (
+    "{% block prompt %}Which trend?\n"
+    "{% for option in options %}{{ option.marker }} {{ option.text }}\n"
+    "{% endfor %}"
+    'Answer with the {{ key_noun }} ({{ keys | join(" or ") }}).'
+    "{% endblock %}"
+    "{% block answer %}{{ option.key }}{% endblock %}"
+)
+
+task = ClassificationTask(
+    inputs=(record,),
+    prompt="Which trend?\nA: up\nB: down\nAnswer with the letter (A or B).",
+    targets="B",
+    label_set=LabelSet(["A", "B"]),
+    template=ClassificationTemplate(
+        prompt_template=PromptTemplate(source=SOURCE),
+        options=[
+            TemplateOption(label="A", text="up"),
+            TemplateOption(label="B", text="down"),
+        ],
+        key_style=OptionKeyStyle(
+            enumerator=ClassificationEnumerator.LATIN_UPPERCASE,
+            marker_suffix=":",
+        ),
+        reproduces_published_prompt=True,
+    ),
+)
+```
+
+`get_option_presentation()` writes the prompt and the answer from the template:
+
+```python
+shown = task.get_option_presentation()
+shown.prompt
+# For example: 'Which trend?\n1) up\n2) down\nAnswer with the number (1 or 2).'
+shown.answers
+# ('2',)
+
+published = task.get_option_presentation(use_shuffled_label_key=False)
+published.prompt
+# 'Which trend?\nA: up\nB: down\nAnswer with the letter (A or B).'
+published.answers
+# ('B',)
+```
+
+By default the options are in a random order and the keys in a random style. The random choices
+depend only on `seed` and the task ID, so the same call gives the same presentation. Pass another
+seed, for example the number of the epoch, for another one. The task itself does not change.
+
+The `prompt` block writes the text for the model. The `answer` block writes one item of the answer.
+It is written once for each correct option, which it gets as `option`. Both blocks get the same
+facts:
+
+| Fact | Value |
+| --- | --- |
+| `options` | The options in the order in which they are shown. Each has a `label` and a `text`. With keys, each also has a `key`, such as `B`, and a `marker`, such as `B:`. |
+| `keys` | The key of each option, in the same order. Only with keys. |
+| `key_noun` | The word for a key: `letter`, `number`, or `Roman numeral`. Only with keys. |
+| `multi_label` | Whether more than one option can be correct. |
+| `prompt` | The stored prompt of the task. Only if the task has a prompt. |
+
+A template can use values, loops, conditions, blocks and a few filters such as `join`. It cannot call
+a function, set a variable, load another template, or use a random filter. A block inside the
+`prompt` block names one section of the prompt, for example `{% block options %}`.
+
+The `options` of a `ClassificationTemplate` are in the order of the source, and its `key_style` says
+how the source writes a key: the `ClassificationEnumerator` counts the options with Latin letters,
+numbers, or Roman numerals, and the style adds the text before and after the symbol. Set `key_style`
+to `None` for options without keys. A consumer then changes only their order.
+
+Two fields restrict what a consumer can change. Set `pinned=True` on an option that must keep its
+place, such as `None of the above`. Set `allowable_enumerators` if the template fits only some
+enumerators.
+
+When the dataset adds or streams a task, it makes sure that the template fits the task:
+
+- Each option stands for a label of the label set, and each target label has an option.
+- The template can be written with the options and the keys of the source.
+- With `reproduces_published_prompt=True`, the template writes the stored prompt and the stored
+  targets exactly. Set `False` for a template that adds text to the stored prompt, for example a list
+  of the options, and for a task without a prompt.
+- If the options have keys, the task has no rationale. A rationale can name a key, and TimeNet does
+  not find such a name.
+
+`get_label_of_answer()` gives the label of the option that one item of an answer names, so the answer
+of a model can be compared with the target labels:
+
+```python
+shown.get_label_of_answer("2") in ("B",)
+# True
+```
+
 ### Answer and rationale
 
 ```python
