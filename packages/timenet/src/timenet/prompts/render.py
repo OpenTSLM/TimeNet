@@ -1,12 +1,12 @@
 """Render a task with a prompt renderer into model-neutral parts.
 
 A renderer is a subclass of :class:`PromptRenderer`. Its methods get a view of the task, never the task,
-and add text and series to a :class:`Parts` builder.
+and return a :class:`PromptBuilder` with text and series.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, Self, TypeAlias
 
 from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
@@ -54,64 +54,92 @@ class RenderedPrompt:
     target: tuple[Part, ...]
 
 
-class Parts:
-    """Collect the parts that a renderer adds, in order.
+@dataclass(frozen=True)
+class _Series:
+    """A channel that the builder resolves to its window when the prompt is built."""
 
-    Lines of text between two series become one text part. Its lines are joined with line breaks, and
-    the part is stripped. Text that is blank after stripping is left out.
+    channel: ChannelView
+    text: str
+
+
+class PromptBuilder:
+    """Collect the lines of text and the series of one prompt, in order.
+
+    A renderer adds a channel of its view as a reference. :func:`render` swaps each channel for its window.
+    Lines of text between two series become one text part. Its lines are joined with line breaks, and the
+    part is stripped. Text that is blank after stripping is left out.
     """
 
-    def __init__(self, windows: dict[int, Signal]) -> None:
-        self._windows = windows
-        self._parts: list[Part] = []
-        self._lines: list[str] = []
+    def __init__(self) -> None:
+        self._items: list[str | _Series] = []
 
-    def text(self, *lines: str) -> None:
-        """Add lines of text."""
-        self._lines.extend(lines)
+    def text(self, *lines: str) -> Self:
+        """Add lines of text.
 
-    def series(self, channel: ChannelView, text: str = "") -> None:
+        Returns:
+            The builder, so that calls can be chained.
+        """
+        self._items.extend(lines)
+        return self
+
+    def series(self, channel: ChannelView, text: str = "") -> Self:
         """Add a channel's window, with ``text`` if it is not empty.
 
-        Raises:
-            TimeFValidationError: If the channel is not a channel of the view that the renderer got.
+        Returns:
+            The builder, so that calls can be chained.
         """
-        window = self._windows.get(id(channel))
-        if window is None:
-            raise TimeFValidationError("series() takes a channel of the task's view, such as records[0].channels[0]")
-        self._flush()
-        self._parts.append(SeriesTextPart(window, text) if text else SeriesPart(window))
+        self._items.append(_Series(channel, text))
+        return self
 
-    def build(self) -> tuple[Part, ...]:
-        """Return the parts.
+    def build(self, windows: dict[int, Signal]) -> tuple[Part, ...]:
+        """Resolve each channel to its window and return the parts. :func:`render` calls this.
+
+        Args:
+            windows: The window of each channel, by the ``id()`` of its ``ChannelView``.
 
         Returns:
             The parts, in the order that the renderer added them.
-        """
-        self._flush()
-        return tuple(self._parts)
 
-    def _flush(self) -> None:
-        """Turn the pending lines into a text part."""
-        text = "\n".join(self._lines).strip()
-        self._lines = []
-        if text:
-            self._parts.append(TextPart(text))
+        Raises:
+            TimeFValidationError: If a channel is not a channel of the view that the renderer got.
+        """
+        parts: list[Part] = []
+        lines: list[str] = []
+
+        def flush() -> None:
+            text = "\n".join(lines).strip()
+            lines.clear()
+            if text:
+                parts.append(TextPart(text))
+
+        for item in self._items:
+            if isinstance(item, str):
+                lines.append(item)
+                continue
+            window = windows.get(id(item.channel))
+            if window is None:
+                raise TimeFValidationError(
+                    "series() takes a channel of the task's view, such as records[0].channels[0]"
+                )
+            flush()
+            parts.append(SeriesTextPart(window, item.text) if item.text else SeriesPart(window))
+        flush()
+        return tuple(parts)
 
 
 class PromptRenderer(ABC):
-    """A named prompt renderer. A subclass sets ``name`` and adds the parts of each section."""
+    """A named prompt renderer. A subclass sets ``name`` and builds the prompt of each section."""
 
     name: ClassVar[str]
     """The renderer's name. Log it with the installed TimeNet version, which fixes the renderer's text."""
 
     @abstractmethod
-    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add what the model receives. The input view has no targets and no rationale."""
+    def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+        """Build what the model receives. The input view has no targets and no rationale."""
 
     @abstractmethod
-    def add_target(self, view: ClassificationTargetView, parts: Parts) -> None:
-        """Add the expected reply."""
+    def render_target_prompt(self, view: ClassificationTargetView) -> PromptBuilder:
+        """Build the expected reply."""
 
 
 def render_input(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | None = None) -> tuple[Part, ...]:
@@ -149,9 +177,8 @@ def render(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | N
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     task = _classification(task)
     view, input_parts = _render_input(task, renderer, dataset)
-    target_parts = Parts(view.windows)
-    renderer.add_target(build_target_view(task, view.values), target_parts)
-    return RenderedPrompt(input=input_parts, target=target_parts.build())
+    target_parts = renderer.render_target_prompt(build_target_view(task, view.values)).build(view.windows)
+    return RenderedPrompt(input=input_parts, target=target_parts)
 
 
 def _classification(task: Task) -> ClassificationTask:
@@ -174,6 +201,4 @@ def _render_input(
         The view, for the target, and the input parts.
     """
     view = build_input_view(task, dataset)
-    parts = Parts(view.windows)
-    renderer.add_input(view.values, parts)
-    return view, parts.build()
+    return view, renderer.render_input_prompt(view.values).build(view.windows)

@@ -1,6 +1,6 @@
 """Render TimeNet tasks into model-neutral prompts with Python renderers.
 
-A renderer subclasses :class:`PromptRenderer` and adds the parts of the input and of the expected reply. :func:`render_input` renders the input for inference,
+A renderer subclasses :class:`PromptRenderer` and builds the prompt of the input and of the expected reply. :func:`render_input` renders the input for inference,
 and :func:`render` renders the input and the expected reply for training. Both return parts that a model turns
 into its own format.
 """
@@ -14,7 +14,7 @@ from timenet.prompts.defaults import (
 )
 from timenet.prompts.render import (
     Part,
-    Parts,
+    PromptBuilder,
     PromptRenderer,
     RenderedPrompt,
     SeriesPart,
@@ -32,7 +32,7 @@ __all__ = [
     "PROMPT_QUESTION",
     "PROMPT_WITH_OPTIONS",
     "Part",
-    "Parts",
+    "PromptBuilder",
     "PromptRenderer",
     "RenderedPrompt",
     "SeriesPart",

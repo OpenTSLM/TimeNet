@@ -9,7 +9,7 @@ from abc import abstractmethod
 from typing_extensions import override
 
 from timenet.errors import TimeFValidationError
-from timenet.prompts.render import Parts, PromptRenderer
+from timenet.prompts.render import PromptBuilder, PromptRenderer
 from timenet.prompts.views import (
     ChannelView,
     ClassificationInputView,
@@ -24,22 +24,26 @@ def _lines(items: tuple[ContextItem, ...]) -> list[str]:
     return [item.line for item in items]
 
 
-def _series(parts: Parts, channel: ChannelView) -> None:
-    """Add a channel's series with the text of the selected annotations on its Signal."""
-    parts.series(channel, text="\n".join(_lines(channel.context)))
+def _annotation_text(channel: ChannelView) -> str:
+    """Return the selected annotations on a channel's Signal, one per line."""
+    return "\n".join(_lines(channel.context))
 
 
-def _inputs(view: ClassificationInputView, parts: Parts) -> None:
-    """Add Aionic's layout.
+def _inputs(view: ClassificationInputView) -> PromptBuilder:
+    """Start a prompt with Aionic's layout.
 
     Each Record's series come with the text of their annotations, then the Record's other selected
     annotations. The selected annotations outside the input Records come last.
+
+    Returns:
+        The builder.
     """
+    prompt = PromptBuilder()
     for record in view.records:
         for channel in record.channels:
-            _series(parts, channel)
-        parts.text(*_lines(record.context))
-    parts.text(*_lines(view.context))
+            prompt.series(channel, text=_annotation_text(channel))
+        prompt.text(*_lines(record.context))
+    return prompt.text(*_lines(view.context))
 
 
 def _answer(label_set: LabelSetView) -> str:
@@ -76,79 +80,79 @@ def _channel_line(channel: ChannelView) -> str:
 
 
 class _AionicRenderer(PromptRenderer):
-    """Aionic's layout, then a question that each subclass adds, and Aionic's reply."""
+    """Aionic's layout, then a question that each subclass writes, and Aionic's reply."""
 
     @override
-    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add the series and the selected annotations as Aionic does, then the question."""
-        _inputs(view, parts)
-        self.add_question(view, parts)
+    def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+        """Build the series and the selected annotations as Aionic does, then the question."""
+        return _inputs(view).text(*self.question(view))
 
     @abstractmethod
-    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add the question after the inputs."""
+    def question(self, view: ClassificationInputView) -> list[str]:
+        """Return the lines of the question after the inputs."""
 
     @override
-    def add_target(self, view: ClassificationTargetView, parts: Parts) -> None:
-        """Add Aionic's reply: the rationale and an empty line, then one label per line."""
+    def render_target_prompt(self, view: ClassificationTargetView) -> PromptBuilder:
+        """Build Aionic's reply: the rationale and an empty line, then one label per line."""
+        prompt = PromptBuilder()
         if view.rationale is not None:
-            parts.text(view.rationale, "")
-        parts.text(*view.targets)
+            prompt.text(view.rationale, "")
+        return prompt.text(*view.targets)
 
 
 class _LabelQuestion(_AionicRenderer):
     name = "classification-label-question"
 
     @override
-    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add the question from the label set, with the options on one line."""
-        parts.text(f"Which label matches the input? {_options(view.label_set)}")
+    def question(self, view: ClassificationInputView) -> list[str]:
+        """Ask the question from the label set, with the options on one line."""
+        return [f"Which label matches the input? {_options(view.label_set)}"]
 
 
 class _PromptQuestion(_AionicRenderer):
     name = "classification-prompt-question"
 
     @override
-    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add the task's own prompt."""
-        parts.text(_prompt(view))
+    def question(self, view: ClassificationInputView) -> list[str]:
+        """Ask the task's own prompt."""
+        return [_prompt(view)]
 
 
 class _PromptWithOptions(_AionicRenderer):
     name = "classification-prompt-options"
 
     @override
-    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add the task's own prompt, then the options on one line."""
-        parts.text(_prompt(view), _options(view.label_set))
+    def question(self, view: ClassificationInputView) -> list[str]:
+        """Ask the task's own prompt, then give the options on one line."""
+        return [_prompt(view), _options(view.label_set)]
 
 
 class _Described(_AionicRenderer):
     name = "classification-described"
 
     @override
-    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add the window, each Source and channel before its series, the annotations, then the question."""
+    def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+        """Build the window, each Source and channel before its series, the annotations, then the question."""
+        prompt = PromptBuilder()
         if view.window.duration_s:
-            parts.text(f"Input: {view.window.duration_s:g} s window.")
+            prompt.text(f"Input: {view.window.duration_s:g} s window.")
         for record in view.records:
             for source in record.sources:
                 metadata = ", ".join(f"{key}: {value}" for key, value in source.metadata.items())
-                parts.text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
+                prompt.text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
                 for channel in source.channels:
-                    parts.text(_channel_line(channel))
-                    _series(parts, channel)
-            parts.text(*_lines(record.context))
-        parts.text(*_lines(view.context))
-        self.add_question(view, parts)
+                    prompt.text(_channel_line(channel)).series(channel, text=_annotation_text(channel))
+            prompt.text(*_lines(record.context))
+        return prompt.text(*_lines(view.context), *self.question(view))
 
     @override
-    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
-        """Add the question from the label set, with one option per line and its description."""
-        parts.text("Question: Which label matches the input?", "Options:")
-        for label in view.label_set.labels:
-            parts.text(f"- {label.name}" + (f": {label.description}" if label.description else ""))
-        parts.text(_answer(view.label_set))
+    def question(self, view: ClassificationInputView) -> list[str]:
+        """Ask the question from the label set, with one option per line and its description."""
+        options = [
+            f"- {label.name}" + (f": {label.description}" if label.description else "")
+            for label in view.label_set.labels
+        ]
+        return ["Question: Which label matches the input?", "Options:", *options, _answer(view.label_set)]
 
 
 LABEL_QUESTION = _LabelQuestion()

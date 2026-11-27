@@ -106,12 +106,12 @@ aligned.
 
 ## Write a renderer
 
-Subclass `PromptRenderer`, set its `name`, and override `add_input()` and `add_target()`. Each
-method gets a view and a `Parts` builder, and adds text and series to the builder. This renderer
-shows each channel's series, then asks with the options:
+Subclass `PromptRenderer`, set its `name`, and override `render_input_prompt()` and
+`render_target_prompt()`. Each method gets a view and returns a `PromptBuilder` with text and
+series. This renderer shows each channel's series, then asks with the options:
 
 ```python
-from timenet.prompts import Parts, PromptRenderer
+from timenet.prompts import PromptBuilder, PromptRenderer
 from timenet.prompts.views import (
     ClassificationInputView,
     ClassificationTargetView,
@@ -121,26 +121,31 @@ from timenet.prompts.views import (
 class Short(PromptRenderer):
     name = "short"
 
-    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
+    def render_input_prompt(
+        self, view: ClassificationInputView
+    ) -> PromptBuilder:
+        prompt = PromptBuilder()
         for record in view.records:
             for channel in record.channels:
-                parts.series(channel)
-        parts.text(f"Pick one: {view.label_set.options_line}.")
+                prompt.series(channel)
+        return prompt.text(f"Pick one: {view.label_set.options_line}.")
 
-    def add_target(
-        self, view: ClassificationTargetView, parts: Parts
-    ) -> None:
-        parts.text(", ".join(view.targets))
+    def render_target_prompt(
+        self, view: ClassificationTargetView
+    ) -> PromptBuilder:
+        return PromptBuilder().text(", ".join(view.targets))
 ```
 
 Pass an instance, such as `render(task, Short())`.
 
-`Parts` has two methods:
+`PromptBuilder` has two methods. Both return the builder, so calls can be chained:
 
 - `text(*lines)` adds lines of text. All lines between two series become one `TextPart`, joined
   with line breaks and stripped. Blank text is left out.
-- `series(channel, text="")` adds the channel's window as a series part. With `text`, it adds a
-  `SeriesTextPart`. It takes only a channel of the view that the method got.
+- `series(channel, text="")` adds a channel of the view. `render()` replaces it with the channel's
+  window, as a `SeriesPart`, or a `SeriesTextPart` if `text` is not empty. A channel that is not
+  from the view fails with a `TimeFValidationError`.
 
-`add_input()` gets a `ClassificationInputView`, which has no `targets` or `rationale`, so it cannot
-reach the answer. `add_target()` gets a `ClassificationTargetView`, which adds both.
+`render_input_prompt()` gets a `ClassificationInputView`, which has no `targets` or `rationale`,
+so it cannot reach the answer. `render_target_prompt()` gets a `ClassificationTargetView`, which
+adds both.

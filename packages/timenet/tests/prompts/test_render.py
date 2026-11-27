@@ -4,7 +4,7 @@ import pytest
 from typing_extensions import override
 
 from timenet.errors import TimeFValidationError
-from timenet.prompts import Parts, PromptRenderer, SeriesPart, SeriesTextPart, TextPart, render, render_input
+from timenet.prompts import PromptBuilder, PromptRenderer, SeriesPart, SeriesTextPart, TextPart, render, render_input
 from timenet.prompts.views import ClassificationInputView, ClassificationTargetView
 from timenet.testing import make_dataset
 from timenet.types import AnswerTask
@@ -16,21 +16,22 @@ class _Question(PromptRenderer):
     name = "question"
 
     @override
-    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
-        parts.text("Question?")
+    def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+        return PromptBuilder().text("Question?")
 
     @override
-    def add_target(self, view: ClassificationTargetView, parts: Parts) -> None:
-        parts.text(*view.targets)
+    def render_target_prompt(self, view: ClassificationTargetView) -> PromptBuilder:
+        return PromptBuilder().text(*view.targets)
 
 
 def test_series_and_text_parts(capture):
     class Series(_Question):
         @override
-        def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
+        def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+            prompt = PromptBuilder()
             for channel in view.records[0].channels:
-                parts.series(channel, text="\n".join(item.line for item in channel.context))
-            parts.text("Question?")
+                prompt.series(channel, text="\n".join(item.line for item in channel.context))
+            return prompt.text("Question?")
 
     result = render(capture.task, Series())
 
@@ -48,11 +49,9 @@ def test_series_and_text_parts(capture):
 def test_text_between_series_merges_into_one_part(capture):
     class Lines(_Question):
         @override
-        def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
-            parts.text("one", "two")
-            parts.text("  ")
-            parts.series(view.records[0].channels[0])
-            parts.text("", "three", "")
+        def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+            prompt = PromptBuilder().text("one", "two").text("  ")
+            return prompt.series(view.records[0].channels[0]).text("", "three", "")
 
     parts = render_input(capture.task, Lines())
 
@@ -71,8 +70,8 @@ def test_render_input_does_not_read_targets(capture):
 def test_series_needs_a_channel_of_the_view(capture):
     class Copy(_Question):
         @override
-        def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
-            parts.series(replace(view.records[0].channels[0]))
+        def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+            return PromptBuilder().series(replace(view.records[0].channels[0]))
 
     with pytest.raises(TimeFValidationError, match="channel"):
         render_input(capture.task, Copy())
@@ -81,8 +80,8 @@ def test_series_needs_a_channel_of_the_view(capture):
 def test_dataset_card_reaches_the_view(capture):
     class Dataset(_Question):
         @override
-        def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
-            parts.text(view.dataset.name or "")
+        def render_input_prompt(self, view: ClassificationInputView) -> PromptBuilder:
+            return PromptBuilder().text(view.dataset.name or "")
 
     assert render_input(capture.task, Dataset(), dataset=make_dataset().metadata) == (TextPart("Hello World"),)
 
