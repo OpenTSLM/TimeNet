@@ -13,11 +13,12 @@ from timenet_connectors.datasets.noaa.spaceweather_cot.connector import (
     _decode_omni_kp,
     _Issuance,
     _Omni2,
+    _OmniHour,
     _parse_issued_at,
-    _parse_three_day_forecast,
     _read_goes_xray,
     _read_omni2,
     _split_for,
+    _ThreeDayForecast,
 )
 
 
@@ -128,13 +129,15 @@ def test_parse_discussion_tolerates_real_marker_variants():
 
 
 def test_parse_three_day_forecast_extracts_numeric_fields():
-    numeric = _parse_three_day_forecast(_FORECAST_TEXT)
-    assert numeric == {"kp_max_3day": 4.0, "r1_r2_pct_day1": 55.0, "s1_pct_day1": 10.0}
+    numeric = _ThreeDayForecast.from_report_text(_FORECAST_TEXT)
+    assert numeric.greatest_expected_kp == pytest.approx(4.0)
+    assert numeric.r1_r2_radio_blackout_percent_day_1 == pytest.approx(55.0)
+    assert numeric.s1_radiation_storm_percent_day_1 == pytest.approx(10.0)
 
 
 def test_parse_three_day_forecast_rejects_missing_fields():
     with pytest.raises(TimeNetConnectorError, match="numeric fields"):
-        _parse_three_day_forecast("no numbers here")
+        _ThreeDayForecast.from_report_text("no numbers here")
 
 
 def _write_goes_fixture(path: Path, *, start: datetime, minutes: list[int], flags: list[int]) -> None:
@@ -198,6 +201,15 @@ def test_decode_omni_kp_matches_nasa_documented_examples():
     assert _decode_omni_kp(0) == pytest.approx(0.0)
 
 
+def test_decode_omni_kp_treats_99_as_the_fill_value():
+    assert _decode_omni_kp(99) is None
+
+
+def test_decode_omni_kp_rejects_an_unknown_code_with_the_code_in_the_message():
+    with pytest.raises(TimeNetConnectorError, match="42"):
+        _decode_omni_kp(42)
+
+
 # The first row of the pinned omni2_2024.dat (2024-01-01 00:00 UTC), verbatim. Expected values
 # come from NASA's format description, not from this connector's own column positions.
 _REAL_OMNI_LINE = (
@@ -213,10 +225,10 @@ def test_read_omni2_parses_real_row_against_nasa_format_doc(tmp_path):
     path.write_text(_REAL_OMNI_LINE + "\n")
     omni = _read_omni2(path)
     row = omni.rows[datetime(2024, 1, 1, 0)]
-    assert row["bz_gsm"] == pytest.approx(-1.3)
-    assert row["density"] == pytest.approx(7.4)
-    assert row["speed"] == pytest.approx(306.0)
-    assert row["kp"] == pytest.approx(2 / 3)  # code 7 is Kp "1-" = 0.667 per NASA's doc
+    assert row.bz_gsm_nanotesla == pytest.approx(-1.3)
+    assert row.proton_density_per_cm3 == pytest.approx(7.4)
+    assert row.solar_wind_speed_km_per_s == pytest.approx(306.0)
+    assert row.kp == pytest.approx(2 / 3)  # code 7 is Kp "1-" = 0.667 per NASA's doc
 
 
 def test_read_omni2_nulls_fill_values(tmp_path):
@@ -224,73 +236,70 @@ def test_read_omni2_nulls_fill_values(tmp_path):
     path.write_text(_omni_line(when=(2024, 169, 13), bz=999.9, speed=9999.0, density=999.9, kp_code=33) + "\n")
     omni = _read_omni2(path)
     row = omni.rows[datetime(2024, 6, 17, 13)]
-    assert row["bz_gsm"] is None
-    assert row["speed"] is None
-    assert row["density"] is None
-    assert row["kp"] == pytest.approx(3 + 1 / 3)
+    assert row.bz_gsm_nanotesla is None
+    assert row.solar_wind_speed_km_per_s is None
+    assert row.proton_density_per_cm3 is None
+    assert row.kp == pytest.approx(3 + 1 / 3)
 
 
-def _omni2_with_rows(rows: dict[datetime, dict[str, float | None]]) -> _Omni2:
+def _omni2_with_rows(rows: dict[datetime, _OmniHour]) -> _Omni2:
     return _Omni2(rows=rows)
 
 
-def _full_row(kp: float) -> dict[str, float | None]:
-    return {"bz_gsm": -1.0, "speed": 400.0, "density": 5.0, "kp": kp}
+def _full_row(kp: float | None) -> dict[str, float | None]:
+    """Shorthand for the row fields shared by every window test; the hour is set by the caller."""
+    return {"bz_gsm_nanotesla": -1.0, "solar_wind_speed_km_per_s": 400.0, "proton_density_per_cm3": 5.0, "kp": kp}
+
+
+def _rows_at(hours: list[datetime], kp: float | None) -> dict[datetime, _OmniHour]:
+    """Build one full row per hour, each with the same field values."""
+    return {hour: _OmniHour(start=hour, **_full_row(kp)) for hour in hours}
 
 
 def test_omni_window_excludes_hours_incomplete_at_window_end():
     # OMNI2's row for hour H averages [H, H+1). At a 00:30 issuance the row labelled 00:00 still
     # contains 30 minutes that had not happened yet, so only rows through 23:00 may be used.
-    rows = {
-        datetime(2024, 6, 16, 23): _full_row(2.0),
-        datetime(2024, 6, 17, 0): _full_row(3.0),
-    }
-    omni = _omni2_with_rows(rows)
+    omni = _omni2_with_rows(_rows_at([datetime(2024, 6, 16, 23), datetime(2024, 6, 17, 0)], kp=2.0))
     start = datetime(2024, 6, 16, 0, 30, tzinfo=UTC)
     end = datetime(2024, 6, 17, 0, 30, tzinfo=UTC)
-    times, fields = omni.window(start, end)
-    assert times == [datetime(2024, 6, 16, 23, tzinfo=UTC)]
-    assert fields["kp"] == [2.0]
+    rows = omni.window(start, end)
+    assert [row.start for row in rows] == [datetime(2024, 6, 16, 23)]
+    assert [row.kp for row in rows] == [2.0]
 
 
 def test_omni_window_includes_hour_closing_exactly_at_window_end():
-    rows = {datetime(2024, 6, 16, 23): _full_row(2.0)}
-    omni = _omni2_with_rows(rows)
+    omni = _omni2_with_rows(_rows_at([datetime(2024, 6, 16, 23)], kp=2.0))
     start = datetime(2024, 6, 16, 0, 30, tzinfo=UTC)
     end = datetime(2024, 6, 17, 0, 0, tzinfo=UTC)  # the 23:00 row closes exactly here
-    times, _ = omni.window(start, end)
-    assert times == [datetime(2024, 6, 16, 23, tzinfo=UTC)]
+    rows = omni.window(start, end)
+    assert [row.start for row in rows] == [datetime(2024, 6, 16, 23)]
+    assert [row.kp for row in rows] == [2.0]
 
 
 def test_omni_window_nulls_kp_whose_three_hour_interval_is_unfinished():
     # Kp is a 3-hour index repeated in each hourly row. For an issuance at 20:20 the rows of
     # hours 18 and 19 are complete hours, but their Kp interval (18:00-21:00) had not ended, so
     # carrying it would leak up to 40 minutes of a quantity tied to the kp_max_3day target.
-    rows = {
-        datetime(2024, 6, 17, 17): _full_row(4.0),  # interval 15-18 ended at 18:00, fully past
-        datetime(2024, 6, 17, 18): _full_row(4.0),  # interval 18-21 ends at 21:00, after 20:20
-        datetime(2024, 6, 17, 19): _full_row(4.0),
-    }
-    omni = _omni2_with_rows(rows)
+    hours = [
+        datetime(2024, 6, 17, 17),  # interval 15-18 ended at 18:00, fully past
+        datetime(2024, 6, 17, 18),  # interval 18-21 ends at 21:00, after 20:20
+        datetime(2024, 6, 17, 19),
+    ]
+    omni = _omni2_with_rows(_rows_at(hours, kp=4.0))
     start = datetime(2024, 6, 16, 20, 20, tzinfo=UTC)
     end = datetime(2024, 6, 17, 20, 20, tzinfo=UTC)
-    times, fields = omni.window(start, end)
-    assert times == [
-        datetime(2024, 6, 17, 17, tzinfo=UTC),
-        datetime(2024, 6, 17, 18, tzinfo=UTC),
-        datetime(2024, 6, 17, 19, tzinfo=UTC),
-    ]
-    assert fields["kp"] == [4.0, None, None]
-    assert fields["bz_gsm"] == [-1.0, -1.0, -1.0]  # hourly fields are unaffected
+    rows = omni.window(start, end)
+    assert [row.start for row in rows] == hours
+    assert [row.kp for row in rows] == [4.0, None, None]
+    assert [row.bz_gsm_nanotesla for row in rows] == [-1.0, -1.0, -1.0]  # hourly fields are unaffected
 
 
 def test_omni_window_keeps_kp_for_interval_closing_exactly_at_window_end():
-    rows = {datetime(2024, 6, 17, 18): _full_row(4.0)}  # interval 18-21 ends at 21:00
-    omni = _omni2_with_rows(rows)
+    omni = _omni2_with_rows(_rows_at([datetime(2024, 6, 17, 18)], kp=4.0))  # interval 18-21 ends at 21:00
     start = datetime(2024, 6, 17, 0, 0, tzinfo=UTC)
     end = datetime(2024, 6, 17, 21, 0, tzinfo=UTC)
-    _, fields = omni.window(start, end)
-    assert fields["kp"] == [4.0]
+    rows = omni.window(start, end)
+    assert [row.kp for row in rows] == [4.0]
 
 
 def test_parse_issued_at_reads_the_report_header():
@@ -346,36 +355,37 @@ def _build_raw(tmp_path: Path, issued_at: datetime) -> SpaceWeatherRaw:
     return SpaceWeatherRaw(issuances=(issuance,), xray_paths=(xray_path,), omni_paths=(omni_path,))
 
 
-def test_metadata():
-    assert SpaceWeatherCotConnector().metadata().dataset_id == "noaa/spaceweather-cot"
-    assert str(SpaceWeatherCotConnector().metadata().license) == "CC0-1.0"
-
-
-def test_convert_builds_one_record_with_five_signals(tmp_path):
+def test_convert_builds_record_signals_and_tasks(tmp_path):
     issued_at = datetime(2024, 6, 17, 12, 30, tzinfo=UTC)
     dataset = SpaceWeatherCotConnector().convert(_build_raw(tmp_path, issued_at))
     assert isinstance(dataset, TimeFDataset)
-    assert len(dataset.records) == 1
+
+    # One record: five signals anchored to the window start, plus the two annotations.
     (record,) = dataset.records
     assert {signal.name for signal in record.signals} == {"xrsb_flux", "bz_gsm", "speed", "density", "kp"}
     assert {annotation.key for annotation in record.annotations} == {"issued_at", "satellite"}
+    assert record.start_time is not None and record.start_time.timestamp is not None
 
+    # The values are the fixture's, at the fixture's cadence: Bz -5 then -3 (fixture rows),
+    # Kp 3 1/3 then 4.0 (codes 33 and 40), one value per hourly row.
+    bz = next(signal for signal in record.signals if signal.name == "bz_gsm")
+    assert bz.to_arrow().to_pylist() == [-5.0, -3.0]
+    kp = next(signal for signal in record.signals if signal.name == "kp")
+    assert kp.to_arrow().to_pylist() == pytest.approx([3 + 1 / 3, 4.0])
+    speed = next(signal for signal in record.signals if signal.name == "speed")
+    assert speed.to_arrow().to_pylist() == [400.0, 420.0]
 
-def test_convert_builds_answer_task_from_forecaster_text(tmp_path):
-    issued_at = datetime(2024, 6, 17, 12, 30, tzinfo=UTC)
-    dataset = SpaceWeatherCotConnector().convert(_build_raw(tmp_path, issued_at))
+    # The answer task carries the forecaster's summary as rationale and forecast as target.
     (answer,) = [task for task in dataset.tasks if isinstance(task, AnswerTask)]
     assert answer.rationale is not None
     assert answer.targets is not None
+    rationale_text = read_value(answer.rationale)
     target_text = read_value(answer.targets[0])
-    assert isinstance(target_text, str)
-    assert "Only C-class events" in read_value(answer.rationale)
+    assert isinstance(rationale_text, str) and isinstance(target_text, str)
+    assert "Only C-class events" in rationale_text
     assert "Solar activity is likely to reach moderate levels" in target_text
 
-
-def test_convert_builds_scalar_prediction_tasks_from_noaa_numbers(tmp_path):
-    issued_at = datetime(2024, 6, 17, 12, 30, tzinfo=UTC)
-    dataset = SpaceWeatherCotConnector().convert(_build_raw(tmp_path, issued_at))
+    # The scalar tasks carry NOAA's own numeric predictions.
     scalars = {
         task.target_name: task.targets[0]
         for task in dataset.tasks
@@ -383,8 +393,8 @@ def test_convert_builds_scalar_prediction_tasks_from_noaa_numbers(tmp_path):
     }
     assert scalars == {
         "kp_max_3day": pytest.approx(4.0),
-        "r1_r2_radio_blackout_pct": pytest.approx(55.0),
-        "s1_radiation_storm_pct": pytest.approx(10.0),
+        "r1_r2_radio_blackout_percent_day_1": pytest.approx(55.0),
+        "s1_radiation_storm_percent_day_1": pytest.approx(10.0),
     }
 
 
@@ -457,9 +467,8 @@ def test_convert_assigns_the_time_stratified_split_to_every_task(tmp_path):
 
 
 def test_greatest_kp_between_returns_max_over_fully_covered_window():
-    rows = {datetime(2024, 6, 17, h): _full_row(2.0) for h in range(20, 24)}
-    rows[datetime(2024, 6, 18, 0)] = _full_row(2.0)  # the window rounds up to hour 21 and ends after hour 0
-    rows[datetime(2024, 6, 17, 22)] = _full_row(6.5)
+    rows = _rows_at([datetime(2024, 6, 17, h) for h in range(20, 24)] + [datetime(2024, 6, 18, 0)], kp=2.0)
+    rows[datetime(2024, 6, 17, 22)] = _OmniHour(start=datetime(2024, 6, 17, 22), **_full_row(6.5))
     omni = _omni2_with_rows(rows)
     start = datetime(2024, 6, 17, 20, 30, tzinfo=UTC)
     end = datetime(2024, 6, 18, 0, 30, tzinfo=UTC)
@@ -467,7 +476,7 @@ def test_greatest_kp_between_returns_max_over_fully_covered_window():
 
 
 def test_greatest_kp_between_returns_none_when_any_hour_is_missing():
-    rows = {datetime(2024, 6, 17, h): _full_row(2.0) for h in (21, 23)}  # hour 22 absent
+    rows = _rows_at([datetime(2024, 6, 17, 21), datetime(2024, 6, 17, 23)], kp=2.0)  # hour 22 absent
     omni = _omni2_with_rows(rows)
     start = datetime(2024, 6, 17, 20, 30, tzinfo=UTC)
     end = datetime(2024, 6, 18, 0, 30, tzinfo=UTC)

@@ -19,7 +19,7 @@ for one issuance and simply excludes it, while still failing loudly on any other
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from fractions import Fraction
@@ -198,6 +198,8 @@ _KP_NOT_CLOSED = MissingValues(
         " leaked from the future"
     ),
 )
+# Kp is a 3-hour index, so three consecutive hourly rows always carry the same value; it is
+# repeated rather than interpolated, and the series cadence stays hourly like the other OMNI fields.
 _KP_SPEC = TimeSeriesSpec(
     spec_type="omni_kp", name="Planetary Kp index", unit_value=ureg.dimensionless, missing=_KP_NOT_CLOSED
 )
@@ -321,8 +323,7 @@ async def _fetch_issuance(client: httpx.AsyncClient, issued_at: datetime, cache_
 class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
     """Connector for SpaceWeather-CoT (NOAA SWPC Forecast Discussions + GOES X-ray + OMNI2)."""
 
-    @staticmethod
-    async def download_async(cache_dir: Path) -> SpaceWeatherRaw:
+    async def download_async(self, cache_dir: Path) -> SpaceWeatherRaw:  # ruff: ignore[no-self-use]
         """Fetch every pinned year's GOES/OMNI2 archive and every issuance's two report texts.
 
         Args:
@@ -342,7 +343,7 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
             artifacts.append(Artifact(omni_url, omni_paths[year], sha256=omni_sha256))
         await download_files(artifacts)
         semaphore = asyncio.Semaphore(8)
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_HTTP_TIMEOUT_SECONDS), follow_redirects=True) as client:
 
             async def bounded(issued_at: datetime) -> _Issuance | None:
                 async with semaphore:
@@ -407,23 +408,39 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         issued_at = prepared.issued_at
         window_start = issued_at - _LOOKBACK
         xray_times, xray_values = xray.window(window_start, issued_at)
-        omni_times, omni_fields = omni.window(window_start, issued_at)
-        if xray_times.size == 0 or not omni_times:
+        omni_rows = omni.window(window_start, issued_at)
+        if xray_times.size == 0 or not omni_rows:
             raise TimeNetConnectorError("no GOES or OMNI2 samples fall in this issuance's 24-hour lookback window")
 
         xray_moments = [moment.replace(tzinfo=UTC) for moment in xray_times.astype("datetime64[us]").astype(object)]
         xray_offsets = time_offsets_from_datetimes(xray_moments, start_time=window_start)
-        omni_offsets = time_offsets_from_datetimes(omni_times, start_time=window_start)
+        omni_offsets = time_offsets_from_datetimes(
+            [row.start.replace(tzinfo=UTC) for row in omni_rows], start_time=window_start
+        )
         # The data is perfectly regular - GOES publishes exactly one value per minute and OMNI2 one
         # row per hour - so each series is stored on a regular axis, with one cadence instead of one
         # time stamp per value. axis_for_offsets still falls back to an irregular axis if a gap ever
         # breaks the cadence, rather than silently misaligning the values.
         signals = [
             _series(xray_values, np.asarray(xray_offsets), _ONE_MINUTE_US, _XRAY_SPEC, "xrsb_flux"),
-            _series(omni_fields["bz_gsm"], np.asarray(omni_offsets), _ONE_HOUR_US, _BZ_SPEC, "bz_gsm"),
-            _series(omni_fields["speed"], np.asarray(omni_offsets), _ONE_HOUR_US, _SPEED_SPEC, "speed"),
-            _series(omni_fields["density"], np.asarray(omni_offsets), _ONE_HOUR_US, _DENSITY_SPEC, "density"),
-            _series(omni_fields["kp"], np.asarray(omni_offsets), _ONE_HOUR_US, _KP_SPEC, "kp"),
+            _series(
+                [row.bz_gsm_nanotesla for row in omni_rows], np.asarray(omni_offsets), _ONE_HOUR_US, _BZ_SPEC, "bz_gsm"
+            ),
+            _series(
+                [row.solar_wind_speed_km_per_s for row in omni_rows],
+                np.asarray(omni_offsets),
+                _ONE_HOUR_US,
+                _SPEED_SPEC,
+                "speed",
+            ),
+            _series(
+                [row.proton_density_per_cm3 for row in omni_rows],
+                np.asarray(omni_offsets),
+                _ONE_HOUR_US,
+                _DENSITY_SPEC,
+                "density",
+            ),
+            _series([row.kp for row in omni_rows], np.asarray(omni_offsets), _ONE_HOUR_US, _KP_SPEC, "kp"),
         ]
         record = Record(
             start_time=TimeOrigin(timestamp=window_start),
@@ -456,26 +473,26 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
                 split=split,
             )
         )
-        numeric = _parse_three_day_forecast(prepared.issuance.forecast_path.read_text())
+        numeric = _ThreeDayForecast.from_report_text(prepared.issuance.forecast_path.read_text())
         scalar_tasks = [
             ScalarPredictionTask(
                 inputs=[record],
-                targets=numeric["kp_max_3day"],
+                targets=numeric.greatest_expected_kp,
                 target_name="kp_max_3day",
                 unit="dimensionless",
                 split=split,
             ),
             ScalarPredictionTask(
                 inputs=[record],
-                targets=numeric["r1_r2_pct_day1"],
-                target_name="r1_r2_radio_blackout_pct",
+                targets=numeric.r1_r2_radio_blackout_percent_day_1,
+                target_name="r1_r2_radio_blackout_percent_day_1",
                 unit="percent",
                 split=split,
             ),
             ScalarPredictionTask(
                 inputs=[record],
-                targets=numeric["s1_pct_day1"],
-                target_name="s1_radiation_storm_pct",
+                targets=numeric.s1_radiation_storm_percent_day_1,
+                target_name="s1_radiation_storm_percent_day_1",
                 unit="percent",
                 split=split,
             ),
@@ -594,28 +611,42 @@ class ForecastDiscussion:
         return "\n\n".join(f"{s.section.value}: {s.forecast}" for s in self.sections)
 
 
-def _parse_three_day_forecast(text: str) -> dict[str, float]:
-    """Extract NOAA's own numeric 3-day forecast fields.
+@dataclass(frozen=True)
+class _ThreeDayForecast:
+    """NOAA's own numeric predictions from one 3-Day Forecast report.
 
-    Args:
-        text: The raw 3-Day Forecast report text.
-
-    Returns:
-        ``kp_max_3day`` (the greatest expected 3-hour Kp over the next 3 days), ``r1_r2_pct_day1``
-        and ``s1_pct_day1`` (the first forecast day's R1-R2 radio-blackout and S1 radiation-storm
-        percentages).
-
-    Raises:
-        TimeNetConnectorError: If any of the three fields cannot be found.
+    The percentages are the first forecast day's values; the three days' values differ in a
+    fifth of all reports, so the task names say ``day_1`` explicitly.
     """
-    kp_match, r1r2_match, s1_match = _KP_RE.search(text), _R1R2_RE.search(text), _S1_RE.search(text)
-    if not (kp_match and r1r2_match and s1_match):
-        raise TimeNetConnectorError("could not find the expected numeric fields in a 3-Day Forecast report")
-    return {
-        "kp_max_3day": float(kp_match.group(1)),
-        "r1_r2_pct_day1": float(r1r2_match.group(1)),
-        "s1_pct_day1": float(s1_match.group(1)),
-    }
+
+    greatest_expected_kp: float
+    """The greatest expected 3-hour Kp over the three forecast days."""
+    r1_r2_radio_blackout_percent_day_1: float
+    """The first forecast day's R1-R2 radio-blackout probability, in percent."""
+    s1_radiation_storm_percent_day_1: float
+    """The first forecast day's S1-or-greater radiation-storm probability, in percent."""
+
+    @classmethod
+    def from_report_text(cls, text: str) -> "_ThreeDayForecast":
+        """Parse the numeric fields out of a raw 3-Day Forecast report.
+
+        Args:
+            text: The raw report text.
+
+        Returns:
+            The parsed forecast.
+
+        Raises:
+            TimeNetConnectorError: If any of the three fields cannot be found.
+        """
+        kp_match, r1r2_match, s1_match = _KP_RE.search(text), _R1R2_RE.search(text), _S1_RE.search(text)
+        if not (kp_match and r1r2_match and s1_match):
+            raise TimeNetConnectorError("could not find the expected numeric fields in a 3-Day Forecast report")
+        return cls(
+            greatest_expected_kp=float(kp_match.group(1)),
+            r1_r2_radio_blackout_percent_day_1=float(r1r2_match.group(1)),
+            s1_radiation_storm_percent_day_1=float(s1_match.group(1)),
+        )
 
 
 def _series(
@@ -637,6 +668,9 @@ def _series(
         )
     return Signal.from_values(values, time_axis=axis, spec=spec, name=name)
 
+
+_HTTP_TIMEOUT_SECONDS = 60.0
+_SECONDS_PER_MINUTE = 60
 
 # The published cadences: GOES XRS science files carry exactly one value per minute and OMNI2 one
 # row per hour.
@@ -680,7 +714,7 @@ class _GoesXray:
         """
         lo = np.searchsorted(self.times, np.datetime64(start.replace(tzinfo=None)), side="left")
         hi = np.searchsorted(self.times, np.datetime64(end.replace(tzinfo=None)), side="left")
-        expected_minutes = int((end - start).total_seconds() // 60)
+        expected_minutes = int((end - start).total_seconds() // _SECONDS_PER_MINUTE)
         if hi - lo < expected_minutes:
             return None
         values = self.values[lo:hi]
@@ -711,7 +745,7 @@ def _read_goes_xray(path: Path) -> _GoesXray:
         ) from exc
     with netCDF4.Dataset(path) as dataset:
         seconds = np.asarray(dataset.variables["time"][:], dtype="float64")
-        flux = np.asarray(dataset.variables["xrsb_flux"][:], dtype="float32")
+        flux = np.ma.filled(dataset.variables["xrsb_flux"][:], np.nan).astype("float32")
         flag = np.asarray(dataset.variables["xrsb_flag"][:])
     times = (np.datetime64(_GOES_EPOCH.replace(tzinfo=None)) + (seconds * 1_000_000).astype("int64")).astype(
         "datetime64[us]"
@@ -747,6 +781,7 @@ def _merge_goes_xray(readers: list["_GoesXray"]) -> "_GoesXray":
 _OMNI_BZ_GSM_COL, _OMNI_BZ_GSM_FILL = 16, 999.9
 _OMNI_DENSITY_COL, _OMNI_DENSITY_FILL = 23, 999.9
 _OMNI_SPEED_COL, _OMNI_SPEED_FILL = 24, 9999.0
+_OMNI_KP_FILL = 99
 _OMNI_KP_COL = 38  # I3 code: tens digit is the Kp level, ones digit the third. NASA's omni2 format
 # doc: "(e.g. 3+ = 33, 6- = 57, 4 = 40, etc.)". "6-" is 6 minus a third, so a ones digit of 7 means
 # the level rounds UP to the next integer minus one third, i.e. tens + 2/3 — not tens - 1/3.
@@ -754,13 +789,47 @@ _OMNI_KP_THIRDS = {0: 0.0, 3: 1 / 3, 7: 2 / 3}
 
 
 @dataclass(frozen=True)
+class _OmniHour:
+    """One hourly row of OMNI2. A field is ``None`` where OMNI2 reports its fill value."""
+
+    start: datetime  # the hour this row averages, naive UTC: the row covers [start, start + 1h)
+    bz_gsm_nanotesla: float | None
+    solar_wind_speed_km_per_s: float | None
+    proton_density_per_cm3: float | None
+    kp: float | None
+
+    @classmethod
+    def from_line(cls, line: str) -> "_OmniHour":
+        """Parse one whitespace-separated row of an ``omni2_YYYY.dat`` file.
+
+        Args:
+            line: One non-empty row.
+
+        Returns:
+            The row with fill values translated to ``None``.
+        """
+        fields = line.split()
+        year, day_of_year, hour = int(fields[0]), int(fields[1]), int(fields[2])
+        bz = float(fields[_OMNI_BZ_GSM_COL])
+        speed = float(fields[_OMNI_SPEED_COL])
+        density = float(fields[_OMNI_DENSITY_COL])
+        return cls(
+            start=datetime(year, 1, 1) + timedelta(days=day_of_year - 1, hours=hour),
+            bz_gsm_nanotesla=None if bz == _OMNI_BZ_GSM_FILL else bz,
+            solar_wind_speed_km_per_s=None if speed == _OMNI_SPEED_FILL else speed,
+            proton_density_per_cm3=None if density == _OMNI_DENSITY_FILL else density,
+            kp=_decode_omni_kp(int(fields[_OMNI_KP_COL])),
+        )
+
+
+@dataclass(frozen=True)
 class _Omni2:
-    """OMNI2 hourly solar-wind and Kp values, keyed by their hour (naive UTC)."""
+    """OMNI2 hourly solar-wind and Kp rows, keyed by their hour (naive UTC)."""
 
-    rows: dict[datetime, dict[str, float | None]]
+    rows: dict[datetime, _OmniHour]
 
-    def window(self, start: datetime, end: datetime) -> tuple[list[datetime], dict[str, list[float | None]]]:
-        """Return the hourly timestamps and field values fully observed before ``end``.
+    def window(self, start: datetime, end: datetime) -> list[_OmniHour]:
+        """Return the hourly rows fully observed before ``end``.
 
         OMNI2's row for hour H averages the hour [H, H+1), so a row is only usable once its hour
         has closed completely before the window end — otherwise the record would carry measurements
@@ -774,24 +843,21 @@ class _Omni2:
             end: Window end; only hours and Kp intervals closed at or before this moment are used.
 
         Returns:
-            The timestamps (tz-aware UTC) and a ``{field: values}`` mapping, aligned to them.
-            An hour this dataset has no row for is skipped rather than filled in.
+            The rows in hour order. An hour this dataset has no row for is skipped rather
+            than filled in.
         """
         naive_start, naive_end = start.replace(tzinfo=None), end.replace(tzinfo=None)
         hour = naive_start.replace(minute=0, second=0, microsecond=0)
         if hour < naive_start:  # round up to the first hour at or after start, never before it
             hour += timedelta(hours=1)
-        times, fields = [], {"bz_gsm": [], "speed": [], "density": [], "kp": []}
+        rows = []
         while hour + _OMNI_AVERAGING_PERIOD <= naive_end:
             if (row := self.rows.get(hour)) is not None:
-                times.append(hour.replace(tzinfo=UTC))
-                for key, values in fields.items():
-                    if key == "kp" and _kp_interval_end(hour) > naive_end:
-                        values.append(None)
-                    else:
-                        values.append(row[key])
+                if _kp_interval_end(hour) > naive_end:
+                    row = replace(row, kp=None)
+                rows.append(row)
             hour += timedelta(hours=1)
-        return times, fields
+        return rows
 
     def greatest_kp_between(self, start: datetime, end: datetime) -> float | None:
         """Return the greatest Kp observed in ``[start, end)``, or ``None`` if coverage is partial.
@@ -813,9 +879,9 @@ class _Omni2:
         values = []
         while hour < naive_end:
             row = self.rows.get(hour)
-            if row is None or row["kp"] is None:  # a missing hour or value means the outcome is unknown
+            if row is None or row.kp is None:  # a missing hour or value means the outcome is unknown
                 return None
-            values.append(row["kp"])
+            values.append(row.kp)
             hour += timedelta(hours=1)
         if not values:
             return None
@@ -835,9 +901,24 @@ def _kp_interval_end(hour: datetime) -> datetime:
     return interval_start + _KP_INTERVAL
 
 
-def _decode_omni_kp(code: int) -> float:
-    """Decode an OMNI2 Kp code (for example ``33`` -> ``3+`` -> ``3.333``) to a float."""
+def _decode_omni_kp(code: int) -> float | None:
+    """Decode an OMNI2 Kp code (for example ``33`` -> ``3+`` -> ``3.333``) to a float.
+
+    Args:
+        code: The two-digit Kp code: tens digit is the integer level, ones digit the third
+            (0 plain, 3 "+", 7 "-"). ``99`` is OMNI2's fill value for a missing Kp.
+
+    Returns:
+        The decoded Kp, or ``None`` for the fill value.
+
+    Raises:
+        TimeNetConnectorError: If the code is neither a valid Kp code nor the fill value.
+    """
+    if code == _OMNI_KP_FILL:
+        return None
     tens, ones = divmod(code, 10)
+    if ones not in _OMNI_KP_THIRDS:
+        raise TimeNetConnectorError(f"unknown OMNI2 Kp code {code}")
     return tens + _OMNI_KP_THIRDS[ones]
 
 
@@ -850,22 +931,11 @@ def _read_omni2(path: Path) -> _Omni2:
     Returns:
         The parsed rows, keyed by hour.
     """
-    rows: dict[datetime, dict[str, float | None]] = {}
+    rows = {}
     for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        fields = line.split()
-        year, day_of_year, hour = int(fields[0]), int(fields[1]), int(fields[2])
-        moment = datetime(year, 1, 1) + timedelta(days=day_of_year - 1, hours=hour)
-        bz = float(fields[_OMNI_BZ_GSM_COL])
-        speed = float(fields[_OMNI_SPEED_COL])
-        density = float(fields[_OMNI_DENSITY_COL])
-        rows[moment] = {
-            "bz_gsm": None if bz == _OMNI_BZ_GSM_FILL else bz,
-            "speed": None if speed == _OMNI_SPEED_FILL else speed,
-            "density": None if density == _OMNI_DENSITY_FILL else density,
-            "kp": _decode_omni_kp(int(fields[_OMNI_KP_COL])),
-        }
+        if line.strip():
+            row = _OmniHour.from_line(line)
+            rows[row.start] = row
     return _Omni2(rows=rows)
 
 
@@ -878,7 +948,7 @@ def _merge_omni2(readers: list["_Omni2"]) -> "_Omni2":
     Returns:
         The combined reader.
     """
-    rows: dict[datetime, dict[str, float | None]] = {}
+    rows: dict[datetime, _OmniHour] = {}
     for reader in readers:
         rows.update(reader.rows)
     return _Omni2(rows=rows)
