@@ -87,6 +87,14 @@ def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
         # The generation prompt of the release names the answer, so the dataset does not keep it.
         assert task.prompt is None
         assert task.annotations == ()
+        # The shared template asks for the activity, and the answer is the label of the row.
+        published = task.get_option_presentation(use_shuffled_label_key=False)
+        assert published.prompt == (
+            "Which label matches the input? Options: biking, lying, running, sitting, standing, walking, "
+            "walking_down, walking_up. Answer with one label."
+        )
+        assert published.answers == (row["label"],)
+        assert task.get_option_presentation().answers == (row["label"],)
 
 
 @pytest.mark.parametrize(

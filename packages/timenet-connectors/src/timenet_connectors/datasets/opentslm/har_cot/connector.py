@@ -19,6 +19,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import ensure_archive
 from timenet_connectors.sources.readers import CsvDataReader, DataRow
+from timenet_connectors.templates import get_default_template_of_label_set
 
 
 HAR_COT_URL = "https://polybox.ethz.ch/index.php/s/kD74GnMYxn3HBEM/download"
@@ -47,6 +48,9 @@ ACTIVITY = LabelSet(
     ],
     annotations=[Annotation("name", value="activity")],
 )
+ACTIVITY_TEMPLATE = get_default_template_of_label_set(ACTIVITY)
+"""The template that every task shares. A task has no prompt, so the template asks for the activity and
+lists the labels."""
 # The release states no unit. A resting window has a magnitude of about 9.8, which is gravity in m/s².
 ACCELERATION = TimeSeriesSpec(
     spec_type="accelerometer",
@@ -149,6 +153,7 @@ class HarCotRow:
             inputs=(record,),
             targets=self.label,
             label_set=ACTIVITY,
+            template=ACTIVITY_TEMPLATE,
             rationale=self.rationale,
             split=split,
         )
