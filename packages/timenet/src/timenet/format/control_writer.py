@@ -600,6 +600,11 @@ class DuckDBControlWriter:
                     )
                     for position, target in enumerate(task.targets or ())
                 )
+                if isinstance(task, ClassificationTask) and task.template is not None:
+                    # Without this check, the template would be lost on a write without an error.
+                    raise TimeFValidationError(
+                        f"task {task_id!r} has a template, and TimeF has no table for templates yet"
+                    )
                 annotations.extend((ObjectKind.TASK, task_id, annotation) for annotation in task.annotations)
                 for field, records in self._task_record_refs(task):
                     for position, record_id in enumerate(records):

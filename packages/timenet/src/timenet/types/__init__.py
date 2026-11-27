@@ -9,6 +9,7 @@ from timenet.types.annotations import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.types.classification_templates import ClassificationTemplate, OptionPresentation, TemplateOption
 from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, unix_us, us_to_seconds
 from timenet.types.domains import Domain
 from timenet.types.handles import ArrayHandle, ValueHandle
@@ -63,6 +64,7 @@ __all__ = [
     "ArrayHandle",
     "ClassificationEnumerator",
     "ClassificationTask",
+    "ClassificationTemplate",
     "DatasetFilter",
     "DatasetMetadata",
     "DatasetSchema",
@@ -81,6 +83,7 @@ __all__ = [
     "MissingValues",
     "ObjectKind",
     "OptionKeyStyle",
+    "OptionPresentation",
     "PromptTemplate",
     "ScalarPredictionTask",
     "Span",
@@ -95,6 +98,7 @@ __all__ = [
     "TargetItem",
     "Task",
     "TaskType",
+    "TemplateOption",
     "TemporalLocalizationTask",
     "TextHandle",
     "TextListHandle",
