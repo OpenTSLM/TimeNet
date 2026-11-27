@@ -1,0 +1,22 @@
+Data Sampling Rate: 256 Hz
+*************************
+
+Channels in EDF Files:
+**********************
+Channel 1: FP1-F7
+Channel 2: -
+Channel 3: T8-P8
+Channel 4: FZ-CZ
+Channel 5: T8-P8
+
+File Name: chb01_01.edf
+File Start Time: 23:59:50
+File End Time: 24:00:01
+Number of Seizures in File: 0
+
+File Name: chb01_02.edf
+File Start Time: 24:00:04
+File End Time: 24:00:15
+Number of Seizures in File: 1
+Seizure Start Time: 3 seconds
+Seizure End Time: 6 seconds
