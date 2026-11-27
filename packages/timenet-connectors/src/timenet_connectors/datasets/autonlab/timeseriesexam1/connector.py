@@ -6,7 +6,8 @@ Each series becomes a Record.
 
 Each row becomes one :class:`~timenet.types.ClassificationTask`. Its labels are the option texts, and its target is
 the published answer text. The same options are in a different order in different rows, so the order has no meaning
-and the label set is not ordered.
+and the label set is not ordered. The prompt does not print the options. The template of a task lists them after
+the question, in the order of its row. No option refers to another one, so a consumer can show them in another order.
 
 The task metadata holds the other published columns. It is provenance and never model input.
 The prompt is the question alone. The options are the labels of the task, and ``format_hint`` names option
@@ -23,6 +24,7 @@ from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
 from timenet.types import ClassificationTask, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
+from timenet_connectors.templates import get_template_that_lists_options_after_prompt
 
 
 _SPEC = TimeSeriesSpec(
@@ -95,6 +97,7 @@ class TimeSeriesExam1Connector(
                     inputs=inputs,
                     prompt=row.question,
                     label_set=LabelSet(row.options),
+                    template=get_template_that_lists_options_after_prompt(row.options),
                     targets=row.answer,
                     split=Split.TEST,
                     metadata=row.model_dump(exclude=_NOT_METADATA),
