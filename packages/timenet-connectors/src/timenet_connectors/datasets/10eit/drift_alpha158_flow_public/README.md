@@ -1,0 +1,7 @@
+# Public DRIFT Alpha158 replay
+
+Run `timenet-build build 10eit/drift-alpha158-flow-public --local-registry .timenet-registry`. The default isolated build installs the pinned NumPy and pandas dependencies. We verified the full release on Python 3.12 with NumPy 2.5.5 and pandas 2.3.3. The connector fetches Kaggle's fixed S&P 500 daily OHLCV archive (version 613, 266 MB) with anonymous HTTPS and verifies its SHA-256. For offline use, place that same archive under `$DRIFT_ALPHA158_BUNDLE/sp500-kaggle-v613.zip`.
+
+The 98 observations cover all 30 core companies and 11 sectors. Each has a 20-session target, five upstream stocks, a comparison stock and four tasks. There are 156 training, 68 validation and 168 test tasks. Signals come from the public price archive. Structural supervision describes the original frozen DRIFT replay. For every retained observation all seven stocks have matching dated daily returns within 0.00001 of that replay, and the pair winner agrees on independently priced next-close to following-close returns. The other 142 archive records are outside this matched cohort. The factor-level error reported for the original 240 records applies to the separate research-provider release.
+
+The input price archive is listed by its uploader under CC0. No price archive is embedded in this connector. The included observation index contains identifiers, dates and task annotations. The release-wide license is unspecified. [Source snapshot](https://www.kaggle.com/datasets/joebeachcapital/s-and-p500-index-stocks-daily-updated/versions/613)

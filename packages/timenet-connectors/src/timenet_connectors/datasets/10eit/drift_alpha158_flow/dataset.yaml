@@ -1,0 +1,14 @@
+yaml_schema_version: 1
+dataset_id: 10eit/drift-alpha158-flow
+dataset_version: 1.0.0
+name: DRIFT Alpha158 directed stock flows
+description: >-
+  Twenty-session multivariate stock windows across eleven sectors, with 157 named Alpha158-US
+  factors on each target and comparison stock, five upstream stocks, daily returns and four
+  structured financial tasks. Historical splits cover 2018–2022, 2023 and 2024–2025.
+license: NONE
+source_url: https://github.com/jiajhe/DRIFT
+access: restricted
+access_url: https://github.com/jiajhe/DRIFT
+domains: [finance]
+tags: [equities, multivariate, financial-forecasting, question-answering]
