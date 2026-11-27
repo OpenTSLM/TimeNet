@@ -14,19 +14,13 @@ from timenet.prompts.views import (
     ChannelView,
     ClassificationInputView,
     ClassificationTargetView,
-    ContextItem,
     LabelSetView,
 )
 
 
-def _lines(items: tuple[ContextItem, ...]) -> list[str]:
-    """Return each context item as one line, such as ``age_band: 38-52``."""
-    return [item.line for item in items]
-
-
 def _annotation_text(channel: ChannelView) -> str:
     """Return the selected annotations on a channel's Signal, one per line."""
-    return "\n".join(_lines(channel.context))
+    return "\n".join(item.line for item in channel.context)
 
 
 def _inputs(view: ClassificationInputView) -> PromptBuilder:
@@ -42,8 +36,8 @@ def _inputs(view: ClassificationInputView) -> PromptBuilder:
     for record in view.records:
         for channel in record.channels:
             prompt.series(channel, text=_annotation_text(channel))
-        prompt.text(*_lines(record.context))
-    return prompt.text(*_lines(view.context))
+        prompt.text(*(item.line for item in record.context))
+    return prompt.text(*(item.line for item in view.context))
 
 
 def _answer(label_set: LabelSetView) -> str:
@@ -150,8 +144,8 @@ class DescribedRenderer(_AionicRenderer):
                 prompt.text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
                 for channel in source.channels:
                     prompt.text(_channel_line(channel)).series(channel, text=_annotation_text(channel))
-            prompt.text(*_lines(record.context))
-        return prompt.text(*_lines(view.context), *self.question(view))
+            prompt.text(*(item.line for item in record.context))
+        return prompt.text(*(item.line for item in view.context), *self.question(view))
 
     @override
     def question(self, view: ClassificationInputView) -> list[str]:
