@@ -5,6 +5,10 @@ log which text it used. The consumer chooses the renderer: none of them chooses 
 prompt and the question from the label set.
 """
 
+from abc import abstractmethod
+
+from typing_extensions import override
+
 from timenet.errors import TimeFValidationError
 from timenet.prompts.render import Parts, PromptRenderer
 from timenet.prompts.views import (
@@ -52,28 +56,6 @@ def _prompt(view: ClassificationInputView) -> str:
     return view.prompt
 
 
-def _reply(view: ClassificationTargetView, parts: Parts) -> None:
-    """Add Aionic's reply: the rationale and an empty line, then one label per line."""
-    if view.rationale is not None:
-        parts.text(view.rationale, "")
-    parts.text(*view.targets)
-
-
-def _label_question(view: ClassificationInputView, parts: Parts) -> None:
-    _inputs(view, parts)
-    parts.text(f"Which label matches the input? Options: {view.label_set.options_line}. {_answer(view.label_set)}")
-
-
-def _prompt_question(view: ClassificationInputView, parts: Parts) -> None:
-    _inputs(view, parts)
-    parts.text(_prompt(view))
-
-
-def _prompt_with_options(view: ClassificationInputView, parts: Parts) -> None:
-    _inputs(view, parts)
-    parts.text(_prompt(view), f"Options: {view.label_set.options_line}. {_answer(view.label_set)}")
-
-
 def _channel_line(channel: ChannelView) -> str:
     """Describe a channel, such as ``Channel x: Wrist acceleration, unit g, 100 Hz.``."""
     details = [channel.spec_name or channel.spec_type]
@@ -84,36 +66,94 @@ def _channel_line(channel: ChannelView) -> str:
     return f"Channel {channel.name}: {', '.join(details)}."
 
 
-def _described(view: ClassificationInputView, parts: Parts) -> None:
-    if view.window.duration_s:
-        parts.text(f"Input: {view.window.duration_s:g} s window.")
-    for record in view.records:
-        for source in record.sources:
-            metadata = ", ".join(f"{key}: {value}" for key, value in source.metadata.items())
-            parts.text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
-            for channel in source.channels:
-                parts.text(_channel_line(channel))
-                parts.series(channel, text="\n".join(_lines(channel.context)))
-        parts.text(*_lines(record.context))
-    parts.text(*_lines(view.context))
-    parts.text("Question: Which label matches the input?", "Options:")
-    for label in view.label_set.labels:
-        parts.text(f"- {label.name}" + (f": {label.description}" if label.description else ""))
-    parts.text(_answer(view.label_set))
+class _AionicRenderer(PromptRenderer):
+    """Aionic's layout, then a question that each subclass adds, and Aionic's reply."""
+
+    @override
+    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add the series and the selected annotations as Aionic does, then the question."""
+        _inputs(view, parts)
+        self.add_question(view, parts)
+
+    @abstractmethod
+    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add the question after the inputs."""
+
+    @override
+    def add_target(self, view: ClassificationTargetView, parts: Parts) -> None:
+        """Add Aionic's reply: the rationale and an empty line, then one label per line."""
+        if view.rationale is not None:
+            parts.text(view.rationale, "")
+        parts.text(*view.targets)
 
 
-LABEL_QUESTION = PromptRenderer(name="classification-label-question-v1", input=_label_question, target=_reply)
+class _LabelQuestion(_AionicRenderer):
+    name = "classification-label-question-v1"
+
+    @override
+    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add the question from the label set, with the options on one line."""
+        parts.text(f"Which label matches the input? Options: {view.label_set.options_line}. {_answer(view.label_set)}")
+
+
+class _PromptQuestion(_AionicRenderer):
+    name = "classification-prompt-question-v1"
+
+    @override
+    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add the task's own prompt."""
+        parts.text(_prompt(view))
+
+
+class _PromptWithOptions(_AionicRenderer):
+    name = "classification-prompt-options-v1"
+
+    @override
+    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add the task's own prompt, then the options on one line."""
+        parts.text(_prompt(view), f"Options: {view.label_set.options_line}. {_answer(view.label_set)}")
+
+
+class _Described(_AionicRenderer):
+    name = "classification-described-v1"
+
+    @override
+    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add the window, each Source and channel before its series, the annotations, then the question."""
+        if view.window.duration_s:
+            parts.text(f"Input: {view.window.duration_s:g} s window.")
+        for record in view.records:
+            for source in record.sources:
+                metadata = ", ".join(f"{key}: {value}" for key, value in source.metadata.items())
+                parts.text(f"Source: {source.name}" + (f" ({metadata})" if metadata else ""))
+                for channel in source.channels:
+                    parts.text(_channel_line(channel))
+                    parts.series(channel, text="\n".join(_lines(channel.context)))
+            parts.text(*_lines(record.context))
+        parts.text(*_lines(view.context))
+        self.add_question(view, parts)
+
+    @override
+    def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add the question from the label set, with one option per line and its description."""
+        parts.text("Question: Which label matches the input?", "Options:")
+        for label in view.label_set.labels:
+            parts.text(f"- {label.name}" + (f": {label.description}" if label.description else ""))
+        parts.text(_answer(view.label_set))
+
+
+LABEL_QUESTION = _LabelQuestion()
 """Aionic's question from the label set. It ignores the task's own prompt."""
 
-PROMPT_QUESTION = PromptRenderer(name="classification-prompt-question-v1", input=_prompt_question, target=_reply)
+PROMPT_QUESTION = _PromptQuestion()
 """Aionic's use of the task's own prompt as the question. It fails for a task without a prompt."""
 
-PROMPT_WITH_OPTIONS = PromptRenderer(name="classification-prompt-options-v1", input=_prompt_with_options, target=_reply)
+PROMPT_WITH_OPTIONS = _PromptWithOptions()
 """The task's own prompt, then the options. It fails for a task without a prompt."""
 
-DESCRIBED = PromptRenderer(name="classification-described-v1", input=_described, target=_reply)
+DESCRIBED = _Described()
 """The window, each Source and channel with its quantity, unit and rate, then the options with their
 descriptions."""
 
-DEFAULT_RENDERERS = (LABEL_QUESTION, PROMPT_QUESTION, PROMPT_WITH_OPTIONS, DESCRIBED)
+DEFAULT_RENDERERS: tuple[PromptRenderer, ...] = (LABEL_QUESTION, PROMPT_QUESTION, PROMPT_WITH_OPTIONS, DESCRIBED)
 """All default renderers for classification tasks."""

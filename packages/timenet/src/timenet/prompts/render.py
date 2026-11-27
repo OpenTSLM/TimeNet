@@ -1,12 +1,12 @@
 """Render a task with a prompt renderer into model-neutral parts.
 
-A renderer is a pair of Python functions in TimeNet. Each function gets a view of the task, never the task,
-and adds text and series to a :class:`Parts` builder.
+A renderer is a subclass of :class:`PromptRenderer`. Its methods get a view of the task, never the task,
+and add text and series to a :class:`Parts` builder.
 """
 
-from collections.abc import Callable
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TypeAlias, cast
+from typing import ClassVar, TypeAlias, cast
 
 from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
@@ -98,16 +98,19 @@ class Parts:
             self._parts.append(TextPart(text))
 
 
-@dataclass(frozen=True)
-class PromptRenderer:
-    """A named prompt renderer with one function for each section."""
+class PromptRenderer(ABC):
+    """A named prompt renderer. A subclass sets ``name`` and adds the parts of each section."""
 
-    name: str
+    name: ClassVar[str]
     """The renderer's name, with a version such as ``-v1``, so that a training run can log it."""
-    input: Callable[[ClassificationInputView, Parts], None]
-    """Adds what the model receives. It sees only the input view."""
-    target: Callable[[ClassificationTargetView, Parts], None]
-    """Adds the expected reply. It sees the target view."""
+
+    @abstractmethod
+    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
+        """Add what the model receives. The input view has no targets and no rationale."""
+
+    @abstractmethod
+    def add_target(self, view: ClassificationTargetView, parts: Parts) -> None:
+        """Add the expected reply."""
 
 
 def render_input(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | None = None) -> tuple[Part, ...]:
@@ -126,7 +129,7 @@ def render_input(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetada
     """  # ruff: ignore[docstring-extraneous-exception] - raised by build_input_view and the renderer
     view = build_input_view(task, dataset)
     parts = Parts(view.windows)
-    renderer.input(view.values, parts)
+    renderer.add_input(view.values, parts)
     return parts.build()
 
 
@@ -148,6 +151,6 @@ def render(task: Task, renderer: PromptRenderer, *, dataset: DatasetMetadata | N
     # build_input_view accepts only classification tasks.
     target_view = build_target_view(cast("ClassificationTask", task), view.values)
     input_parts, target_parts = Parts(view.windows), Parts(view.windows)
-    renderer.input(view.values, input_parts)
-    renderer.target(target_view, target_parts)
+    renderer.add_input(view.values, input_parts)
+    renderer.add_target(target_view, target_parts)
     return RenderedPrompt(input=input_parts.build(), target=target_parts.build())

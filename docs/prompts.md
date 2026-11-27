@@ -107,34 +107,41 @@ aligned.
 
 ## Write a renderer
 
-A `PromptRenderer` has a `name` and two functions. Each function gets a view and a `Parts`
-builder, and adds text and series to the builder. This renderer shows each channel's series, then
-asks with the options:
+Subclass `PromptRenderer`, set its `name`, and override `add_input()` and `add_target()`. Each
+method gets a view and a `Parts` builder, and adds text and series to the builder. This renderer
+shows each channel's series, then asks with the options:
 
 ```python
-from timenet.prompts import Parts, PromptRenderer, render
+from timenet.prompts import Parts, PromptRenderer
+from timenet.prompts.views import (
+    ClassificationInputView,
+    ClassificationTargetView,
+)
 
 
-def short_input(view, parts: Parts) -> None:
-    for record in view.records:
-        for channel in record.channels:
-            parts.series(channel)
-    parts.text(f"Pick one: {view.label_set.options_line}.")
+class Short(PromptRenderer):
+    name = "short-v1"
 
+    def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
+        for record in view.records:
+            for channel in record.channels:
+                parts.series(channel)
+        parts.text(f"Pick one: {view.label_set.options_line}.")
 
-def short_target(view, parts: Parts) -> None:
-    parts.text(", ".join(view.targets))
-
-
-SHORT = PromptRenderer(name="short-v1", input=short_input, target=short_target)
+    def add_target(
+        self, view: ClassificationTargetView, parts: Parts
+    ) -> None:
+        parts.text(", ".join(view.targets))
 ```
+
+Pass an instance, such as `render(task, Short())`.
 
 `Parts` has two methods:
 
 - `text(*lines)` adds lines of text. All lines between two series become one `TextPart`, joined
   with line breaks and stripped. Blank text is left out.
 - `series(channel, text="")` adds the channel's window as a series part. With `text`, it adds a
-  `SeriesTextPart`. It takes only a channel of the view that the function got.
+  `SeriesTextPart`. It takes only a channel of the view that the method got.
 
-The input function gets a `ClassificationInputView`, which has no `targets` or `rationale`, so it
-cannot reach the answer. The target function gets a `ClassificationTargetView`, which adds both.
+`add_input()` gets a `ClassificationInputView`, which has no `targets` or `rationale`, so it cannot
+reach the answer. `add_target()` gets a `ClassificationTargetView`, which adds both.

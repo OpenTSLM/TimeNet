@@ -1,6 +1,6 @@
 """Render TimeNet tasks into model-neutral prompts with Python renderers.
 
-A renderer has an input function and a target function. :func:`render_input` renders the input for inference,
+A renderer subclasses :class:`PromptRenderer` and adds the parts of the input and of the expected reply. :func:`render_input` renders the input for inference,
 and :func:`render` renders the input and the expected reply for training. Both return parts that a model turns
 into its own format.
 """
