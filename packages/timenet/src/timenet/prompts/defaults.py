@@ -12,12 +12,12 @@ from timenet.prompts.render import PromptTemplate
 # selected annotations, then the selected annotations outside the input Records.
 _INPUTS = """\
 {% for record in records %}
-{% for channel in record.channels %}
+    {% for channel in record.channels %}
 {{ series(channel, text=channel.context | map(attribute="line") | join("\\n")) }}
-{% endfor %}
-{% for item in record.context %}
+    {% endfor %}
+    {% for item in record.context %}
 {{ item.line }}
-{% endfor %}
+    {% endfor %}
 {% endfor %}
 {% for item in context %}
 {{ item.line }}
@@ -68,21 +68,21 @@ DESCRIBED = PromptTemplate(
 Input: {{ "%g" % window.duration_s }} s window.
 {% endif %}
 {% for record in records %}
-{% for source in record.sources %}
+    {% for source in record.sources %}
 Source: {{ source.name }}
-{%- if source.metadata %} ({% for key, value in source.metadata.items() %}{{ key }}: {{ value }}
-{%- if not loop.last %}, {% endif %}{% endfor %}){% endif %}
+        {%- if source.metadata %} ({% for key, value in source.metadata.items() %}{{ key }}: {{ value }}
+            {%- if not loop.last %}, {% endif %}{% endfor %}){% endif %}
 
-{% for channel in source.channels %}
+        {% for channel in source.channels %}
 Channel {{ channel.name }}: {{ channel.spec_name or channel.spec_type }}
-{%- if channel.unit_symbol %}, unit {{ channel.unit_symbol }}{% endif %}
-{%- if channel.sampling_rate_hz %}, {{ channel.sampling_rate_hz }} Hz{% endif %}.
+            {%- if channel.unit_symbol %}, unit {{ channel.unit_symbol }}{% endif %}
+            {%- if channel.sampling_rate_hz %}, {{ channel.sampling_rate_hz }} Hz{% endif %}.
 {{ series(channel, text=channel.context | map(attribute="line") | join("\\n")) }}
-{% endfor %}
-{% endfor %}
-{% for item in record.context %}
+        {% endfor %}
+    {% endfor %}
+    {% for item in record.context %}
 {{ item.line }}
-{% endfor %}
+    {% endfor %}
 {% endfor %}
 {% for item in context %}
 {{ item.line }}
