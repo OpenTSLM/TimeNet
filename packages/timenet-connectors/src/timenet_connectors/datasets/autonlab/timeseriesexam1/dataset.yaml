@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 yaml_schema_version: 1
 dataset_id: autonlab/timeseriesexam1
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: TimeSeriesExam
 description: >-
   TimeSeriesExam is a multiple-choice exam that tests how well a model

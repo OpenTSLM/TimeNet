@@ -6,7 +6,9 @@ Each series becomes a Record.
 
 Each row becomes one :class:`~timenet.types.ClassificationTask`. Its labels are the option texts, and its target is
 the published answer text. The same options are in a different order in different rows, so the order has no meaning
-and the label set is not ordered.
+and the label set is not ordered. The prompt options of a task hold the options in the order of its row. The prompt
+does not print the options, so the prompt options have no spans, and a consumer prints the options. No option refers
+to another one, so a consumer can print them in another order.
 
 The task metadata holds the other published columns. It is provenance and never model input.
 The prompt is the question alone. The options are the labels of the task, and ``format_hint`` names option
@@ -20,7 +22,15 @@ from typing import Self
 from pydantic import model_validator
 
 from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
-from timenet.types import ClassificationTask, LabelSet, Split, TimeSeriesSpec, ureg
+from timenet.types import (
+    ClassificationTask,
+    LabelSet,
+    PromptOption,
+    PromptOptions,
+    Split,
+    TimeSeriesSpec,
+    ureg,
+)
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
@@ -95,6 +105,7 @@ class TimeSeriesExam1Connector(
                     inputs=inputs,
                     prompt=row.question,
                     label_set=LabelSet(row.options),
+                    prompt_options=PromptOptions(options=[PromptOption(label=option) for option in row.options]),
                     targets=row.answer,
                     split=Split.TEST,
                     metadata=row.model_dump(exclude=_NOT_METADATA),
