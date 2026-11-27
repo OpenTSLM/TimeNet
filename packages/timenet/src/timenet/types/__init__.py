@@ -18,6 +18,7 @@ from timenet.types.licenses import License
 from timenet.types.metadata import DatasetFilter, DatasetMetadata, DatasetSchema, ListedRelease
 from timenet.types.modalities import InputModality
 from timenet.types.object_kind import ObjectKind
+from timenet.types.option_keys import ALL_CLASSIFICATION_ENUMERATORS, ClassificationEnumerator, OptionKeyStyle
 from timenet.types.spans import (
     Span,
     StepInterval,
@@ -50,6 +51,7 @@ from timenet.types.version import Version
 
 
 __all__ = [
+    "ALL_CLASSIFICATION_ENUMERATORS",
     "TASKS",
     "US_PER_S",
     "Access",
@@ -58,6 +60,7 @@ __all__ = [
     "AnnotationType",
     "AnswerTask",
     "ArrayHandle",
+    "ClassificationEnumerator",
     "ClassificationTask",
     "DatasetFilter",
     "DatasetMetadata",
@@ -76,6 +79,7 @@ __all__ = [
     "MissingReason",
     "MissingValues",
     "ObjectKind",
+    "OptionKeyStyle",
     "ScalarPredictionTask",
     "Span",
     "Split",
