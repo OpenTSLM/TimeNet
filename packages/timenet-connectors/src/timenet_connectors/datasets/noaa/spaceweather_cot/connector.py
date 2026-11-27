@@ -18,15 +18,13 @@ gaps, not a connector defect), so :meth:`SpaceWeatherCotConnector.download_async
 for one issuance and simply excludes it, while still failing loudly on any other HTTP error.
 """
 
-import asyncio
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
 import re
 
-import httpx
 import numpy as np
 
 from timenet.connectors import BaseConnector
@@ -62,7 +60,7 @@ _FORECAST_BASE = "https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/dail
 # Pinned per-year sources, in the shape {year: (goes_url, goes_sha256, omni_url, omni_sha256)}.
 # NOAA reprocessed both GOES science files after the initial pin (same temporal coverage, new
 # bits); the hashes below are the reprocessed files. GOES-16 science data ends on 2025-04-06
-# (GOES-16 was replaced by GOES-19 as the operational primary), and _END_DATE stays inside it.
+# (GOES-16 was replaced by GOES-19 as the operational primary), and the pinned manifest stays inside it.
 _YEAR_SOURCES: dict[int, tuple[str, str, str, str]] = {
     2024: (
         f"{_GOES_XRS_BASE}/sci_xrsf-l2-avg1m_g16_y2024_v2-2-2.nc",
@@ -81,9 +79,6 @@ _YEAR_SOURCES: dict[int, tuple[str, str, str, str]] = {
 # The date range of this release spans the Forecast Discussion archive's start (March 2024) through
 # the latest date covered by the pinned 2025 GOES-16 science file (published through 2025-04-06 at
 # build time). Later versions can extend both as NOAA publishes more science-quality GOES data.
-_START_DATE = date(2024, 3, 1)
-_END_DATE = date(2025, 4, 6)
-_ISSUANCE_HOURS_UTC = (0, 12)  # 0030 and 1230 UTC, named by their announced hour.
 _LOOKBACK = timedelta(hours=24)
 # NOAA's 3-Day Forecast covers the three days after the issuance. The observed-outcome tasks use
 # the 72 hours following the issuance as the outcome window, a close and unambiguous analog.
@@ -257,19 +252,44 @@ class SpaceWeatherRaw:
     omni_paths: tuple[Path, ...]
 
 
-def _issuance_times() -> list[datetime]:
-    """Return every issuance timestamp from :data:`_START_DATE` to :data:`_END_DATE`, inclusive.
+@dataclass(frozen=True)
+class _PinnedIssuance:
+    """One issuance pinned by the checked-in manifest: its nominal archive slot and report hashes."""
+
+    nominal_time: datetime
+    """The 0030/1230 slot NOAA archives the reports under; the true issuance time is in the report."""
+    discussion_sha256: str
+    forecast_sha256: str
+
+
+def _load_pinned_issuances() -> tuple[_PinnedIssuance, ...]:
+    """Read the checked-in manifest of hash-pinned issuances.
+
+    The manifest defines exactly which issuances a build contains. NOAA's archive has two long
+    gaps (2024-05-15 to 2024-06-16 and 2024-08-31 to 2024-10-09) and two issuances whose 3-day
+    forecast was never published (202408071230, 202502111230); none of them are in the manifest,
+    so a build never depends on what a 404 sweep happens to find, and a correction NOAA publishes
+    later fails the hash check loudly instead of silently changing the dataset.
 
     Returns:
-        UTC timestamps at 0030 and 1230 for every day in the range, in order.
+        The pinned issuances in archive order.
     """
-    times = []
-    day = _START_DATE
-    while day <= _END_DATE:
-        for hour in _ISSUANCE_HOURS_UTC:
-            times.append(datetime(day.year, day.month, day.day, hour, 30, tzinfo=UTC))
-        day += timedelta(days=1)
-    return times
+    rows = []
+    for line in (Path(__file__).parent / "issuance_manifest.csv").read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith(("#", "stamp,")):
+            continue
+        stamp, discussion_sha256, forecast_sha256 = line.strip().split(",")
+        rows.append(
+            _PinnedIssuance(
+                nominal_time=datetime.strptime(stamp, "%Y%m%d%H%M").replace(tzinfo=UTC),
+                discussion_sha256=discussion_sha256,
+                forecast_sha256=forecast_sha256,
+            )
+        )
+    return tuple(rows)
+
+
+_PINNED_ISSUANCES = _load_pinned_issuances()
 
 
 def _report_urls(issued_at: datetime) -> tuple[str, str]:
@@ -289,37 +309,6 @@ def _report_urls(issued_at: datetime) -> tuple[str, str]:
     )
 
 
-async def _fetch_issuance(client: httpx.AsyncClient, issued_at: datetime, cache_dir: Path) -> _Issuance | None:
-    """Fetch one issuance's two reports, or return ``None`` if NOAA's archive has no such issuance.
-
-    NOAA's discussion archive has observed gaps (for example, missing issuances early in a
-    product's life). A 404 for either report means the issuance was never published, which this
-    function treats as absent rather than as a download failure. Any other HTTP error propagates.
-
-    Args:
-        client: The shared HTTP client.
-        issued_at: The issuance timestamp to fetch.
-        cache_dir: Directory to cache the two report files in.
-
-    Returns:
-        The issuance, or ``None`` if NOAA's archive has no report for this timestamp.
-    """
-    stamp = issued_at.strftime("%Y%m%d%H%M")
-    discussion_url, forecast_url = _report_urls(issued_at)
-    discussion_path = cache_dir / "discussion" / f"{stamp}.txt"
-    forecast_path = cache_dir / "forecast" / f"{stamp}.txt"
-    for url, dest in ((discussion_url, discussion_path), (forecast_url, forecast_path)):
-        if dest.exists():
-            continue
-        response = await client.get(url)
-        if response.status_code == httpx.codes.NOT_FOUND:
-            return None
-        response.raise_for_status()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(response.content)
-    return _Issuance(issued_at=issued_at, discussion_path=discussion_path, forecast_path=forecast_path)
-
-
 class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
     """Connector for SpaceWeather-CoT (NOAA SWPC Forecast Discussions + GOES X-ray + OMNI2)."""
 
@@ -331,9 +320,6 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
 
         Returns:
             The :class:`SpaceWeatherRaw` handle.
-
-        Raises:
-            TimeNetConnectorError: If NOAA's archive has no issuance in the configured date range.
         """
         xray_paths = {year: cache_dir / f"goes16_xrs_{year}.nc" for year in _YEAR_SOURCES}
         omni_paths = {year: cache_dir / f"omni2_{year}.dat" for year in _YEAR_SOURCES}
@@ -341,20 +327,24 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         for year, (goes_url, goes_sha256, omni_url, omni_sha256) in _YEAR_SOURCES.items():
             artifacts.append(Artifact(goes_url, xray_paths[year], sha256=goes_sha256))
             artifacts.append(Artifact(omni_url, omni_paths[year], sha256=omni_sha256))
+        issuances = []
+        for pinned in _PINNED_ISSUANCES:
+            stamp = pinned.nominal_time.strftime("%Y%m%d%H%M")
+            discussion_path = cache_dir / "discussion" / f"{stamp}.txt"
+            forecast_path = cache_dir / "forecast" / f"{stamp}.txt"
+            discussion_url, forecast_url = _report_urls(pinned.nominal_time)
+            artifacts.append(Artifact(discussion_url, discussion_path, sha256=pinned.discussion_sha256))
+            artifacts.append(Artifact(forecast_url, forecast_path, sha256=pinned.forecast_sha256))
+            issuances.append(
+                _Issuance(issued_at=pinned.nominal_time, discussion_path=discussion_path, forecast_path=forecast_path)
+            )
+        # download_files streams each file to a .part path and renames it into place only on
+        # success, so an interrupted run never leaves a truncated file behind to be trusted as
+        # cache, and a hash mismatch (e.g. a correction NOAA published after the pins were taken)
+        # fails the build loudly instead of silently changing the dataset.
         await download_files(artifacts)
-        semaphore = asyncio.Semaphore(8)
-        async with httpx.AsyncClient(timeout=httpx.Timeout(_HTTP_TIMEOUT_SECONDS), follow_redirects=True) as client:
-
-            async def bounded(issued_at: datetime) -> _Issuance | None:
-                async with semaphore:
-                    return await _fetch_issuance(client, issued_at, cache_dir)
-
-            results = await asyncio.gather(*(bounded(t) for t in _issuance_times()))
-        issuances = tuple(issuance for issuance in results if issuance is not None)
-        if not issuances:
-            raise TimeNetConnectorError(f"no Forecast Discussion issuances found between {_START_DATE} and {_END_DATE}")
         return SpaceWeatherRaw(
-            issuances=issuances,
+            issuances=tuple(issuances),
             xray_paths=tuple(xray_paths.values()),
             omni_paths=tuple(omni_paths.values()),
         )
@@ -669,7 +659,6 @@ def _series(
     return Signal.from_values(values, time_axis=axis, spec=spec, name=name)
 
 
-_HTTP_TIMEOUT_SECONDS = 60.0
 _SECONDS_PER_MINUTE = 60
 
 # The published cadences: GOES XRS science files carry exactly one value per minute and OMNI2 one

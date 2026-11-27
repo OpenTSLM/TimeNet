@@ -29,7 +29,12 @@ description: >-
   "Energetic Particle" section and the S1 radiation-storm target are about, so a model
   cannot learn those from the inputs alone. This 0.1.0 release covers March 2024 through
   April 6, 2025 (the start of the Forecast Discussion archive through the end of GOES-16
-  science-quality X-ray data; GOES-19 succeeded GOES-16 as the operational primary).
+  science-quality X-ray data; GOES-19 succeeded GOES-16 as the operational primary). Within
+  that range the archive itself is incomplete: NOAA never published discussions for 2024-05-15
+  through 2024-06-16 and 2024-08-31 through 2024-10-09, and two further issuances (2024-08-07
+  12:30, 2025-02-11 12:30) lack their 3-Day Forecast report, so 656 of the 804 nominal slots
+  exist. Every issuance is hash-pinned in the connector's checked-in manifest, so a correction
+  NOAA publishes later fails the build loudly instead of silently changing the dataset.
 license: CC0-1.0
 source_url: https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/discussion/
 domains:
