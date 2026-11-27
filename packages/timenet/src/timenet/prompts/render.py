@@ -103,7 +103,7 @@ class PromptRenderer(ABC):
     """A named prompt renderer. A subclass sets ``name`` and adds the parts of each section."""
 
     name: ClassVar[str]
-    """The renderer's name, with a version such as ``-v1``, so that a training run can log it."""
+    """The renderer's name. Log it with the installed TimeNet version, which fixes the renderer's text."""
 
     @abstractmethod
     def add_input(self, view: ClassificationInputView, parts: Parts) -> None:

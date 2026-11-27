@@ -65,10 +65,9 @@ renderer chooses between the task's own prompt and a question from the label set
 All four reply with the rationale and an empty line, if the task has a rationale, then one label
 per line. `DEFAULT_RENDERERS` holds all four.
 
-Each renderer name ends with a version, such as `classification-described-v1`. A change to the
-text of a renderer gets a new version. Log the name with a training run, so that you know which
-text the model saw. A new TimeNet release can add versions, so pin your TimeNet version if you need
-fixed prompts.
+The renderers are part of TimeNet, so the TimeNet version fixes their text. Log the renderer's
+name, such as `classification-described`, and the installed TimeNet version with a training run,
+so that you know which text the model saw. Pin your TimeNet version if you need fixed prompts.
 
 ## What a renderer sees
 
@@ -120,7 +119,7 @@ from timenet.prompts.views import (
 
 
 class Short(PromptRenderer):
-    name = "short-v1"
+    name = "short"
 
     def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
         for record in view.records:

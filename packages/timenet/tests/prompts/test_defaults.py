@@ -119,11 +119,10 @@ def test_target_with_rationale(capture, renderer):
     assert render(task, renderer).target == (TextPart("Still for 10 s.\n\nsleep"),)
 
 
-def test_default_names_are_unique_and_versioned():
+def test_default_names_are_unique():
     names = [renderer.name for renderer in DEFAULT_RENDERERS]
 
     assert len(set(names)) == len(names) == 4
-    assert all(name.endswith("-v1") for name in names)
 
 
 def test_described_rounds_the_rate(capture):

@@ -13,7 +13,7 @@ from timenet.types import AnswerTask
 class _Question(PromptRenderer):
     """Asks a question without series and replies with the labels."""
 
-    name = "question-v1"
+    name = "question"
 
     @override
     def add_input(self, view: ClassificationInputView, parts: Parts) -> None:

@@ -1,8 +1,7 @@
 """TimeNet's default prompt renderers for classification tasks.
 
-Each name ends with a version. A change to a renderer's text gets a new version, so that a training run can
-log which text it used. The consumer chooses the renderer: none of them chooses between the task's own
-prompt and the question from the label set.
+The consumer chooses the renderer: none of them chooses between the task's own prompt and the question from
+the label set.
 """
 
 from abc import abstractmethod
@@ -98,7 +97,7 @@ class _AionicRenderer(PromptRenderer):
 
 
 class _LabelQuestion(_AionicRenderer):
-    name = "classification-label-question-v1"
+    name = "classification-label-question"
 
     @override
     def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
@@ -107,7 +106,7 @@ class _LabelQuestion(_AionicRenderer):
 
 
 class _PromptQuestion(_AionicRenderer):
-    name = "classification-prompt-question-v1"
+    name = "classification-prompt-question"
 
     @override
     def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
@@ -116,7 +115,7 @@ class _PromptQuestion(_AionicRenderer):
 
 
 class _PromptWithOptions(_AionicRenderer):
-    name = "classification-prompt-options-v1"
+    name = "classification-prompt-options"
 
     @override
     def add_question(self, view: ClassificationInputView, parts: Parts) -> None:
@@ -125,7 +124,7 @@ class _PromptWithOptions(_AionicRenderer):
 
 
 class _Described(_AionicRenderer):
-    name = "classification-described-v1"
+    name = "classification-described"
 
     @override
     def add_input(self, view: ClassificationInputView, parts: Parts) -> None:
