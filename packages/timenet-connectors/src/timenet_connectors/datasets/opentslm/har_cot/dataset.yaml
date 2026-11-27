@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 yaml_schema_version: 1
 dataset_id: opentslm/har-cot
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: HAR-CoT
 description: >-
   85,482 windows of triaxial accelerometer data (68,542 train, 8,718 validation, 8,222 test).
@@ -12,7 +12,8 @@ description: >-
   because a resting window has a magnitude of about 9.8. The release keeps no subject or source
   dataset of a window. GPT-4o (gpt-4o-2024-08-06, temperature 0.3, seed 42) wrote each rationale
   from a plot of the window, the correct label, and one dissimilar label. The dataset does not
-  keep that prompt, because it names the correct label. In 216 windows (158 train, 35 validation,
+  keep that prompt, because it names the correct label. A task has no prompt. It has a template
+  that asks for the label and lists the eight labels. In 216 windows (158 train, 35 validation,
   23 test), the rationale concludes with the dissimilar label instead of the correct one. The
   dataset keeps these windows as released.
 license: MIT
