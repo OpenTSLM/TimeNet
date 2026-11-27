@@ -6,38 +6,47 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.types import AnswerTask, Split, read_value
+from timenet.types import ClassificationTask, Split, read_value
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
+
+
+def _question(stem: str) -> str:
+    """Return a question in the published form: a stem, three answers with keys, and the answer instruction."""
+    return (
+        f"{stem}\nSelect one of the following answers that best describes the provided time series:\n"
+        "(a) This time series has a constant trend.\n(b) This time series has an upward trend.\n"
+        "(c) This time series has a downward trend.\nOnly answer (a), (b), or (c)."
+    )
 
 
 # Synthetic rows shaped exactly like the HuggingFace Hub rows this connector converts. They are
 # hand-written for the tests and not derived from the real TSQA dataset, so the repo ships no dataset
-# bytes. Questions and answers are distinct per row; each Series is a JSON string of floats.
+# bytes. Questions are distinct per row; each Series is a JSON string of floats.
 _FIXTURE_ROWS = [
     {
         "Task": "Trend",
         "Size": 8,
-        "Question": "Does the first synthetic series trend upward?",
-        "Answer": "(a) yes",
+        "Question": _question("Does the first synthetic series trend upward?"),
+        "Answer": "(b)",
         "Label": "increasing",
         "Series": json.dumps([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]),
     },
     {
         "Task": "Trend",
         "Size": 8,
-        "Question": "Does the second synthetic series trend downward?",
-        "Answer": "(b) no",
+        "Question": _question("Does the second synthetic series trend downward?"),
+        "Answer": "(c)",
         "Label": "decreasing",
         "Series": json.dumps([7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0]),
     },
     {
         "Task": "Volatility",
         "Size": 8,
-        "Question": "Is the third synthetic series flat?",
-        "Answer": "(c) constant",
+        "Question": _question("Is the third synthetic series flat?"),
+        "Answer": "(a)",
         "Label": "constant",
         "Series": json.dumps([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
     },
@@ -51,8 +60,8 @@ def _fixture_rows():
         rows.append(
             {
                 "Task": "Trend" if index < 8 else "Volatility",
-                "Question": f"Question about synthetic series {index + 3}",
-                "Answer": "(a) yes",
+                "Question": _question(f"Question about synthetic series {index + 3}"),
+                "Answer": "(a)",
                 "Series": json.dumps([index + 10.0, index + 11.0]),
             }
         )
@@ -73,7 +82,7 @@ def _convert(tmp_path) -> TimeFDataset:
 def test_metadata():
     assert TSQAConnector().metadata().dataset_id == "chengsenwang/tsqa"
     assert str(TSQAConnector().metadata().license) == "Apache-2.0"
-    assert str(TSQAConnector().metadata().dataset_version) == "1.2.0"
+    assert str(TSQAConnector().metadata().dataset_version) == "2.0.0"
 
 
 def test_conversion_rejects_too_few_signal_groups(tmp_path):
@@ -90,10 +99,42 @@ def test_convert_builds_one_record_per_row(tmp_path):
 def test_qa_tasks_match_fixture(tmp_path):
     dataset = _convert(tmp_path)
     rows = _fixture_rows()
-    qa = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
+    qa = [t for t in dataset.tasks if isinstance(t, ClassificationTask)]
     assert len(qa) == len(rows)
     assert {read_value(t.prompt) for t in qa} == {r["Question"] for r in rows}
     assert {read_value(t.targets[0]) for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
+    assert {t.label_set.names for t in qa} == {("(a)", "(b)", "(c)")}
+
+
+def test_the_template_of_a_task_writes_its_answers_in_another_order_and_with_other_keys(tmp_path):
+    dataset = _convert(tmp_path)
+    question = _FIXTURE_ROWS[0]["Question"]
+    task = next(task for task in dataset.tasks if read_value(task.prompt) == question)
+    assert isinstance(task, ClassificationTask)
+
+    published = task.get_option_presentation(use_shuffled_label_key=False)
+    assert published.prompt == question
+    assert published.answers == ("(b)",)
+    upward = "This time series has an upward trend."
+    for seed in range(5):
+        shown = task.get_option_presentation(seed=seed)
+        (answer,) = shown.answers
+        style = shown.key_style
+        assert style is not None
+        position = style.get_position_of_option_with_reference(answer)
+        # The answer names the place that now shows the text of the published answer, and the last
+        # sentence names the new keys.
+        assert f"{style.get_marker_of_option_at(position)} {upward}" in shown.prompt
+        keys = [style.get_reference_to_option_at(place) for place in range(3)]
+        assert shown.prompt.endswith(f"Only answer {keys[0]}, {keys[1]}, or {keys[2]}.")
+
+
+def test_a_question_that_does_not_print_its_three_answers_stops_the_conversion(tmp_path):
+    rows = _fixture_rows()
+    rows[0] = {**rows[0], "Question": rows[0]["Question"].replace("(c) ", "")}
+
+    with pytest.raises(TimeNetConnectorError, match="the Trend question 'Does the first synthetic series"):
+        TSQAConnector().convert(_refs(tmp_path, rows))
 
 
 def test_series_values_parsed_from_fixture(tmp_path):
@@ -118,7 +159,7 @@ def _balanced_rows():
             rows.append(
                 {
                     "Task": category,
-                    "Question": f"{category} question about signal {signal}",
+                    "Question": _question(f"{category} question about signal {signal}"),
                     "Answer": "(a)",
                     "Series": json.dumps([signal, signal + 1]),
                 }
@@ -173,9 +214,9 @@ def test_split_assignments_are_repeatable(tmp_path):
 def test_equivalent_series_encodings_share_a_split(series, tmp_path):
     rows = _balanced_rows()
     for encoded in series:
-        rows.append({"Series": encoded, "Task": "Trend", "Question": "duplicate", "Answer": "a"})
+        rows.append({"Series": encoded, "Task": "Trend", "Question": _question("duplicate"), "Answer": "(a)"})
     dataset = TSQAConnector().convert(_refs(tmp_path, rows))
-    duplicates = [task for task in dataset.tasks if task.prompt == "duplicate"]
+    duplicates = [task for task in dataset.tasks if task.prompt == _question("duplicate")]
     assert len(duplicates) == len(series)
     assert len({task.split for task in duplicates}) == 1
     assert duplicates[0].split is not None
@@ -185,7 +226,7 @@ def test_splits_survive_storage_round_trip(tmp_path):
     original = TSQAConnector().convert(_refs(tmp_path, _balanced_rows()))
     registry = LocalRegistry(tmp_path / "registry")
     registry.put_dataset(original)
-    with TimeFReader(open_local_version(registry.root / "chengsenwang/tsqa/1.2.0")) as reader:
+    with TimeFReader(open_local_version(registry.root / "chengsenwang/tsqa/2.0.0")) as reader:
         restored = reader.read()
     assert {read_value(task.prompt): task.split for task in restored.tasks} == {
         read_value(task.prompt): task.split for task in original.tasks

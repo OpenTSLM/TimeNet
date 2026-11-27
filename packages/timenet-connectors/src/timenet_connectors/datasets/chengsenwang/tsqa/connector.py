@@ -3,7 +3,12 @@
 Source repo ``ChengsenWang/TSQA``. The connector reads the parquet copy the Hub converted the source CSV
 to, pinned to one commit. Each row has the columns ``Task, Size, Question, Answer, Label, Series``.
 ``Series`` is a JSON float list. A univariate series is a flat list. A multivariate series is a list of
-lists. Each row becomes one record that carries the series and an :class:`~timenet.types.AnswerTask`.
+lists. Each row becomes one record that carries the series and a
+:class:`~timenet.types.ClassificationTask`.
+
+A question prints three answers with the keys ``(a)``, ``(b)`` and ``(c)``, and the published answer is a
+key. The prompt and the target stay as published. The labels of the task are the keys, and its template
+writes the prompt with the answers in another order and with other keys.
 """
 
 from collections.abc import Mapping
@@ -12,9 +17,20 @@ from pathlib import Path
 from pydantic import ConfigDict, Field
 
 from timenet.dataset import OrdinalAxis, Record, Signal, Source, TimeFDataset
-from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec, ureg
+from timenet.errors import TimeNetConnectorError
+from timenet.types import (
+    Annotation,
+    ClassificationEnumerator,
+    ClassificationTask,
+    LabelSet,
+    OptionKeyStyle,
+    Split,
+    TimeSeriesSpec,
+    ureg,
+)
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.chengsenwang.tsqa.sample import TSQASample, get_category, get_signal_id
+from timenet_connectors.sources.prompt_templates import get_template_from_published_prompt
 from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 from timenet_connectors.splitting import Splitter, StratifiedSplitter
 
@@ -24,6 +40,20 @@ _SPEC = TimeSeriesSpec(
     name="TSQA Series",
     unit_value=ureg.dimensionless,
 )
+
+
+_ANSWER_KEY_STYLE = OptionKeyStyle(
+    enumerator=ClassificationEnumerator.LATIN_LOWERCASE,
+    marker_prefix="(",
+    marker_suffix=")",
+    reference_prefix="(",
+    reference_suffix=")",
+)
+"""How a question writes the key of an answer: ``(a)``, before the answer and in the published answer."""
+_ANSWER_KEYS = LabelSet(["(a)", "(b)", "(c)"], annotations=[Annotation("name", value="answer_key")])
+"""The label set that every task shares: the keys of the three answers of a question."""
+_QUESTION_START_LENGTH = 60
+"""How many characters of a question an error message shows."""
 
 
 class _SourceRow(DataRow):
@@ -100,12 +130,40 @@ class TSQAConnector(
         return Record(sources=[Source("TSQA series", signals=signals)], annotations=annotations)
 
     @staticmethod
-    def _make_task(sample: TSQASample, record: Record, *, split: Split) -> AnswerTask:
-        return AnswerTask(
+    def _make_task(sample: TSQASample, record: Record, *, split: Split) -> ClassificationTask:
+        """Build the task of a row, with a template of its question and its three answers.
+
+        A question prints one answer per line, then the sentence ``Only answer (a), (b), or (c).``
+
+        Returns:
+            The task, not yet added to a dataset.
+
+        Raises:
+            TimeNetConnectorError: If the question does not print three answers with the keys ``(a)``,
+                ``(b)`` and ``(c)`` in this form.
+        """
+        question_start = sample.question[:_QUESTION_START_LENGTH]
+        try:
+            template = get_template_from_published_prompt(
+                sample.question,
+                published_key_style=_ANSWER_KEY_STYLE,
+                one_option_per_line=True,
+                expected_key_list_count=1,
+            )
+        except TimeNetConnectorError as exc:
+            raise TimeNetConnectorError(f"the {sample.category} question {question_start!r}: {exc}") from exc
+        if template.labels != _ANSWER_KEYS.names:
+            raise TimeNetConnectorError(
+                f"the {sample.category} question {question_start!r} has the answers {template.labels}, "
+                f"not {_ANSWER_KEYS.names}"
+            )
+        return ClassificationTask(
             inputs=(record,),
             prompt=sample.question,
             targets=sample.answer,
             split=split,
+            label_set=_ANSWER_KEYS,
+            template=template,
         )
 
 
