@@ -19,6 +19,7 @@ from timenet.types.metadata import DatasetFilter, DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
 from timenet.types.object_kind import ObjectKind
 from timenet.types.option_keys import ALL_CLASSIFICATION_ENUMERATORS, ClassificationEnumerator, OptionKeyStyle
+from timenet.types.prompt_options import OptionKeyReference, PromptOption, PromptOptions, PromptSpan
 from timenet.types.spans import (
     Span,
     StepInterval,
@@ -79,7 +80,11 @@ __all__ = [
     "MissingReason",
     "MissingValues",
     "ObjectKind",
+    "OptionKeyReference",
     "OptionKeyStyle",
+    "PromptOption",
+    "PromptOptions",
+    "PromptSpan",
     "ScalarPredictionTask",
     "Span",
     "Split",

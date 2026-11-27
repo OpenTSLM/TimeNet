@@ -264,6 +264,99 @@ label set rejects a Python set, because its order changes from one run to the ne
 The stored set gets one integer id, `label_set_id`. In one read, the reader gives tasks that use the
 same set a shared object.
 
+#### Prompt options
+
+Many multiple-choice prompts print their options with keys, and the answer is a key:
+
+```text
+Which trend? A: up B: down. Answer with A or B.
+```
+
+`prompt_options` says where each option is in the prompt. The prompt, the label set and the target
+stay as the source publishes them. With the prompt options, a consumer can show the options in
+another order or with other keys, and the answer stays correct.
+
+```python
+from timenet.types import (
+    ClassificationEnumerator,
+    ClassificationTask,
+    LabelSet,
+    OptionKeyReference,
+    OptionKeyStyle,
+    PromptOption,
+    PromptOptions,
+    PromptSpan,
+)
+
+ClassificationTask(
+    inputs=(record,),
+    prompt="Which trend? A: up B: down. Answer with A or B.",
+    targets="B",
+    label_set=LabelSet(["A", "B"]),
+    prompt_options=PromptOptions(
+        options=[
+            PromptOption(
+                label="A",
+                marker=PromptSpan(start=13, end=15),
+                text=PromptSpan(start=16, end=18),
+            ),
+            PromptOption(
+                label="B",
+                marker=PromptSpan(start=19, end=21),
+                text=PromptSpan(start=22, end=26),
+            ),
+        ],
+        key_style=OptionKeyStyle(
+            enumerator=ClassificationEnumerator.LATIN_UPPERCASE,
+            marker_suffix=":",
+        ),
+        key_references=[
+            OptionKeyReference(
+                option_position=0, span=PromptSpan(start=40, end=41)
+            ),
+            OptionKeyReference(
+                option_position=1, span=PromptSpan(start=45, end=46)
+            ),
+        ],
+    ),
+)
+```
+
+A `PromptSpan` is a part of the prompt text, from the character at `start` up to, but not
+including, the character at `end`. An option has two spans. The `marker` is the key as the list of
+options writes it, here `A:`. The `text` is the option itself, here `up`. A key reference is a place
+outside the list of options that names a key, here the `A` and the `B` of the last sentence.
+
+The `key_style` says how the prompt writes a key. A `ClassificationEnumerator` is the series of
+symbols that counts the options: Latin letters, numbers, or Roman numerals. The style adds the text
+before and after the symbol, for the marker and for a reference.
+
+The options have one of three forms:
+
+| Form | Fields of each option | What a consumer can do |
+| --- | --- | --- |
+| The prompt prints the options with keys. | `marker` and `text`, with a `key_style`. | Change the order and the keys. |
+| The prompt prints the options without keys. | `text` only. | Change the order. |
+| The prompt does not print the options. | No span. | Print the options in any order. |
+
+A task without `prompt_options` does not say where its options are. A consumer shows the prompt of
+such a task as it is.
+
+When the dataset adds or streams a task, it makes sure that the prompt options fit the task. Each
+option must name a label of the label set, and each span must fit the prompt. A marker and a key
+reference must hold the text that the key style gives. If the options have keys, three more rules
+apply:
+
+- The label of an option is the reference to its key, as the source writes the answer. In the
+  example, the option with the marker `B:` has the label `B`.
+- Each target label is the label of an option.
+- The task has no rationale. A rationale can name a key, and TimeNet does not find such a name.
+
+Two fields restrict what a consumer can change. Set `pinned=True` on an option that must keep its
+place, such as `None of the above`. Set `allowable_enumerators` if the prompt fits only some
+enumerators. For example, a prompt that says `Answer with the letter` allows only the two Latin
+enumerators.
+
 ### Answer and rationale
 
 ```python

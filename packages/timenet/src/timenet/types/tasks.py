@@ -16,6 +16,7 @@ from timenet.types.annotations import Annotation, SupportsAnnotate, _copy_annota
 from timenet.types.ids import EntityId, assigned_id
 from timenet.types.label_sets import LabelSet
 from timenet.types.modalities import InputModality
+from timenet.types.prompt_options import PromptOptions
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
 from timenet.types.text import InlineText, TextHandle, optional_text
@@ -374,21 +375,30 @@ class ClassificationTask(Task):
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
     label_set: LabelSet
     """The allowed labels and whether a target can contain more than one label."""
+    prompt_options: PromptOptions | None = None
+    """How the prompt shows the labels as options. ``None`` if the task does not say where its options are.
+
+    A consumer shows the prompt of such a task as it is."""
 
     def __post_init__(self) -> None:
         """Set the common fields to their standard form and make sure that the label set has the right type.
 
         Raises:
-            TimeFValidationError: If ``label_set`` is not a LabelSet.
+            TimeFValidationError: If ``label_set`` is not a LabelSet, or ``prompt_options`` is neither
+                PromptOptions nor ``None``.
         """
         super().__post_init__()
         if not isinstance(self.label_set, LabelSet):
             raise TimeFValidationError(
                 f"ClassificationTask label_set must be a LabelSet, got {type(self.label_set).__name__}"
             )
+        if self.prompt_options is not None and not isinstance(self.prompt_options, PromptOptions):
+            raise TimeFValidationError(
+                f"ClassificationTask prompt_options must be PromptOptions, got {type(self.prompt_options).__name__}"
+            )
 
     def check_targets(self) -> None:
-        """Make sure that the target labels follow the rules of the label set.
+        """Make sure that the target labels follow the rules of the label set, and the prompt options fit the task.
 
         The labels come from the targets stored directly on the task or from its target annotations.
         Each label must be text.
@@ -397,20 +407,78 @@ class ClassificationTask(Task):
 
         Raises:
             TimeFValidationError: If a label is not text or the labels break a rule of the label set.
+                Also if the prompt options do not fit the task (see :meth:`check_prompt_options`).
         """
-        name = f"ClassificationTask {self.id!r}"
+        labels = self._read_target_labels()
+        try:
+            self.label_set.check_targets(labels)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
+        self.check_prompt_options()
+
+    def _read_target_labels(self) -> list[str]:
+        """Read the target labels from the targets of the task or from its target annotations.
+
+        Returns:
+            The labels, in the order that the task stores them.
+
+        Raises:
+            TimeFValidationError: If a label is not text.
+        """
         values = self.targets if self.targets is not None else [one.value for one in self.target_annotations]
         labels: list[str] = []
         for value in values:
             if not isinstance(value, TextHandle):
                 raise TimeFValidationError(
-                    f"{name} has {self.label_set}, so each label must be text, not {type(value).__name__}"
+                    f"ClassificationTask {self.id!r} has {self.label_set}, so each label must be text, "
+                    f"not {type(value).__name__}"
                 )
             labels.append(value.read())
+        return labels
+
+    def check_prompt_options(self) -> None:
+        """Make sure that the prompt options fit the label set, the prompt, and the targets of the task.
+
+        Each option must stand for a label of the label set, and each span must fit the prompt. If the
+        options have keys, these rules also apply:
+
+        - The label of an option is the reference to its key, as the source writes the answer. For
+          example, the option with the marker ``B:`` has the label ``B``.
+        - Each target label is the label of an option.
+        - The task has no rationale. A rationale can name a key, and TimeNet does not find such a name.
+
+        Raises:
+            TimeFValidationError: If the prompt options break one of these rules.
+        """
+        options = self.prompt_options
+        if options is None:
+            return
+        name = f"ClassificationTask {self.id!r}"
+        unknown = sorted(set(options.labels) - set(self.label_set.names))
+        if unknown:
+            raise TimeFValidationError(
+                f"{name} has prompt options for labels that are not in {self.label_set}: {unknown}"
+            )
         try:
-            self.label_set.check_targets(labels)
+            options.check_spans_in_prompt(None if self.prompt is None or not options.spans else self.prompt.read())
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
+        if options.key_style is None:
+            return
+        if self.rationale is not None:
+            raise TimeFValidationError(
+                f"{name} has a rationale, so its prompt options cannot have keys. A rationale can name a key"
+            )
+        for position, label in enumerate(options.labels):
+            reference = options.key_style.get_reference_to_option_at(position)
+            if label != reference:
+                raise TimeFValidationError(
+                    f"{name} has the label {label!r} for the prompt option at position {position}, but the "
+                    f"key style gives the reference {reference!r}"
+                )
+        not_shown = sorted(set(self._read_target_labels()) - set(options.labels))
+        if not_shown:
+            raise TimeFValidationError(f"{name} has target labels without a prompt option: {not_shown}")
 
     def walk_annotations(self) -> Iterator[Annotation]:
         """Yield the annotation occurrences of the task, then those of its label set.
