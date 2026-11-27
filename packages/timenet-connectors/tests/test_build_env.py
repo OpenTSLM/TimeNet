@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from timenet.errors import TimeNetBuildError
+from timenet.errors import TimeNetBuildError, TimeNetIsolationError
 from timenet.manifest import PayloadSource
 from timenet.manifest.files import FilePart
 from timenet.provenance import TimeNetSnapshot
@@ -16,6 +16,7 @@ from timenet_connectors.builder.env import EnvSpec, env_spec, run_isolated_build
 
 
 HELLO = DatasetRef.parse("timenet/hello-world@1.0.0")
+_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
 def _spec(requirements=None, base=("--with", "timenet==0.1.0")):
@@ -39,9 +40,24 @@ def _base_args_for(monkeypatch, dist):
     return env_module._base_args()
 
 
-def test_uv_command_runs_without_the_project_environment():
+def test_env_spec_pins_the_connector_package_and_rejects_an_index_install(monkeypatch):
+    record = {"url": "https://github.com/o/acme.git", "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+    dists = {"timenet": _FakeDist(), "acme-datasets": _FakeDist(direct_url=json.dumps(record))}
+    monkeypatch.setattr(TimeNetSnapshot, "package_names", classmethod(lambda cls: ("timenet",)))
+    monkeypatch.setattr(env_module, "get_connector_package_name", lambda dataset_id: "acme-datasets")
+    monkeypatch.setattr(env_module.Distribution, "from_name", lambda name: dists[name])
+
+    connector_requirement = f"acme-datasets @ git+https://github.com/o/acme.git@{_COMMIT}"
+    assert env_spec("timenet/hello-world").base[:4] == ("--with", "timenet==9.9.9", "--with", connector_requirement)
+    dists["acme-datasets"] = _FakeDist()
+    with pytest.raises(TimeNetIsolationError, match="not installed from git or from a local directory"):
+        env_spec("timenet/hello-world")
+
+
+def test_uv_command_runs_without_the_project_environment_or_uv_sources():
     command = uv_command(_spec(), ["timenet-build", "build", "x/y"])
     assert "--no-project" in command
+    assert "--no-sources" in command
 
 
 def test_uv_command_pins_the_parent_interpreter():
@@ -109,6 +125,13 @@ def test_base_args_uses_editable_for_a_local_path_install(monkeypatch, tmp_path)
 def test_base_args_pins_a_version_for_an_index_install(monkeypatch):
     # An index or wheel install has no direct_url.json, so pin the exact version.
     assert _base_args_for(monkeypatch, _FakeDist(version="9.9.9", direct_url=None)) == ("--with", "timenet==9.9.9")
+
+
+def test_base_args_pins_the_commit_for_a_git_install(monkeypatch, tmp_path):
+    record = {"url": tmp_path.as_uri(), "vcs_info": {"vcs": "git", "commit_id": _COMMIT}}
+    url = f"git+{tmp_path.as_uri()}@{_COMMIT}"
+
+    assert _base_args_for(monkeypatch, _FakeDist(direct_url=json.dumps(record))) == ("--with", f"timenet @ {url}")
 
 
 @pytest.mark.parametrize("editable", [False, True])

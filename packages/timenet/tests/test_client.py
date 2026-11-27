@@ -427,14 +427,11 @@ def test_list_leaves_out_a_broken_connector_card_with_a_warning(tmp_path, monkey
     install_backends(monkeypatch, _BrokenCard({"a/one": "1.0.0", "b/broken": "1.0.0"}))
     client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), InstalledConnectors()])
 
-    with pytest.warns(ConnectorCardWarning, match="cannot be read") as caught:
+    with pytest.warns(ConnectorCardWarning, match="the card has no name") as caught:
         rows = client.list()
 
     assert _rows(rows) == [("a/one", "1.0.0")]
-    assert [str(warning.message) for warning in caught] == [
-        "b/broken: the card of its installed connector cannot be read, so the listing leaves it out: "
-        "the card has no name"
-    ]
+    assert [str(warning.message) for warning in caught] == ["b/broken is skipped: the card has no name"]
     # The warning points at the caller of list().
     assert [warning.filename for warning in caught] == [__file__]
 

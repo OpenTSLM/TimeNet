@@ -112,6 +112,25 @@ fails.
 
 Unexpected programming errors keep their traceback.
 
+## Check command
+
+```bash
+timenet-build check [DATASETS_DIR]...
+```
+
+`check` is a hidden command for connector authors. A connector is a directory in `DATASETS_DIR` with a
+`dataset.yaml` card and a `tests` directory. For each connector, `check` runs `pytest <connector>/tests`
+and `ty check <connector>` through `uv run`. If the connector has a `requirements.txt`, `uv run` also
+gets `--with-requirements <connector>/requirements.txt`. Run it
+from a project whose environment has `timenet`, pytest and `ty`. With no `DATASETS_DIR`, it checks
+only the built-in datasets directory.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | All checks passed. |
+| `1` | A check failed, or uv is missing. The command lists each failed connector and tool. |
+| `2` | A `DATASETS_DIR` does not exist, or `check` found no connector with a `tests` directory. |
+
 ## Inspect a local build
 
 Build into a local registry of your own, and pass the same registry to the consumer:

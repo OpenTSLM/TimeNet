@@ -176,6 +176,30 @@ input order or adding samples can change it. No global random state is modified.
 package pins scikit-learn 1.9.1 because its allocation affects persisted dataset contents. Review
 generated assignments and version affected datasets when upgrading the splitter implementation.
 
+If the split must not change with a library version, or must reproduce a split that other code
+made, a script computes it once and writes the train, validation and test samples to a file beside
+the connector. `PrecomputedSplitter.from_file` reads that file and checks that the split was made
+from the pinned source file. Each sample must be in exactly one split of the file. The file names a
+sample by its position in the samples, or by the key that `key` returns:
+
+```python
+from timenet_connectors.splitting import PrecomputedSplitter
+
+def get_series_id(sample):
+    return sample.series_id
+
+splitter = PrecomputedSplitter.from_file(
+    SPLITS_PATH,
+    source_sha256=SOURCE_SHA256,
+    key=get_series_id,
+)
+splits = splitter.split(samples)
+```
+
+The file is JSON, compressed with xz when its name ends in `.xz`. It holds `source_sha256`,
+`train_keys`, `validation_keys` and `test_keys`. The `opentslm/sleep-cot` and `opentslm/m4-caption` connectors keep the
+script that wrote their file, `generate_splits.py`.
+
 When constructing TimeNet tasks, copy the partition name onto each task:
 
 ```python
@@ -211,6 +235,27 @@ concrete connector lives under `timenet_connectors/datasets/<org>/<name>/`. Use 
 package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yaml` and an optional
 `requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
 bases live under `timenet_connectors/bases/`.
+
+### Connectors in another package
+
+Another installed package can add connectors. Give it a datasets package with the same
+`<org>/<name>/` layout, and register it under the `timenet_connectors.datasets` entry-point group:
+
+```toml
+[project.entry-points."timenet_connectors.datasets"]
+acme = "acme_connectors.datasets"
+```
+
+If two packages declare the same dataset id, that dataset fails with an error that names both
+connector directories. The other datasets keep working. If the registered module cannot be
+imported, every dataset fails with a `TimeNetBuildError` that names the entry point and its package.
+
+Install your package from git or from a local directory. An isolated build installs it again from
+that source. It does not use a package index.
+
+To test and type check these connectors, run `timenet-build check <DATASETS_DIR>` from the project of
+your package. Set `DATASETS_DIR` to the directory of its datasets package. See
+[`timenet-build check`](cli/build.md#check-command).
 
 ## Dependencies and credentials
 

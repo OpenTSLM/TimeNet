@@ -243,6 +243,10 @@ class TimeNetInvalidCardError(TimeNetError, ValueError):
     """A dataset card YAML is malformed or fails schema validation (raised while building)."""
 
 
+class TimeNetDuplicateDatasetError(TimeNetError):
+    """More than one installed connector declares the same dataset ID."""
+
+
 class TimeNetBuildError(TimeNetError):
     """A build run failed: the connector build, or the environment it needed."""
 
