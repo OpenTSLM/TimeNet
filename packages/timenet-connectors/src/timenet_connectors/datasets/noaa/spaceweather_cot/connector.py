@@ -52,18 +52,19 @@ _DISCUSSION_BASE = "https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/da
 _FORECAST_BASE = "https://www.ngdc.noaa.gov/stp/space-weather/swpc-products/daily_reports/3day_forecast"
 
 # Pinned per-year sources, in the shape {year: (goes_url, goes_sha256, omni_url, omni_sha256)}.
-# GOES-16 science data for 2025 is published only through 2025-04-06 at build time; _END_DATE
-# below stays inside that coverage.
+# NOAA reprocessed both GOES science files after the initial pin (same temporal coverage, new
+# bits); the hashes below are the reprocessed files. GOES-16 science data ends on 2025-04-06
+# (GOES-16 was replaced by GOES-19 as the operational primary), and _END_DATE stays inside it.
 _YEAR_SOURCES: dict[int, tuple[str, str, str, str]] = {
     2024: (
         f"{_GOES_XRS_BASE}/sci_xrsf-l2-avg1m_g16_y2024_v2-2-2.nc",
-        "f1f3bba66cc64ae3be50417fee3320340b016e76b0e9b3d01486d83e41af9653",
+        "7aa5f27d2030ade6143339c5e532f5a8e5352bd8c5f1566c53c6b1aa89b305fe",
         f"{_OMNI2_BASE}/omni2_2024.dat",
         "41f3b5891ce3f1220719d5c1ea808f3014f28a1704557d3363eefb5ee7c249b1",
     ),
     2025: (
         f"{_GOES_XRS_BASE}/sci_xrsf-l2-avg1m_g16_y2025_v2-2-2.nc",
-        "9e2b4b83d898c4322a5c95c68c4325ddcb982b84b71bcd592017c60bfd659fd7",
+        "ab51331dc5e311c07ba1d0d5a34267f0eccfcca7ae2118a83475c4e4ed7ab167",
         f"{_OMNI2_BASE}/omni2_2025.dat",
         "0c1cbad73ad812883a4c1ab49fbe30dda842d65efb89f5c0ea9f3447f9f52a5b",
     ),
