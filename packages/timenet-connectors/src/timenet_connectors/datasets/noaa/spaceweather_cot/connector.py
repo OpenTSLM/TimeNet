@@ -22,6 +22,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from fractions import Fraction
 from pathlib import Path
 import re
 
@@ -30,7 +31,7 @@ import numpy as np
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import time_offsets_from_datetimes
+from timenet.dataset.axis import IrregularAxis, time_offsets_from_datetimes
 from timenet.errors import TimeNetConnectorError
 from timenet.types import (
     Annotation,
@@ -42,7 +43,9 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
+from timenet.types.clock import TimeOrigin
 from timenet_connectors.download import Artifact, download_files
+from timenet_connectors.time_axes import axis_for_offsets
 
 
 # --- Pinned sources -----------------------------------------------------------------------------
@@ -165,7 +168,10 @@ def _parse_issued_at(text: str) -> datetime:
     return datetime(year, month, day, int(hhmm[:2]), int(hhmm[2:]), tzinfo=UTC)
 
 
-_FLAGGED = MissingValues(reason=MissingReason.NOT_RECORDED, description="GOES quality flag marked this minute bad")
+_FLAGGED = MissingValues(
+    reason=MissingReason.NOT_RECORDED,
+    description="Minute carries a non-good GOES quality flag (eclipse, bad data, or interpolated) and is nulled out",
+)
 _FILL = MissingValues(reason=MissingReason.NOT_RECORDED, description="OMNI2 reported its sentinel fill value here")
 
 _XRAY_SPEC = TimeSeriesSpec(
@@ -408,16 +414,19 @@ class SpaceWeatherCotConnector(BaseConnector[SpaceWeatherRaw]):
         xray_moments = [moment.replace(tzinfo=UTC) for moment in xray_times.astype("datetime64[us]").astype(object)]
         xray_offsets = time_offsets_from_datetimes(xray_moments, start_time=window_start)
         omni_offsets = time_offsets_from_datetimes(omni_times, start_time=window_start)
+        # The data is perfectly regular - GOES publishes exactly one value per minute and OMNI2 one
+        # row per hour - so each series is stored on a regular axis, with one cadence instead of one
+        # time stamp per value. axis_for_offsets still falls back to an irregular axis if a gap ever
+        # breaks the cadence, rather than silently misaligning the values.
         signals = [
-            Signal.from_irregular(xray_values, time_offsets_us=xray_offsets, spec=_XRAY_SPEC, name="xrsb_flux"),
-            Signal.from_irregular(omni_fields["bz_gsm"], time_offsets_us=omni_offsets, spec=_BZ_SPEC, name="bz_gsm"),
-            Signal.from_irregular(omni_fields["speed"], time_offsets_us=omni_offsets, spec=_SPEED_SPEC, name="speed"),
-            Signal.from_irregular(
-                omni_fields["density"], time_offsets_us=omni_offsets, spec=_DENSITY_SPEC, name="density"
-            ),
-            Signal.from_irregular(omni_fields["kp"], time_offsets_us=omni_offsets, spec=_KP_SPEC, name="kp"),
+            _series(xray_values, np.asarray(xray_offsets), _ONE_MINUTE_US, _XRAY_SPEC, "xrsb_flux"),
+            _series(omni_fields["bz_gsm"], np.asarray(omni_offsets), _ONE_HOUR_US, _BZ_SPEC, "bz_gsm"),
+            _series(omni_fields["speed"], np.asarray(omni_offsets), _ONE_HOUR_US, _SPEED_SPEC, "speed"),
+            _series(omni_fields["density"], np.asarray(omni_offsets), _ONE_HOUR_US, _DENSITY_SPEC, "density"),
+            _series(omni_fields["kp"], np.asarray(omni_offsets), _ONE_HOUR_US, _KP_SPEC, "kp"),
         ]
         record = Record(
+            start_time=TimeOrigin(timestamp=window_start),
             sources=[Source("space weather", signals=signals)],
             annotations=[
                 Annotation("issued_at", value=issued_at.isoformat()),
@@ -609,6 +618,31 @@ def _parse_three_day_forecast(text: str) -> dict[str, float]:
     }
 
 
+def _series(
+    values: list[float | None], offsets_us: np.ndarray, period_us: Fraction, spec: TimeSeriesSpec, name: str
+) -> Signal:
+    """Build one series on the densest axis the cadence allows.
+
+    Real inputs are gapless, so this is almost always a regular axis. If a gap ever
+    breaks the cadence the values keep their explicit irregular time stamps instead -
+    never silently re-gridded.
+
+    Returns:
+        The series on a regular axis when the offsets fit the cadence, else irregular.
+    """
+    axis = axis_for_offsets(offsets_us, period_us=period_us)
+    if isinstance(axis, IrregularAxis):
+        return Signal.from_irregular(
+            values, time_offsets_us=[int(offset) for offset in offsets_us], spec=spec, name=name
+        )
+    return Signal.from_values(values, time_axis=axis, spec=spec, name=name)
+
+
+# The published cadences: GOES XRS science files carry exactly one value per minute and OMNI2 one
+# row per hour.
+_ONE_MINUTE_US = Fraction(60_000_000)
+_ONE_HOUR_US = Fraction(3_600_000_000)
+
 # --- GOES X-ray reading ---------------------------------------------------------------------------
 
 _GOES_EPOCH = datetime(2000, 1, 1, 12, tzinfo=UTC)
@@ -682,6 +716,11 @@ def _read_goes_xray(path: Path) -> _GoesXray:
     times = (np.datetime64(_GOES_EPOCH.replace(tzinfo=None)) + (seconds * 1_000_000).astype("int64")).astype(
         "datetime64[us]"
     )
+    # Only ``good_data`` minutes are measurements of the Sun: an eclipse minute reads Earth's
+    # shadow instead of solar flux, a bad-data minute is instrument noise, and an interpolated
+    # minute is NOAA's gap-filling estimate rather than an observation. All of them are nulled
+    # out (about 1-2% eclipse, 1% bad, 0.1% interpolated across 2024-2025) so the series carries
+    # real measurements only.
     flux = np.where(flag == 0, flux, np.nan).astype("float32")
     return _GoesXray(times=times, values=flux)
 

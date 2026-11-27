@@ -16,7 +16,11 @@ description: >-
   NOAA's forecasts, not outcomes, so they can only score how well NOAA is imitated; for a
   true model-vs-NOAA comparison each record also carries the observed outcomes over the 72
   hours after the issuance (greatest observed Kp, and greatest observed X-ray flux where
-  GOES coverage is complete). Tasks are stratified by time into train (before December
+  GOES coverage is complete). Within the X-ray series, only minutes flagged ``good_data``
+  are kept: eclipse minutes read Earth's shadow rather than the Sun, bad-data minutes are
+  instrument noise, and interpolated minutes are NOAA's gap-filling estimates rather than
+  observations, so all three are nulled out (roughly 1-2% eclipse, 1% bad-data and 0.1%
+  interpolated minutes across 2024-2025). Tasks are stratified by time into train (before December
   2024), validation (December 2024) and test (January 2025 onward) splits with a 3-day
   forecast-horizon gap at each boundary; issuances inside a gap are left out so no window
   or forecast period ever straddles two splits. Two honesty notes: OMNI2 and the GOES
