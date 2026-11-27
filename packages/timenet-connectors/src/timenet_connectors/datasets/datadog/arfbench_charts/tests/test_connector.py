@@ -67,7 +67,7 @@ def test_the_dataset_round_trips_through_zarr(release, tmp_path):
     dataset.derive_schema()
     with TimeFWriter(tmp_path / "built", dataset, values_backend=connector.values_backend) as output:
         output.write()
-    with TimeFReader(open_local_version(tmp_path / "built/datadog/arfbench-charts/1.0.0")) as reader:
+    with TimeFReader(open_local_version(tmp_path / "built/datadog/arfbench-charts/1.1.0")) as reader:
         reader.verify()
         assert reader.values_backend == "zarr"
         back = {record.metadata["source_record_id"]: record for record in reader.iter_records()}

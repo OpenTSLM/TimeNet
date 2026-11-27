@@ -21,7 +21,12 @@
 # options use the same clock.
 #
 # Each question becomes one test task over the cited metric records. Thus the test split holds 750
-# tasks. A task carries the row of the question as `question_index` in its metadata. The released
+# tasks. The question text does not print the answer options. They are the label set of the task,
+# and the template of the task lists them after the question, in the order of the release. In the
+# release, the first option is the correct answer of 463 questions. A consumer can show the options
+# in another order.
+#
+# A task carries the row of the question as `question_index` in its metadata. The released
 # charts are in `datadog/arfbench-charts`. The chart tasks of that dataset carry the same
 # `question_index`.
 #
@@ -33,7 +38,7 @@
 # - 29 time options that are outside every rollup.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: ARFBench
 description: >-
   750 multiple-choice questions about anomalies in 142 metrics from 63 Datadog incidents.
