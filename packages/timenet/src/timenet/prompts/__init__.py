@@ -5,6 +5,13 @@ and :func:`render` renders the input and the expected reply for training. Both r
 into its own format.
 """
 
+from timenet.prompts.defaults import (
+    DEFAULT_RENDERERS,
+    DESCRIBED,
+    LABEL_QUESTION,
+    PROMPT_QUESTION,
+    PROMPT_WITH_OPTIONS,
+)
 from timenet.prompts.render import (
     Part,
     Parts,
@@ -19,6 +26,11 @@ from timenet.prompts.render import (
 
 
 __all__ = [
+    "DEFAULT_RENDERERS",
+    "DESCRIBED",
+    "LABEL_QUESTION",
+    "PROMPT_QUESTION",
+    "PROMPT_WITH_OPTIONS",
     "Part",
     "Parts",
     "PromptRenderer",
